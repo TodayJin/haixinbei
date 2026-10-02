@@ -1,0 +1,44 @@
+# ============================================================
+#  构建产物 / 临时文件（不进版本库）
+# ============================================================
+
+# 固件构建目录（每份 ~60MB，可随时 make 重建）
+firmware/build-*/
+.work/
+
+# 台架/上位机临时输出（日志、CSV、图片、抓屏）
+out/
+
+# Python
+**/__pycache__/
+*.py[cod]
+
+# 旧 Haixin（FreeRTOS 参考工程）的 Keil 构建输出
+Haixin/MDK-ARM/Objects/
+Haixin/MDK-ARM/Listings/
+Haixin/MDK-ARM/DebugConfig/
+Haixin/MDK-ARM/RTE/
+
+# 常见构建产物
+*.o
+*.d
+*.crf
+*.axf
+*.lnp
+*.dep
+*.su
+*.map
+*.build_log.htm
+*.bak
+
+# 前端依赖（dist/ 要进版本库，见 tools/console/web/dist）
+node_modules/
+
+# 会话导出包（20MB+ 二进制，不是源码）
+dsh-session-*.zip
+
+# 编辑器/系统
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

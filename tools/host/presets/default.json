@@ -1,0 +1,31 @@
+{
+  "format": "haixin-host-preset",
+  "version": 1,
+  "saved": "2026-09-24 13:15:08",
+  "param_crc": 23848,
+  "values": {
+    "line_kp": 375.0,
+    "line_ki": 1.5,
+    "line_kd": 50.0,
+    "line_ilimit": 50.0,
+    "base_speed": 1000.0,
+    "base_speed_slow": 200.0,
+    "gyro_kp": 100.0,
+    "gyro_ki": 1.5,
+    "gyro_kd": 10.0,
+    "gyro_ilimit": 1000.0,
+    "turn_angle_offset": 90.0,
+    "turn_tolerance": 2.0,
+    "turn_timeout": 1500.0,
+    "yaw_rate_damp": 1.0,
+    "marker_hold": 3.0,
+    "marker_min_gap": 50.0,
+    "counts_per_rev": 1980.0,
+    "wheel_dia": 65.0,
+    "wheel_base": 150.0,
+    "pwm_max": 7200.0,
+    "vbat_nominal": 12000.0,
+    "stall_current": 2500.0,
+    "vbat_low": 10500.0
+  }
+}
