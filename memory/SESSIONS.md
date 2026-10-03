@@ -13,6 +13,16 @@
 >
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
+## 2026-10-03 · 固件-验证
+完成：新增链路体检工具 `tools/console/bridge/probe.py`（`python -m bridge.probe --port COM26 [--bauds 921600,460800,230400,115200] [--seconds 2] [--hello] [--list]`，workdir `tools/console`）：不启动桥、不写任何字节（默认只收不发），按波特率梯子各静听几秒，报每档「字节数/合法帧/CRC 错/重同步」并翻译成人话。判定语义：0 字节 ⇒ 板子没发/线没通/探针这档不通；有字节但一帧都解不出 ⇒ 波特率错配（典型乱码）；有帧且零 CRC 错 ⇒ 这档可用（`Result.usable`）。返回 `Result`（baud/rx_bytes/frames/crc_errors/resyncs/hello），`main()` 汇总「最高可用波特率」或「所有档 0 字节 ⇒ 不是波特率的事」。为什么需要它：921600 下桥报 rx:0 时，能立刻区分「波特率不匹配（乱码）」与「线/探针/固件（干净 0 字节）」，并一次扫完回退梯子。验证：`C:\Python314\python.exe -m pytest -q`（workdir `tools\console`）= **113 passed**（新增 `tools/console/tests/test_probe.py` 10 项，用合成字节钉住 decode_bytes/verdict：合法帧、纯乱码、坏 CRC、半截帧、乱码+合法帧混合、histogram、usable）；`python -m bridge.probe --list` 实跑 exit 0，列出本机仅剩的两个蓝牙串口 COM12/COM4 并提示没给 --port。
+未完成：真车实测仍卡在物理拔插 J-Link（探针 USB 栈卡死后 `VID_1366&PID_0105` 复合设备 + COM26 全变 CM_PROB_PHANTOM，本机只剩蓝牙串口，没有第二条到车的串口路径）
+下一步：用户物理拔插探针 → 确认 COM26 回来 → 先跑 `python -m bridge.probe --port COM26`（看 921600 是乱码还是 0 字节）→ 再起桥看 /api/link 的 rx
+
+## 2026-10-03
+完成：2026-10-03 深夜：921600 提速改造已全部落盘并提交（`406b67b` 代码+文档+dist，`1776be5` 追加前端回归测试）。**烧录成功**：`tools/flash.ps1` 回读 116084 字节 `firstDiff=none`，板上已是 921600 新固件。**但真机链路还没通**：停掉旧桥后用新代码（默认 921600）起在 8793，`GET /api/link` = `connected:true / baud:921600 / rx:0 / fw:null` —— 零帧。同时 J-Link 探针 USB 栈卡死（`JLink.exe` 日志停在 `JLINK_OpenEx(...)`，`VID_1366&PID_0105` 复合设备连 `JLink CDC UART Port (COM26)` 一起变 `CM_PROB_PHANTOM`，`Disable/Enable-PnpDevice` 软件复位无效，`GetPortNames()` 只剩蓝牙 COM4/COM12）⇒ 0 帧可能只是探针半死，**921600 可用性尚无结论**。前端 `vitest` 现 169 项（新增 `tools/console/web/src/lib/perf.test.ts` 钉住 meta 快照/50ms 合并/单通道快照三条），pytest 103，固件主机测试 13/13。
+未完成：上位机↔下位机链路 921600 的真车实测（帧率/crc/延迟）没做；旧内置长流程转成任务后的真板实跑（m19448）没做；讲任务编排模型后用户还没在 A/B/C/D 里挑（m20490）
+下一步：等用户物理拔插 J-Link USB（必要时连车板电源一起断）→ 确认 `VID_1366&PID_0105` 与 COM26 回来 → 用新代码起桥 `python -m bridge.main --serial COM26 --no-browser --port 8793`（workdir `tools/console`）看 rx；仍为 0 就 460800 试一次（收到乱码也说明板子在发）→ 跑 RTT 看 `HOST: rx/tx/crc/txdrop/rxover`；确认 VCOM 吃不下 921600 就改 `firmware/Core/Src/board.c:553` 的 `DL_BAUD` 走 460800/230400/115200 梯度重烧
+
 ## 2026-10-03
 完成：上位机+链路提速（用户 m20705）代码全部落盘并验证：固件 LPUART1 921600 + 收 DMA1_Ch2 循环 2048B + 发 DMA1_Ch3 槽位队列 8×144B（TASK_TX_PER_POLL 1→8、DUMP_PER_POLL 4→8、telem_hz 默认 100）；网页加 useMeta() 元快照 + ring.snapshotField() 单通道快照 + 热节流 50ms，Params/Settings/Control 日志卡改订阅元快照；桥默认波特率 921600 并删掉没人订阅的 frame 事件。验证：make -j8 通过（text 115712/data 364/bss 33944，bin 116084B）、firmware/test/run_tests.ps1 13/13、pytest 103 passed、vitest 166 passed、tsc --noEmit 干净、dist 已重建。
 未完成：①未烧录：板上仍是旧的 115200 固件，跑了 8793 的桥（PID 11904，21:43 启动）也是旧代码 ⇒ 两者必须一起换；②COM26 是 JLink CDC UART Port(VCOM)，能不能跑 921600 未验证，不行就按 460800/230400/115200 梯度改 DL_BAUD 重烧
@@ -1151,14 +1161,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：OLED 用 4 针模组还是裸屏未定
 下一步：若用裸屏：按厂家脚号做 FPC 封装 + 外围件，并写进 固件接口规格.md 的 OLED 节
 
-## 2026-09-15
-完成：回答 OLED 接法（用户拿的是**裸屏** X096-2864KSWPG01-H30，立创 C18723026：**主控 SSD1315（SSD1306 兼容）**、0.96/128×64、I2C+SPI、逻辑 1.65–3.3V、30 脚 FPC）。下载 SSD1306 手册核对后给出 I2C 模式接法：**BS0=0(GND)、BS1=1(VDD)、BS2=0(GND)**（Table 7-1）；**D/C#=SA0 → 接 GND 得地址 0x3C**；**E(RD#) 与 R/W#(WR#) 在 I2C 模式必须接 VSS**；**D0=SCL、D1 与 D2 短接 = SDA**（D2=SDAOUT 必须并上）；**VBAT 接 VDD**；**VCC(28) 是电荷泵输出≈7.5V，只能接电容、绝不能接电源**；VCOMH 电容 2.2~4.7µF；IREF 电阻约 400kΩ（=12.5µA，手册算法 (VCC−2.5)/12.5µA）；C1P/C1N、C2P/C2N 各 1µF 飞电容（以屏厂参考电路为准）。另说明 4 针模组无此外围、更省事；**用户尚未决定用模组还是裸屏**。
-未完成：OLED 用 4 针模组还是这块裸屏未定；若用裸屏需加 30 脚 FPC 座 + 约 8 个外围件
-下一步：用户定后把 OLED 那节写进 固件接口规格.md
-
-## 2026-09-15
-完成：复核第五版 netlist（sha f2574a39，36037B，118 元件）：**新增 12V 电源指示灯 LED1 + R38=10k**，接在 `12V_PROT_OUT → R38 → LED1 → GND`（≈1mA，位置在保险丝+反接保护+分流之后，正确）；M3 螺丝符号由 U16–U19 改为 SCREW1–4（无功能变化）；其余一处未动、无悬空网络。据此确认**原理图已无功能性遗留，可进 PCB 布局**；并同步更新 `固件接口规格.md`（附录 A 电源指示灯说明 + BOM 改为 4 个 LED）。
-未完成：PCB 布局尚未开始
-下一步：按附录 D 出详细布局/走线清单（AT8236 散热过孔、2oz 铜宽、Kelvin、地分割）
-
-> 更早的会话条目已归档到 188 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 190 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
