@@ -12,6 +12,41 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-03 — 操控页只发 `base_turn`/`off` 两种模式，且只在「指令变化」时 POST 一次 `/api/drive`
+选择：操控页只发 `base_turn`/`off` 两种模式，且只在「指令变化」时 POST 一次 `/api/drive`
+放弃：原来的三种驾驶模式（wheels 左右轮速直给 / base_turn / trace）、3×3 快捷动作按钮、预设速度档全删
+因为：用户 m16866 说「太复杂了多了很多用不上的」，要的就是 WASD + 组合键；保活由桥的 200ms `drive_keepalive` 负责，页面重复下发只会互相盖掉
+
+## 2026-10-03 — A+D 与 W+S 都判定为「抵消」（turn/base 归零），两个轴都为零时返回 `mode=off`；空格/ESC 优先级最高
+选择：A+D 与 W+S 都判定为「抵消」（turn/base 归零），两个轴都为零时返回 `mode=off`；空格/ESC 优先级最高
+放弃：让后按下的键赢（last-wins），或锁定先按下的那个键
+因为：用户明确说「若果按 ad 就是左右抵消了」；对称抵消比「后按赢」更可预期，也避免手抖瞬间打到满舵
+
+## 2026-10-03 — 页面自己再做一层本地兜底：窗口失焦、切页、松开所有键都立刻交还 `{mode:"off"}`
+选择：页面自己再做一层本地兜底：窗口失焦、切页、松开所有键都立刻交还 `{mode:"off"}`
+放弃：只靠桥的 200ms 保活 + 车上 500ms 看门狗
+因为：看门狗是「上位机不在场」的兜底，防不了「页面还在、键已经松开/焦点丢了」这种半路状态
+
+## 2026-10-03 — `contract.test.ts` 里「回放不带文件必须失败」改成二者皆可（明说失败 / 复用 lastReplay 连上），并补一条确定性的 `mode=bogus` 必须被拒
+选择：`contract.test.ts` 里「回放不带文件必须失败」改成二者皆可（明说失败 / 复用 lastReplay 连上），并补一条确定性的 `mode=bogus` 必须被拒
+放弃：继续断言一定 400
+因为：mock 与桥都实现了「不给文件就复用上次那个文件」，长跑的 mock 进程会让这条断言随用例执行顺序翻脸（第二次 `npm test` 就红了一把）
+
+## 2026-10-03 — 预设列表在桥和前端各归一一次：bridge/state.py::_normalize_preset() + web/src/lib/api.ts::normalizePresets()
+选择：预设列表在桥和前端各归一一次：bridge/state.py::_normalize_preset() + web/src/lib/api.ts::normalizePresets()
+放弃：只在桥归一并信任契约（手写/旧 json 仍能打黑页面）；或只在前端归一（preset_apply 等其它消费者仍拿到脏数据）
+因为：preset_dir 里同时住着 preset_save() 写的预设和 _save_action_preset() 写的动作表存档 actions.json（只有 actions 列表、没有 kind/keys），缺字段会让读 p.keys 的页面抛 TypeError 并把整棵 React 树卸掉（2026-10-03 用户看到的舵机页/设置页白屏）
+
+## 2026-10-03 — 页面渲染异常用 PageBoundary（class error boundary，Shell 里 key={page}）兜住，显示红卡+错误原文+重试按钮
+选择：页面渲染异常用 PageBoundary（class error boundary，Shell 里 key={page}）兜住，显示红卡+错误原文+重试按钮
+放弃：让 React 默认行为把整棵树卸掉（就是本次白屏），或只在数据层做防御
+因为：单个页面的数据形状问题不该让整个控制台变白：用户看不到错误原文就无法反馈，切页也恢复不了（key={page} 让错误状态随切页复位）
+
+## 2026-10-03 — 假遥测 web/mock/server.mjs 的 gray 改成 u8 0..255（30 + ink*195，丢线 6..16）与协议对齐
+选择：假遥测 web/mock/server.mjs 的 gray 改成 u8 0..255（30 + ink*195，丢线 6..16）与协议对齐
+放弃：保留 ADC 量纲（3150 - ink*2600）并在前端兼容两种量纲
+因为：protocol.py:310 解出来就是 u8、host_ext.h:80 写明 255 = 压黑线；量纲不一致会让 SSR 预览里柱高全被钉在 100%，把 SSR 快照这份"像素替代证据"变成误导
+
 ## 2026-10-03 — 管道对拍构建链真 App/Svc/nvram.c（`-DHOST_PIPE_REAL_NVRAM`），并用 `--flash/--dump-flash` 交换 Flash 页 63 的 2048B 镜像来模拟掉电重启
 选择：管道对拍构建链真 App/Svc/nvram.c（`-DHOST_PIPE_REAL_NVRAM`），并用 `--flash/--dump-flash` 交换 Flash 页 63 的 2048B 镜像来模拟掉电重启
 放弃：只靠 t_nvram.c 的模块级测试、或让管道构建继续用 host_appstub.c 的假 nvram_touch

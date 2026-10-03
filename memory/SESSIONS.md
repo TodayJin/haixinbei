@@ -14,6 +14,16 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：操控页改造完成并提交 8b4bc1a：新建 `tools/console/web/src/lib/keys.ts`（WASD/方向键→角色的纯函数映射 + `keyId`/`keyRoleById`/`isTypingTarget`/`rolesToDrive`），`tools/console/web/src/pages/Drive.tsx` 整体重写为键盘操控（只在指令变化时 POST `/api/drive`，失焦/切页/松键立刻交还 off），删掉三模式/快捷动作/预设档与 `settings.drivePresets`。验证：vitest 55 passed（+`keys.test.ts` 11 项）、pytest 63 passed、固件主机 通过 11/失败 0、`npm run build` 干净（index-Acbq5qec.js）；变异（翻转 A/D 转向符号）⇒ keys.test.ts 5 项立刻失败，还原后全过；对 8793 仿真桥打页面同款 POST（base_turn base=600 turn=-500）⇒ ACK OK、遥测 flags.host_drive=true、mode=2，off 后 mode=0/enabled=false。
+未完成：真实键盘手感（按住/松开的即时性、失焦兜底、点过滑块后 WASD 还能不能开车）只能由用户在有浏览器的机器上点；真车只读链路仍待硬件；目标轮仍 paused（revision 3）。
+下一步：等用户 Ctrl+F5 后在操控页按 W/A/S/D 与 W+A、A+D 核对；若要继续开发，需用户先在界面上 resume 目标轮。
+
+## 2026-10-03
+完成：修掉用户 m16508 截图的四条报障并提交 9d7e57f：①舵机页/设置页白屏根因 = 桥 preset_list() 把动作表存档 actions.json 原样吐出，Servo.tsx:209 的 p.keys.join() 抛 TypeError 导致 React 整树卸载（只有这两个页面读 presets，与现象一一对应）；②index.css 漏定义 .seg-item，Tailwind preflight 把裸 button 清成透明无边框 ⇒ 驾驶页三个分段按钮黏成一行；③循迹柱顶"黑条"不是 bug 而是到满量程 255 的未填充余量（186/204 = 73%/80%），把亮边从轨道顶部挪到填充顶部并加图例；④顺手修 mock 的 gray 量纲错（ADC→u8）。验证：pytest 63 passed（+1 用例）、vitest 44 passed / 9 files（+presets.test.tsx 4 项）、npm run build 干净（index-BaUugex3.js）、两处变异都能复现旧故障（api.ts 去掉归一 ⇒ 同一 TypeError @ Servo.tsx:209；state.py 换回 out.append(dict(o)) ⇒ KeyError: 'name'）、SSR 9 份重生成后灰度为 u8（25..180）柱高 9.8%~70.6%。
+未完成：goal-30756115-0724-4b6f-849c-327d4bac51ea 仍为 paused（revision 3），只能由用户在界面上 resume；真车只读链路待硬件；像素截图本机不可得（用 out/console/ssr/ 9 份 SSR 替代）
+下一步：等用户 Ctrl+F5 复核这四条（桥在 http://127.0.0.1:8793，已确认服务新 dist）；复核通过后若要继续，需要用户先把目标轮 resume
+
+## 2026-10-03
 完成：协议层固化闭环落地：管道对拍构建加 `-DHOST_PIPE_REAL_NVRAM`（链真 nvram.c + trace_cal.c，host_appstub.c 的假 nvram_touch/trace_cal_level 用 `#ifndef` 让位，host_pipestub.c 补 g_cfg/app_ui_*/trace_read_channel），pipe_hostlink.c 加 `--flash/--dump-flash` 与 nvram_init/poll/service；新增 pytest test_param_save_survives_a_power_cycle（改 pivot_kd=321 → T_PARAM_SAVE → 页 63 出现记录头 "HXB1"+version 5 → 第二个进程带镜像开机 dump 出 321，不带镜像的对照组回默认）与 test_param_change_alone_does_not_touch_flash（只改不固化且够不着 1.5s 防抖 ⇒ 页 63 全 0xFF）。提交 9fbc1a9。验证：pytest tools/console/tests -q ⇒ 62 passed；firmware/test/run_tests.ps1 ⇒ 通过 11/失败 0；两次变异（拿掉 host_ext.c:226 的 nvram_touch()、不载入 Flash 镜像）都被用例抓住。
 未完成：管道构建里的 nvram 只覆盖 "参数固化"；动作表固化的协议层等价用例（T_ACTION_SAVE）还没单独断言落盘内容
 下一步：用户要先自己看效果/看代码，目标轮已暂停（goal revision 3, phase paused）；他说继续时再用 update_goal resume 接着找下一个缺口
@@ -1157,14 +1167,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：PE0/PE1 是否在 LQFP64 引出未最终确认（待 CubeMX）
 下一步：用户定 LQFP64(G431RBT6) 还是 LQFP100；确认后再定引脚并复核
 
-## 2026-09-14
-完成：选型文档推进到 v0.6（全板载 DRV8412、TM-4175-B-B 五向键 C465996、灰度主用 I2C2、电流检测仅 12V 主电源 INA226）。用户决定**电源部分（12V→5V 等）自己设计**，完成后交由我复核，不再让我做电源选型。
-未完成：用户自行设计电源，待复核；选型文档 v0.6 的第 10 节小问题未回
-下一步：等用户拿出电源设计（原理图/选型/参数）后按其复核：输入范围、负载预算、芯片外围、保护、噪声、布局
-
-## 2026-09-14
-完成：更新到 v0.6：确认全部板载（DRV8412 做板上，电机 6P 直接接 DRV 输出）；按键定为 TM-4175-B-B（立创 C465996，SMD-8P，库存 3761，前两款候选库存不足）；灰度主用 I2C2；电流检测仅 12V 主电源 INA226；给出 DRV 功率焊盘散热/大电流走线要点；建议 4 层板。
-未完成：电机 6P 与 DRV 之间是否加熔断、舵机接口位置、是否接 OTW
-下一步：继续辅助：引脚冲突核对、走线宽度/散热过孔估算、布局分区草图、BOM 核对、驱动移植要点（不生成原理图）
-
-> 更早的会话条目已归档到 162 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 164 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
