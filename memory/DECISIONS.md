@@ -12,6 +12,26 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-03 — `bridge.bench` 的 CPU 数字只报**窗口内均值**（`100*(c1-c0)/dt`），不报分片取中位数。
+选择：`bridge.bench` 的 CPU 数字只报**窗口内均值**（`100*(c1-c0)/dt`），不报分片取中位数。
+放弃：按 0.5s 分片算瞬时 CPU 再取中位数（头一版就是这么写的）。
+因为：实测同一组参数下分片中位数给出 0.0% / 6.1% / 9.1% 三个结果（采样被启动尖峰与 GC 带偏），写进报告就是噪声；改均值后 100Hz 回放两遍都是 **1.6%**。
+
+## 2026-10-03 — 把"烧录后实测帧率/crc/延迟"做成**可发布、可单测**的 `tools/console/bridge/bench.py`（`python -m bridge.bench`），与 `probe.py` 分工：**probe 管串口那半步**（字节/合法帧/CRC/重同步/波特率），**bench 管桥→网页这一步**（实收帧率/间隔分位/事件率/KB/s/CPU/丢帧）。
+选择：把"烧录后实测帧率/crc/延迟"做成**可发布、可单测**的 `tools/console/bridge/bench.py`（`python -m bridge.bench`），与 `probe.py` 分工：**probe 管串口那半步**（字节/合法帧/CRC/重同步/波特率），**bench 管桥→网页这一步**（实收帧率/间隔分位/事件率/KB/s/CPU/丢帧）。
+放弃：继续用 `out/_bench_host.py`（gitignore 草稿、无测试、口径有两个 bug：rx 基线与计时窗口不齐导致喂帧率虚高 (1+seconds)/seconds 倍；CPU 采样无定义）。
+因为：量测口径错一次，后面的"实测报告"就全是假的；纯函数（parse_sse/pct/summarize/format_report/serial_verdict）拆出来能被 pytest 钉住，`--replay` 又让没硬件时也能出承载报告。
+
+## 2026-10-03 — 对车上这颗 J-Link（VID_1366/PID_0105，S/N 000602711039）的 VCOM 波特率上限按 **230400** 认定；要真正跑到 921600 只能换普通 USB-TTL 适配器接 U12 脚4(GND)/脚5(PC1)/脚6(PC0)，不再在探针 VCOM 上试 460800/921600。
+选择：对车上这颗 J-Link（VID_1366/PID_0105，S/N 000602711039）的 VCOM 波特率上限按 **230400** 认定；要真正跑到 921600 只能换普通 USB-TTL 适配器接 U12 脚4(GND)/脚5(PC1)/脚6(PC0)，不再在探针 VCOM 上试 460800/921600。
+放弃：继续在探针 VCOM 上试 921600（甚至 460800）来凑目标波特率。每试一次就把探针的 USB 栈打进 bootloader 态（枚举成 PID_0101，JLink.exe 报 "Replacing firmware: J-Link V9 compiled Oct 12 2012 BTL" + "Communication timed out"），且这块 CDC 面死掉后软重启救不回来。
+因为：`python -m bridge.probe --port COM26 --bauds 115200,230400,460800,921600` 实测：115200 能开能读（1423 B/2s）、230400 能开能读（2791 B/2s）、**460800 打不开**（OSError(22,'信号灯超时时间已到',121)=ERROR_SEM_TIMEOUT，卡在 SET_LINE_CODING）、随后 921600 也打不开（PermissionError(13,31)=ERROR_GEN_FAILURE，是上一步把 CDC 搞死后的连锁）。
+
+## 2026-10-03 — 探针从崩溃态恢复的唯一办法 = **物理拔 USB、等 ~10 秒再插**；插回来后若设备管理器里 `USB\VID_1366&PID_0105\000602711039` 报问题码 22（CM_PROB_DISABLED），就 `Enable-PnpDevice`（会回一句"常规故障"但设备随即可用，COM26 + 调试面都回来）。
+选择：探针从崩溃态恢复的唯一办法 = **物理拔 USB、等 ~10 秒再插**；插回来后若设备管理器里 `USB\VID_1366&PID_0105\000602711039` 报问题码 22（CM_PROB_DISABLED），就 `Enable-PnpDevice`（会回一句"常规故障"但设备随即可用，COM26 + 调试面都回来）。
+放弃：用软件重枚举去救：`pnputil /restart-device` 对"被禁用"的设备无效（返回成功但状态不变）；对本已崩成 PID_0101 的节点重启会把整个 VID_1366 从设备树里抹掉、更糟。
+因为：本轮三次实操：Enable-PnpDevice 后 COM26 立刻回来；对 PID_0101 节点 restart 后设备彻底消失，只剩物理拔插。
+
 ## 2026-10-03 — LPUART1 提速到 921600：收 = DMA1_Ch2 循环 2048B（主循环按 CNDTR 取），发 = DMA1_Ch3 槽位队列 8×144B（非阻塞、队满丢帧并计数）
 选择：LPUART1 提速到 921600：收 = DMA1_Ch2 循环 2048B（主循环按 CNDTR 取），发 = DMA1_Ch3 槽位队列 8×144B（非阻塞、队满丢帧并计数）
 放弃：保留 HAL_UART_Transmit 阻塞发 + 512B 收环形缓冲（旧的 115200 方案）—— 它在 921600 下依然要等队列，且一帧帧等仍会卡控制环

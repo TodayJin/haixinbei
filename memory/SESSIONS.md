@@ -13,6 +13,16 @@
 >
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
+## 2026-10-03
+完成：新增承载量测工具 `tools/console/bridge/bench.py` + `tools/console/tests/test_bench.py`（14 项），并修好两处量测口径 bug（rx 基线与计时同窗口、CPU 报窗口均值）。验证：`C:\Python314\python.exe -m pytest -q`（workdir `tools\console`）= **132 passed / 37s**；`python -m bridge.bench --replay --hz 50,100,200` 三档实跑均与喂帧率一致（50.1/100.0–100.6/199.8 帧/s，丢 0–1 帧），100Hz 单条 740B、73KB/s、桥 CPU 1.6%（两遍复现）；`--sim` 量出"发指令→遥测看见"= 16–33ms（p50 30.6ms，n=6）；错误路径 `--attach 9` / `--serial COM99` 都给 rc 2 + 人话诊断。
+未完成：m20705 的"真车实测帧率/crc/延迟"仍需硬件：帧率/承载这一半现在无硬件也能用 `--replay` 出数，但 CRC/波特率那半必须等探针或 USB-TTL。
+下一步：提交 bench.py/test_bench.py + memory；文档已在 `memory/PROJECT.md`（东西都在哪）写了用法与口径；探针仍不在 USB 总线上（等用户物理拔插）、等用户选 A（固件 DL_BAUD 降 230400）或 B（USB-TTL 接 U12 保 921600）。
+
+## 2026-10-03
+完成：查清"921600 新固件已烧进去却一帧都收不到"的真因：不是固件/接线，是车上这颗 J-Link 的 VCOM 上限只有 230400 —— 对它配置 ≥460800 会让探针崩溃并枚举成 PID_0101 引导态（须物理拔插恢复），所以链路从未真正通。验证：`tools/console/bridge/probe.py` 低→高扫档（115200 ✓ 有字节、230400 ✓ 有字节、460800 ✗ OSError 121、921600 ✗ PermissionError 31）；崩后 JLink.exe 输出 "Replacing firmware ... Oct 12 2012 BTL" + "Cannot connect to J-Link"。另修好一处工具自身缺陷：probe 的 main() 以前在所有档都打不开端口时会误报"有字节但解不出帧"，现改为 return 2 并直说"所有档都打不开端口"（已提交 138b7db，pytest 118 passed）。
+未完成：探针当前不在 USB 总线（软件重枚举把它彻底搞掉了），COM26 不在；m20705 的"真车实测帧率/crc/延迟"仍被这一环卡住。
+下一步：等用户在两条路里选：A) 我把 firmware/Core/Src/board.c:556 的 #define DL_BAUD 改成 230400 重烧（tools/flash.ps1）+ 桥 --baud 230400，拿到原始 115200 的 2×；B) 用户接普通 USB-TTL 到 U12 脚4(GND)/脚5(PC1)/脚6(PC0)，固件保持 921600，桥 --baud 921600。两条都先要物理拔插探针（它现在不在 USB 上）。
+
 ## 2026-10-03 · 固件-验证
 完成：新增链路体检工具 `tools/console/bridge/probe.py`（`python -m bridge.probe --port COM26 [--bauds 921600,460800,230400,115200] [--seconds 2] [--hello] [--list]`，workdir `tools/console`）：不启动桥、不写任何字节（默认只收不发），按波特率梯子各静听几秒，报每档「字节数/合法帧/CRC 错/重同步」并翻译成人话。判定语义：0 字节 ⇒ 板子没发/线没通/探针这档不通；有字节但一帧都解不出 ⇒ 波特率错配（典型乱码）；有帧且零 CRC 错 ⇒ 这档可用（`Result.usable`）。返回 `Result`（baud/rx_bytes/frames/crc_errors/resyncs/hello），`main()` 汇总「最高可用波特率」或「所有档 0 字节 ⇒ 不是波特率的事」。为什么需要它：921600 下桥报 rx:0 时，能立刻区分「波特率不匹配（乱码）」与「线/探针/固件（干净 0 字节）」，并一次扫完回退梯子。验证：`C:\Python314\python.exe -m pytest -q`（workdir `tools\console`）= **113 passed**（新增 `tools/console/tests/test_probe.py` 10 项，用合成字节钉住 decode_bytes/verdict：合法帧、纯乱码、坏 CRC、半截帧、乱码+合法帧混合、histogram、usable）；`python -m bridge.probe --list` 实跑 exit 0，列出本机仅剩的两个蓝牙串口 COM12/COM4 并提示没给 --port。
 未完成：真车实测仍卡在物理拔插 J-Link（探针 USB 栈卡死后 `VID_1366&PID_0105` 复合设备 + COM26 全变 CM_PROB_PHANTOM，本机只剩蓝牙串口，没有第二条到车的串口路径）
@@ -1151,14 +1161,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：IREF 具体阻值仍以该屏厂家参考电路为准（150kΩ 或 240kΩ）；OLED 模组/裸屏未定
 下一步：可出 I2C 初始化命令序列；定屏后写进 固件接口规格.md
 
-## 2026-09-16
-完成：补充 OLED 裸屏两点（查 SSD1315 手册 Table 5-1/Table 5-2 确认）：① **IREF(脚26) 必须接一个电阻到 GND**，芯片把该脚偏置在 (VCC−2.5V)，`IREF=(VCC−2.5)/R`；内部电荷泵 VCC≈7.5V、手册标称 IREF=12.5µA → **R≈400kΩ**（屏厂参考值优先；悬空则无段电流、屏不亮；越小越亮越耗电）。② **VBAT(脚6)**：手册规定开启电荷泵时 VBAT 接外部 VBAT 源，**要求 VDD < VBAT（典型 3.3~4.2V）**；本板只有 3.3V，实际做法是把 **VBAT 也接 3.3V**（多数模组如此，可用）；要更规范可 VDD 走 2.8V、VBAT 走 3.3V。
-未完成：OLED 用 4 针模组还是裸屏仍未定
-下一步：定后写进 固件接口规格.md
-
-## 2026-09-15
-完成：发现并核实**OLED 符号与实物不符**（重要，做封装前必须知道）：用户上传的 U16 是**立创EDA 通用 SSD1306 30 脚符号**，而屏 X096-2864KSWPG01-H30 厂家（SSD1315）的物理 FPC 引脚表不同——**2–5 脚顺序相反**（厂家 C1N/C1P/C2P/C2N vs 符号 C2P/C2N/C1P/C1N）、**10 脚厂家是 NC 而符号是 BS0**、**29 脚厂家 NC 而符号是 VLSS**、15 脚 A0=D/C#、16 WR=R/W#、17 RD=E(RD#) 只是命名差异。**做 FPC 封装必须按厂家表**。另下载 SSD1315 手册确认：**Table 5-2 BS[2:0]=010 为 I2C**（000=4线SPI、001=3线SPI、110=8080、100=6800），本屏未引出 BS0（内部已接 VSS）→ 只要 **BS1 接 VDD、BS2 接 VSS** 即为 I2C；C1P/C1N、C2P/C2N 是电荷泵飞电容脚（各接一个电容）。
-未完成：OLED 用 4 针模组还是裸屏未定
-下一步：若用裸屏：按厂家脚号做 FPC 封装 + 外围件，并写进 固件接口规格.md 的 OLED 节
-
-> 更早的会话条目已归档到 190 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 192 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
