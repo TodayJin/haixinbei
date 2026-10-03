@@ -26,7 +26,7 @@ WEB_ROOT_DEFAULT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 class Bridge:
     """一条链路 + 一个 Console + 一个 HTTP 服务（`--serial` 可以在运行时换）。"""
 
-    def __init__(self, mode: str = "sim", port: str = "", baud: int = 115200,
+    def __init__(self, mode: str = "sim", port: str = "", baud: int = 921600,
                  replay: str = "", web_root: str = "", log_dir: str = "",
                  preset_dir: str = "", console_dir: str = "", replay_speed: float = 1.0):
         from .state import Console

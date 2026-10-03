@@ -71,6 +71,29 @@ static const uint8_t *find_frame(uint8_t type, uint8_t seq, uint8_t *plen)
     return hit;
 }
 
+/* 同上，但取第 nth 个匹配（nth 从 1 数）。921600 + 发 DMA 之后一拍能推多帧
+ * （TASK_TX_PER_POLL/DUMP_PER_POLL 都是 8），"最后一个"不再等于"唯一那个"：
+ * 目录要分别拿内容帧和收尾空帧，读回要按顺序拿几帧 DATA。 */
+static const uint8_t *find_frame_nth(uint8_t type, uint8_t seq, int nth, uint8_t *plen)
+{
+    const uint8_t *tx = host_dl_tx();
+    uint16_t n = host_dl_tx_len();
+    uint16_t i = 0;
+    int c = 0;
+    while (i + 7u <= n) {
+        if (tx[i] == 0xA5u && tx[i + 1u] == 0x5Au) {
+            uint8_t l = tx[i + 4u];
+            if (i + 7u + l > n) break;
+            if (tx[i + 2u] == type && tx[i + 3u] == seq) {
+                c++;
+                if (c == nth) { if (plen) *plen = l; return &tx[i]; }
+            }
+            i = (uint16_t)(i + 7u + l);
+        } else i++;
+    }
+    return NULL;
+}
+
 static int32_t count_frames(uint8_t type)
 {
     const uint8_t *tx = host_dl_tx();
@@ -998,13 +1021,15 @@ int main(void)
         stubt_run_running = 0u;
 
         /* 27) 目录里已经有东西了：id/len/crc/flags/name_len/名字 一帧装下；
-         *     空槽跳过，最后一拍才是收尾空帧 */
+         *     空槽跳过，最后一帧是收尾空帧。
+         *     921600 + 发 DMA 之后一拍最多推 8 帧（TASK_TX_PER_POLL），
+         *     整份目录（内容帧 + 收尾空帧）本来就在同一拍里出去。 */
         host_dl_tx_clear();
         build(f, 0x60, 130, NULL, 0);
         feed_and_poll(f, 7);
         {
             uint8_t l = 0;
-            const uint8_t *r = find_frame(0x61, 130, &l);
+            const uint8_t *r = find_frame_nth(0x61, 130, 1, &l);   /* 第一帧 = 槽 0 的内容 */
             CHECK(r != NULL);
             CHECK_EQ_I(l, 11);                 /* 8 + 名字 3 字节 */
             if (r) {
@@ -1015,20 +1040,18 @@ int main(void)
                 CHECK_EQ_I(r[12], 3);                       /* name_len */
                 CHECK_EQ_I(memcmp(&r[13], "abc", 3), 0);
             }
-            CHECK_EQ_I(count_frames(0x61), 1);  /* 一拍一帧，没有连发 */
+            CHECK_EQ_I(count_frames(0x61), 2);  /* 内容帧 + 收尾空帧（中间空槽一帧都不发） */
+            r = find_frame_nth(0x61, 130, 2, &l);
+            CHECK(r != NULL);
+            if (r) CHECK_EQ_I(l, 0);            /* n=0 就是"目录发完了" */
         }
         host_dl_tx_clear();
-        for (i = 0; i < 4; i++) host_link_poll(0u);   /* 槽 1/2 空（跳过）→ 收尾空帧 */
-        {
-            uint8_t l = 0;
-            const uint8_t *r = find_frame(0x61, 130, &l);
-            CHECK(r != NULL);
-            if (r) CHECK_EQ_I(l, 0);
-            CHECK_EQ_I(count_frames(0x61), 1);
-        }
+        for (i = 0; i < 4; i++) host_link_poll(0u);   /* 发完就不再重发 */
+        CHECK_EQ_I(count_frames(0x61), 0);
 
         /* 28) 读回：空槽 ⇒ ST_NOT_READY；有任务 ⇒ 一帧帧 DATA（64+16 字节 + 空数据收尾），
-         *     成功路径**不回 ACK**（一帧帧数据才是应答） */
+         *     成功路径**不回 ACK**（一帧帧数据才是应答）。
+         *     80 字节镜像 = 3 帧，一拍就全推出去，顺序和 off 必须仍然逐帧可核。 */
         host_dl_tx_clear();
         put16(pl, 1);
         build(f, 0x64, 132, pl, 2);
@@ -1042,19 +1065,14 @@ int main(void)
         host_dl_tx_clear();
         put16(pl, 0);
         build(f, 0x64, 134, pl, 2);
-        feed_and_poll(f, 9);                  /* 这一拍就发出第一帧 DATA */
+        feed_and_poll(f, 9);                  /* 这一拍就把 3 帧 DATA 全发出去 */
         CHECK(find_frame(0x21, 134, NULL) == NULL);
         {
             uint8_t got[80];
             int n = 0, round = 0;
             while (round < 6) {
                 uint8_t l = 0;
-                const uint8_t *r;
-                if (round > 0) {              /* round 0 用 feed_and_poll 那一拍发的 */
-                    host_dl_tx_clear();
-                    host_link_poll(0u);
-                }
-                r = find_frame(0x65, 134, &l);
+                const uint8_t *r = find_frame_nth(0x65, 134, round + 1, &l);
                 if (r == NULL) break;
                 CHECK_EQ_I(r[5] | (r[6] << 8), 0);          /* id */
                 CHECK_EQ_I(r[7] | (r[8] << 8), n);          /* off 连续推进 */
@@ -1071,6 +1089,7 @@ int main(void)
             CHECK_EQ_I(n, 80);
             CHECK_EQ_I(memcmp(got, img, 80), 0);            /* 逐字节与上传的一致 */
             CHECK_EQ_I(round, 3);
+            CHECK_EQ_I(count_frames(0x65), 3);              /* 一轮发完，没有重发 */
         }
 
         /* 29) RUN：空槽 ⇒ ST_NOT_READY；有任务 ⇒ 载入并启动；正在被上位机驾驶 ⇒ ST_BUSY + 文本 */

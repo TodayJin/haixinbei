@@ -144,6 +144,10 @@ HAL_StatusTypeDef board_dl_send(const uint8_t *data, uint16_t len)
 void board_dl_start_rx(void) { }
 HAL_StatusTypeDef board_dl_init(void) { return HAL_OK; }
 
+/* 主机测试里没有真 DMA：丢帧/绕圈计数恒为 0（host_link.c 的 1Hz RTT 行会读） */
+uint32_t board_dl_tx_dropped(void) { return 0U; }
+uint32_t board_dl_rx_overrun(void) { return 0U; }
+
 /* ---------------- INA226 ---------------- */
 static int32_t s_ina_mv = 12000, s_ina_ma = 0;
 

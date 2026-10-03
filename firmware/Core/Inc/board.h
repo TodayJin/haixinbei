@@ -129,11 +129,17 @@ HAL_StatusTypeDef board_uart4_init(void);
 void              board_uart4_write(const uint8_t *data, uint16_t len);
 int               board_uart4_read_byte(uint8_t *b, uint32_t timeout_ms);
 
-/* LPUART1 = 无线下载器（上位机链路）：PC0=RX / PC1=TX，AF8 */
+/* LPUART1 = 无线下载器（上位机链路）：PC0=RX / PC1=TX，AF8
+ * 921600 8N1；收 = DMA1_Ch2 循环搬运（主循环按 CNDTR 取），发 = DMA1_Ch3 槽位队列
+ * （非阻塞，满了丢帧并计数 —— 写上位机桥的波特率必须一致：--baud 921600）。 */
 HAL_StatusTypeDef board_dl_init(void);
 void              board_dl_start_rx(void);
 int               board_dl_get_byte(uint8_t *b);
 HAL_StatusTypeDef board_dl_send(const uint8_t *data, uint16_t len);
+void              board_dl_dma_rx_irq(void);    /* DMA1_Channel2_IRQHandler 调：数绕圈溢出 */
+DMA_HandleTypeDef *board_dl_dma_tx(void);       /* DMA1_Channel3_IRQHandler 要它 */
+uint32_t          board_dl_tx_dropped(void);    /* 队列满/参数错丢掉的帧数（诊断） */
+uint32_t          board_dl_rx_overrun(void);    /* 收 DMA 绕圈把没读完的数据盖掉的次数 */
 
 /* INA226 */
 HAL_StatusTypeDef ina226_read_id(uint16_t *mfg, uint16_t *die);

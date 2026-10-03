@@ -21,9 +21,8 @@ export function useChannelSeries(channel: string, windowMs = 20000, maxPoints = 
   return React.useMemo(() => {
     const idx = ORDER.indexOf(channel)
     if (idx < 0) return [] as number[]
-    const snap = store.ring.snapshot(windowMs)
-    const arr = snap.v[idx]
-    if (!arr || arr.length === 0) return [] as number[]
+    const arr = store.ring.snapshotField(windowMs, idx).v
+    if (arr.length === 0) return [] as number[]
     const step = Math.max(1, Math.floor(arr.length / maxPoints))
     const out: number[] = []
     for (let i = 0; i < arr.length; i += step) out.push(arr[i])

@@ -54,7 +54,8 @@ class LinkError(RuntimeError):
 class LinkBase:
     mode = "?"
     port = ""
-    baud = 115200
+    # 固件 2026-10 起 LPUART1 跑 921600（收 DMA + 发 DMA），两边必须一致
+    baud = 921600
 
     def __init__(self):
         self.dec = pr.FrameDecoder()
@@ -99,11 +100,11 @@ class LinkBase:
 
 
 class SerialLink(LinkBase):
-    """真车：USB 虚拟串口（无线下载器）/ J-Link VCOM，115200 8N1。"""
+    """真车：USB 虚拟串口（无线下载器）/ J-Link VCOM，921600 8N1。"""
 
     mode = "serial"
 
-    def __init__(self, port: str, baud: int = 115200):
+    def __init__(self, port: str, baud: int = 921600):
         super().__init__()
         self.port = port
         self.baud = baud

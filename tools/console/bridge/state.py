@@ -399,9 +399,8 @@ class Console:
             with self.lock:
                 self.task_status = st
             self.emit({"n": "task", "src": st})
-        else:
-            self.emit({"n": "frame", "src": {"type": f.type, "seq": f.seq,
-                                             "len": len(f.payload)}})
+        # 其它帧不再单发 SSE 事件：以前这里给每帧推一条 {"n":"frame"}，
+        # 前端从来没有订阅过，纯粹是白占带宽（帧数在 stats 里看得到）。
 
     def _maybe_stats(self):
         now = time.time()
@@ -437,7 +436,7 @@ class Console:
             "ok": True,
             "mode": st.get("mode"),
             "port": st.get("port") or None,
-            "baud": int(st.get("baud") or 115200),
+            "baud": int(st.get("baud") or 921600),
             "connected": bool(st.get("open")),
             "stats": {
                 "rx": int(st.get("rx_frames", 0)), "tx": int(st.get("tx_frames", 0)),

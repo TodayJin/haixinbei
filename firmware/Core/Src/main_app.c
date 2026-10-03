@@ -86,7 +86,7 @@ int main(void)
 
   /* --- 上位机链路（LPUART1 / 无线下载器）--- */
   host_link_init();
-  host_link_send_text("\r\n[fw] host link ready (LPUART1 115200)\r\n");
+  host_link_send_text("\r\n[fw] host link ready (LPUART1 921600)\r\n");
   SEGGER_RTT_WriteString(0, "host link init OK\r\n");
 
   /* --- 旧固件需要的底层（新板 BSP）---

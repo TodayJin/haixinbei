@@ -108,19 +108,20 @@ function ScopeLane({ channelKey, windowMs, paused, height = 96, onHover }: LaneP
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channelKey, height])
 
-  // 推数据（受 store 的 10Hz 节流驱动；暂停时冻住 = 不 setData）
+  // 推数据（受 store 的 20Hz 合并刷新驱动；暂停时冻住 = 不 setData）
   React.useEffect(() => {
     const u = plotRef.current
     if (!u) return
     if (paused) return
-    const snap = store.ring.snapshot(windowMs)
+    const idx = channelIndexOf(channelKey)
+    if (idx < 0) return
+    // 只取这一条泳道的通道：全量 snapshot() 要拷 21 个通道，这里白拷 20 份
+    const snap = store.ring.snapshotField(windowMs, idx)
     if (snap.count < 2) return
     const t0 = snap.t[0]
     const xs = new Float64Array(snap.count)
     for (let i = 0; i < snap.count; i++) xs[i] = (snap.t[i] - t0) / 1000
-    const idx = channelIndexOf(channelKey)
-    if (idx < 0) return
-    const data: uPlot.AlignedData = [xs, snap.v[idx]]
+    const data: uPlot.AlignedData = [xs, snap.v]
     dataRef.current = data
     u.setData(data, false)
     // y 轴自动量程：加一点余量，避免贴边
@@ -128,11 +129,9 @@ function ScopeLane({ channelKey, windowMs, paused, height = 96, onHover }: LaneP
   }, [version, ringFill, windowMs, paused, channelKey])
 
   const last = React.useMemo(() => {
-    const snap = store.ring.snapshot(windowMs)
-    if (snap.count === 0) return null
     const f = channelIndexOf(channelKey)
     if (f < 0) return null
-    const arr = snap.v[f]
+    const arr = store.ring.snapshotField(windowMs, f).v
     return arr.length ? arr[arr.length - 1] : null
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, windowMs, channelKey])

@@ -104,7 +104,8 @@ export const api = {
   health: () => request<HealthInfo>('/api/health'),
   link: () => request<LinkInfo>('/api/link'),
   ports: () => request<{ ok: true; ports: { port: string; desc?: string }[] }>('/api/ports'),
-  connect: (mode: 'serial' | 'sim' | 'replay', port?: string, baud = 115200, replay?: string, speed?: number) =>
+  /** 波特率默认 921600（固件 2026-10 起 LPUART1 就是这个）；sim/replay 用不到但照样带上 */
+  connect: (mode: 'serial' | 'sim' | 'replay', port?: string, baud = 921600, replay?: string, speed?: number) =>
     post<{ ok: true; link: LinkInfo }>('/api/link/connect', { mode, port, baud, replay, speed }),
   disconnect: () => post<{ ok: true }>('/api/link/disconnect'),
 

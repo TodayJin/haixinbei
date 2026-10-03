@@ -26,7 +26,7 @@ def parse_args(argv=None):
     ap.add_argument("--port", type=int, default=8770, help="HTTP 端口，默认 8770")
     ap.add_argument("--sim", action="store_true", help="内置仿真车（无车也能跑，契约要求）")
     ap.add_argument("--serial", metavar="COMX", help="串口设备名，例如 COM26")
-    ap.add_argument("--baud", type=int, default=115200, help="波特率，默认 115200")
+    ap.add_argument("--baud", type=int, default=921600, help="波特率，默认 921600（和固件一致）")
     ap.add_argument("--replay", metavar="FILE.jsonl", help="回放录制文件")
     ap.add_argument("--replay-speed", type=float, default=1.0, help="回放倍速，默认 1.0")
     ap.add_argument("--web", metavar="DIR", help="前端 dist 目录（默认 tools/console/web/dist）")

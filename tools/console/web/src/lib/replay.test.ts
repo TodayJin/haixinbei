@@ -76,6 +76,6 @@ describe('回放录制（设置页）', () => {
     expect(call, '必须真的请求 /api/link/connect').toBeTruthy()
     expect(call!.method).toBe('POST')
     // JSON.stringify 会把 undefined 的 port 丢掉，桥那边按缺省处理
-    expect(call!.body).toEqual({ mode: 'replay', baud: 115200, replay: REC.path, speed: 4 })
+    expect(call!.body).toEqual({ mode: 'replay', baud: 921600, replay: REC.path, speed: 4 })
   })
 })

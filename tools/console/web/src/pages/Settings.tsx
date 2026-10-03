@@ -1,13 +1,13 @@
 import React from 'react'
 import { Download, Plug, RefreshCw, Save, Trash2, Upload } from 'lucide-react'
 import { Badge, Card, NumberField, StatusDot, Toggle } from '../components/ui'
-import { store, useStore } from '../lib/store'
+import { store, useMeta } from '../lib/store'
 import { bytesToHuman, fmt, fmtInt } from '../lib/format'
 
 export function SettingsPage() {
-  const { link, settings, sse, stats, ports, presets, recordings } = useStore()
+  const { link, settings, sse, stats, ports, presets, recordings } = useMeta()
   const [port, setPort] = React.useState(link?.port ?? 'COM26')
-  const [baud, setBaud] = React.useState(String(link?.baud ?? 115200))
+  const [baud, setBaud] = React.useState(String(link?.baud ?? 921600))
   const [busy, setBusy] = React.useState(false)
   const [rec, setRec] = React.useState('')
   const [speed, setSpeed] = React.useState(1)
@@ -103,7 +103,7 @@ export function SettingsPage() {
               </div>
             </div>
             <p className="text-[12px] leading-relaxed text-slate-500">
-              真车要连的是无线下载器那个虚拟串口（默认 115200 8N1）。桥只监听 127.0.0.1，不对外开放。
+              真车要连的是无线下载器那个虚拟串口（默认 921600 8N1，固件 2026-10 起提到这个速率）。桥只监听 127.0.0.1，不对外开放。
             </p>
           </div>
         </Card>

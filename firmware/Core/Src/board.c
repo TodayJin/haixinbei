@@ -457,11 +457,25 @@ static uint8_t  s_rx_ring[JY_RX_RING_SZ];
 static volatile uint16_t s_rx_head, s_rx_tail;
 static uint8_t  s_rx_byte;
 
-/* LPUART1（上位机链路）的环形缓冲：定义必须早于用到它的中断回调 */
-#define DL_RX_RING_SZ   512
-static uint8_t  s_dl_ring[DL_RX_RING_SZ];
-static volatile uint16_t s_dl_head, s_dl_tail;
-static uint8_t  s_dl_byte;
+/* ---- LPUART1（上位机链路）的 DMA 状态：定义必须早于用到它的中断回调 ----
+ * 2026-10-03 提速改造（用户 m20705"刷新快点、下发快点"）：115200 → 921600，
+ * 收改成"循环 DMA 搬运"（不再有逐字节中断：921600 下那是 92kHz 中断），
+ * 发改成"DMA 槽位队列"（board_dl_send 只拷贝+排队就返回，不阻塞主循环）。
+ *   DL_RX_DMA_SZ 必须是 2 的幂：主循环按 DMA 的 CNDTR 反推写指针，用掩码绕圈取模。 */
+#define DL_RX_DMA_SZ     2048u     /* 921600 下约 22ms 的缓冲余量 */
+#define DL_TX_SLOTS      8u        /* 一帧最大 7 + MAX_PAYLOAD(124) = 131 B */
+#define DL_TX_SLOT_SZ    144u      /* 槽位字节数（131 向上取整，留点余量） */
+
+static DMA_HandleTypeDef hdma_dl_rx;
+static DMA_HandleTypeDef hdma_dl_tx;
+static uint8_t  s_dl_rx_dma[DL_RX_DMA_SZ];
+static volatile uint16_t s_dl_rx_read;     /* 主循环读到哪：写指针 = 缓冲末尾 - CNDTR */
+static volatile uint32_t s_dl_rx_overrun;  /* 落后整整一缓冲、有老数据被覆盖的次数（诊断） */
+static uint8_t  s_dl_tx_slot[DL_TX_SLOTS][DL_TX_SLOT_SZ];
+static uint16_t s_dl_tx_len[DL_TX_SLOTS];
+static volatile uint8_t  s_dl_tx_head, s_dl_tx_tail, s_dl_tx_active;
+static volatile uint8_t  s_dl_tx_count;    /* 队列里排着几帧：head==tail 分不出"空"和"满" */
+static volatile uint32_t s_dl_tx_drop;     /* 队列满/超长而被丢掉的帧数（诊断） */
 
 void board_jy61_start_rx(void)
 {
@@ -482,7 +496,12 @@ int board_jy61_get_byte(uint8_t *b)
 
 UART_HandleTypeDef *board_dl_handle(void)   { return &hdl; }
 
-/* ---- 这两个回调必须放在 LPUART1 环形缓冲**定义之后**（C 要求先声明）---- */
+/* ---- 收发回调：必须放在 DMA 状态**定义之后**（C 要求先声明）----
+ * LPUART1 已经不在 HAL_UART_RxCpltCallback 里了：它整条 RX 走 DMA1_Ch2 循环搬运，
+ * 没有逐字节中断。TX 完成则要在这里放槽位（见 HAL 的 UART_DMATransmitCplt：
+ * 普通 DMA 模式是"DMA 走完 → 置 TCIE → LPUART1 中断里回调"，所以两个中断都要开）。 */
+static void dl_tx_kick(void);
+
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance == USART3) {
@@ -492,14 +511,16 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
       s_rx_head = next;
     }
     (void)HAL_UART_Receive_IT(&hjy61, &s_rx_byte, 1);
-  } else if (huart->Instance == LPUART1) {
-    uint16_t next = (uint16_t)((s_dl_head + 1u) & (DL_RX_RING_SZ - 1u));
-    if (next != s_dl_tail) {
-      s_dl_ring[s_dl_head] = s_dl_byte;
-      s_dl_head = next;
-    }
-    (void)HAL_UART_Receive_IT(&hdl, &s_dl_byte, 1);
   }
+}
+
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+  if (huart->Instance != LPUART1) return;
+  s_dl_tx_active = 0u;                                      /* 这一帧真的出去了 */
+  s_dl_tx_tail = (uint8_t)((s_dl_tx_tail + 1u) % DL_TX_SLOTS);
+  if (s_dl_tx_count) s_dl_tx_count--;
+  dl_tx_kick();                                             /* 接着发下一帧 */
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
@@ -508,19 +529,42 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
     __HAL_UART_CLEAR_OREFLAG(huart);
     (void)HAL_UART_Receive_IT(&hjy61, &s_rx_byte, 1);
   } else if (huart->Instance == LPUART1) {
+    /* 收是 DMA 的：不能像 115200 时代那样重挂 HAL_UART_Receive_IT（会和 DMA 抢）。
+     * 万一 HAL 走了"阻塞错误"分支（它会清掉 CR3.DMAR），这里把收 DMA 重新拉起来。 */
     __HAL_UART_CLEAR_OREFLAG(huart);
-    (void)HAL_UART_Receive_IT(&hdl, &s_dl_byte, 1);
+    if ((LPUART1->CR3 & USART_CR3_DMAR) == 0u) {
+      s_dl_rx_read = 0u;
+      (void)HAL_DMA_Start(&hdma_dl_rx, (uint32_t)&LPUART1->RDR,
+                          (uint32_t)s_dl_rx_dma, DL_RX_DMA_SZ);
+      SET_BIT(LPUART1->CR3, USART_CR3_DMAR);
+    }
+    /* 发的槽位也要放掉，否则队列会卡在"active"上永远不发下一帧 */
+    (void)HAL_UART_AbortTransmit(&hdl);
+    if (s_dl_tx_active) {
+      s_dl_tx_active = 0u;
+      s_dl_tx_tail = (uint8_t)((s_dl_tx_tail + 1u) % DL_TX_SLOTS);
+      if (s_dl_tx_count) s_dl_tx_count--;
+    }
+    dl_tx_kick();
   }
 }
 /* ---- LPUART1：无线下载器（PC0=RX / PC1=TX，AF8）
- * 上位机链路走这条；115200 8N1，中断收 + 环形缓冲，主循环只负责"取"。
+ * 上位机链路走这条：921600 8N1，收 = DMA1_Ch2 循环搬运、发 = DMA1_Ch3 槽位队列。
+ * 波特率必须和上位机桥一致（`python -m bridge.main --serial COM26 --baud 921600`），
+ * 上位机那边的串口参数是 COM26 这条 CDC 串口自己的事，跟 SWD 无关。
  * 复用编号 AF8 是查数据手册 Table 13（DS12288 Rev6，第 75 页）确认的，不是猜的。 */
+#define DL_BAUD  921600u
+
 HAL_StatusTypeDef board_dl_init(void)
 {
   GPIO_InitTypeDef io = {0};
 
   __HAL_RCC_GPIOC_CLK_ENABLE();
   __HAL_RCC_LPUART1_CLK_ENABLE();
+  /* ★ G4 上 DMAMUX1 的时钟必须显式打开（HAL 不会自动开，官方例程 main.c 里有这一句）；
+   *   漏了它：DMA 请求没有路由，收发都永远不会发生 —— 现象是链路一条数据都没有。 */
+  __HAL_RCC_DMAMUX1_CLK_ENABLE();
+  __HAL_RCC_DMA1_CLK_ENABLE();
 
   io.Pin       = DL_TX_PIN;
   io.Mode      = GPIO_MODE_AF_PP;
@@ -533,7 +577,7 @@ HAL_StatusTypeDef board_dl_init(void)
   HAL_GPIO_Init(DL_RX_PORT, &io);
 
   hdl.Instance            = LPUART1;
-  hdl.Init.BaudRate       = 115200;
+  hdl.Init.BaudRate       = DL_BAUD;
   hdl.Init.WordLength     = UART_WORDLENGTH_8B;
   hdl.Init.StopBits       = UART_STOPBITS_1;
   hdl.Init.Parity         = UART_PARITY_NONE;
@@ -542,7 +586,39 @@ HAL_StatusTypeDef board_dl_init(void)
   hdl.Init.OverSampling   = UART_OVERSAMPLING_16;
   hdl.Init.OneBitSampling = UART_ONE_BIT_SAMPLE_DISABLE;
   hdl.AdvancedInit.AdvFeatureInit = UART_ADVFEATURE_NO_INIT;
-  return HAL_UART_Init(&hdl);
+  if (HAL_UART_Init(&hdl) != HAL_OK) return HAL_ERROR;
+
+  /* 收：DMA1_Ch2 循环把 RDR 搬进 s_dl_rx_dma。只开"绕圈 TC"中断用来数溢出，
+   *     不挂 HAL 的收 DMA（那样它会自己管 CR3.DMAR 和回调），主循环按 CNDTR 反推写指针。 */
+  hdma_dl_rx.Instance                 = DMA1_Channel2;
+  hdma_dl_rx.Init.Request             = DMA_REQUEST_LPUART1_RX;
+  hdma_dl_rx.Init.Direction           = DMA_PERIPH_TO_MEMORY;
+  hdma_dl_rx.Init.PeriphInc           = DMA_PINC_DISABLE;
+  hdma_dl_rx.Init.MemInc              = DMA_MINC_ENABLE;
+  hdma_dl_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+  hdma_dl_rx.Init.MemDataAlignment    = DMA_MDATAALIGN_BYTE;
+  hdma_dl_rx.Init.Mode                = DMA_CIRCULAR;
+  hdma_dl_rx.Init.Priority            = DMA_PRIORITY_HIGH;
+  if (HAL_DMA_Init(&hdma_dl_rx) != HAL_OK) return HAL_ERROR;
+
+  /* 发：DMA1_Ch3 普通模式 + 槽位队列；HAL_UART_Transmit_DMA() 自己去挂 huart->hdmatx */
+  hdma_dl_tx.Instance                 = DMA1_Channel3;
+  hdma_dl_tx.Init.Request             = DMA_REQUEST_LPUART1_TX;
+  hdma_dl_tx.Init.Direction           = DMA_MEMORY_TO_PERIPH;
+  hdma_dl_tx.Init.PeriphInc           = DMA_PINC_DISABLE;
+  hdma_dl_tx.Init.MemInc              = DMA_MINC_ENABLE;
+  hdma_dl_tx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
+  hdma_dl_tx.Init.MemDataAlignment    = DMA_MDATAALIGN_BYTE;
+  hdma_dl_tx.Init.Mode                = DMA_NORMAL;
+  hdma_dl_tx.Init.Priority            = DMA_PRIORITY_MEDIUM;
+  if (HAL_DMA_Init(&hdma_dl_tx) != HAL_OK) return HAL_ERROR;
+  __HAL_LINKDMA(&hdl, hdmatx, hdma_dl_tx);
+
+  HAL_NVIC_SetPriority(DMA1_Channel2_IRQn, 5, 0);   /* 收 DMA 绕圈（诊断用） */
+  HAL_NVIC_EnableIRQ(DMA1_Channel2_IRQn);
+  HAL_NVIC_SetPriority(DMA1_Channel3_IRQn, 5, 0);   /* 发 DMA 完成 */
+  HAL_NVIC_EnableIRQ(DMA1_Channel3_IRQn);
+  return HAL_OK;
 }
 
 
@@ -606,22 +682,81 @@ int board_uart4_read_byte(uint8_t *b, uint32_t timeout_ms)
 
 void board_dl_start_rx(void)
 {
-  s_dl_head = 0;
-  s_dl_tail = 0;
-  HAL_NVIC_SetPriority(LPUART1_IRQn, 5, 0);
+  s_dl_rx_read = 0;
+  (void)HAL_DMA_Start(&hdma_dl_rx, (uint32_t)&LPUART1->RDR,
+                      (uint32_t)s_dl_rx_dma, DL_RX_DMA_SZ);
+  SET_BIT(LPUART1->CR3, USART_CR3_DMAR);         /* 打开收 DMA 请求 */
+  __HAL_DMA_CLEAR_FLAG(&hdma_dl_rx, DMA_FLAG_TC2);
+  __HAL_DMA_ENABLE_IT(&hdma_dl_rx, DMA_IT_TC);   /* 绕一圈报一次：数"主循环没跟上" */
+  HAL_NVIC_SetPriority(LPUART1_IRQn, 5, 0);      /* 发完的 TC 在这里面 */
   HAL_NVIC_EnableIRQ(LPUART1_IRQn);
-  (void)HAL_UART_Receive_IT(&hdl, &s_dl_byte, 1);
 }
 
+/* 收 DMA 绕了一圈：如果主循环还没读完（读指针 != 0），中间那段就被新数据盖掉了。
+ * 不致命（协议层靠 SOF/CRC 重新同步），只数一下，报给 1Hz 的 RTT 行。 */
+void board_dl_dma_rx_irq(void)
+{
+  if (__HAL_DMA_GET_FLAG(&hdma_dl_rx, DMA_FLAG_TC2) == RESET) return;
+  __HAL_DMA_CLEAR_FLAG(&hdma_dl_rx, DMA_FLAG_TC2);
+  if (s_dl_rx_read != 0u) {
+    s_dl_rx_overrun++;
+    s_dl_rx_read = 0u;                 /* 丢掉被覆盖的那一段 */
+  }
+}
+
+/* 取一个字节：写指针 = 缓冲末尾 - DMA 还剩几个（CNDTR），和读指针比就有没有新数据。
+ * 主循环 5ms 一拍，921600 下最多攒 ~576 字节，2048 的缓冲够用。 */
 int board_dl_get_byte(uint8_t *b)
 {
-  if (s_dl_tail == s_dl_head) return 0;
-  *b = s_dl_ring[s_dl_tail];
-  s_dl_tail = (uint16_t)((s_dl_tail + 1u) & (DL_RX_RING_SZ - 1u));
+  uint16_t w = (uint16_t)((DL_RX_DMA_SZ - (uint16_t)__HAL_DMA_GET_COUNTER(&hdma_dl_rx))
+                          & (DL_RX_DMA_SZ - 1u));
+  if (s_dl_rx_read == w) return 0;
+  *b = s_dl_rx_dma[s_dl_rx_read];
+  s_dl_rx_read = (uint16_t)((s_dl_rx_read + 1u) & (DL_RX_DMA_SZ - 1u));
   return 1;
 }
 
+/* 队列里有活就交给 DMA 发一帧出去（任务上下文和中断里都会被调到）。
+ * "检查 active + 置位"必须原子：主循环和 TxCplt 中断同时进来会把同一帧发两遍，
+ * 第二遍失败后还会把刚起来的传输 abort 掉。 */
+static void dl_tx_kick(void)
+{
+  uint32_t primask = __get_PRIMASK();
+  __disable_irq();
+  if (s_dl_tx_active || s_dl_tx_count == 0u) { __set_PRIMASK(primask); return; }
+  s_dl_tx_active = 1u;
+  __set_PRIMASK(primask);
+
+  if (HAL_UART_Transmit_DMA(&hdl, s_dl_tx_slot[s_dl_tx_tail], s_dl_tx_len[s_dl_tx_tail]) != HAL_OK) {
+    /* 起不来：多半是上一次的 gState 卡在 BUSY_TX（TC 没等到）。清一次再试，仍不行就下次再说 */
+    (void)HAL_UART_AbortTransmit(&hdl);
+    if (HAL_UART_Transmit_DMA(&hdl, s_dl_tx_slot[s_dl_tx_tail], s_dl_tx_len[s_dl_tx_tail]) != HAL_OK) {
+      s_dl_tx_active = 0u;
+    }
+  }
+}
+
+/* 发一帧：拷进槽位 → 发布 head → 交给 DMA —— 立刻返回，**绝不阻塞主循环**。
+ * 队列满（8 帧 ≈ 1KB，约 11ms @921600）时丢帧并计数：宁可丢遥测，也不让控制环等串口。 */
 HAL_StatusTypeDef board_dl_send(const uint8_t *data, uint16_t len)
 {
-  return HAL_UART_Transmit(&hdl, (uint8_t *)data, len, 30u);
+  uint8_t  next;
+  uint32_t primask;
+
+  if (len == 0u || len > DL_TX_SLOT_SZ) { s_dl_tx_drop++; return HAL_ERROR; }
+  if (s_dl_tx_count >= DL_TX_SLOTS) { s_dl_tx_drop++; return HAL_BUSY; }
+  next = (uint8_t)((s_dl_tx_head + 1u) % DL_TX_SLOTS);
+  memcpy(s_dl_tx_slot[s_dl_tx_head], data, len);
+  s_dl_tx_len[s_dl_tx_head] = len;
+  primask = __get_PRIMASK();      /* 与"发完中断"互斥：先填完内容，再发布 head 和计数 */
+  __disable_irq();
+  s_dl_tx_head = next;
+  s_dl_tx_count++;
+  __set_PRIMASK(primask);
+  dl_tx_kick();
+  return HAL_OK;
 }
+
+DMA_HandleTypeDef *board_dl_dma_tx(void)  { return &hdma_dl_tx; }
+uint32_t board_dl_tx_dropped(void)        { return s_dl_tx_drop; }
+uint32_t board_dl_rx_overrun(void)        { return s_dl_rx_overrun; }

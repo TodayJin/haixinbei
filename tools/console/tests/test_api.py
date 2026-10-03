@@ -31,7 +31,8 @@ def test_health_and_link(live):
     code, j, _ = GET(base + "/api/link")
     assert code == 200 and j["ok"] is True
     assert j["mode"] == "sim" and j["connected"] is True
-    assert j["baud"] == 115200 and isinstance(j["telem_hz"], (int, float))
+    # 921600：固件 2026-10 提速后 LPUART1 的速率，桥的默认值必须跟着（sim 也照报）
+    assert j["baud"] == 921600 and isinstance(j["telem_hz"], (int, float))
     assert set(j["stats"]) == {"rx", "tx", "crc", "resync", "drops"}
     assert j["stats"]["rx"] >= 1, "仿真车已经在发遥测了"
     assert j["last_rx_ms"] is None or j["last_rx_ms"] >= 0

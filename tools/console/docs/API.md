@@ -2,7 +2,7 @@
 
 > 前端（`tools/console/web/`）与 Python 桥（`tools/console/bridge/`）之间**唯一的约定**。
 > 双方都不得单方面改动；要改先改本文件并在提交信息里写明。
-> 数据方向：小车 ──(LPUART1 115200, 帧协议)──> 桥 ──(HTTP + SSE, localhost)──> 浏览器。
+> 数据方向：小车 ──(LPUART1 921600, 帧协议)──> 桥 ──(HTTP + SSE, localhost)──> 浏览器。
 
 ## 0. 运行形态
 
@@ -61,10 +61,10 @@
 {
   "ok": true,
   "mode": "sim",                  // sim | serial | replay
-  "port": "COM26", "baud": 115200,
+  "port": "COM26", "baud": 921600,
   "connected": true,
   "stats": {"rx": 0, "tx": 0, "crc": 0, "resync": 0, "drops": 0},
-  "telem_hz": 50,
+  "telem_hz": 100,
   "last_rx_ms": 1234,             // 距上次收到小车帧的毫秒数
   "rtt_ms": 1.2,                  // 测得的往返时延（无则 null）
   "fw": {                          // 未握手时 null

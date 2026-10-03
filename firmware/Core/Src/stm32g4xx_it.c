@@ -73,6 +73,18 @@ void DMA1_Channel1_IRQHandler(void)
   HAL_DMA_IRQHandler(board_i2c_dma_tx());
 }
 
+/* LPUART1 收 DMA（DMA1_Ch2，循环搬运）：绕圈一次报一次，只用来数溢出 */
+void DMA1_Channel2_IRQHandler(void)
+{
+  board_dl_dma_rx_irq();
+}
+
+/* LPUART1 发 DMA（DMA1_Ch3，槽位队列）：HAL 在这里收尾，最终回调 TxCplt 再 kick 下一帧 */
+void DMA1_Channel3_IRQHandler(void)
+{
+  HAL_DMA_IRQHandler(board_dl_dma_tx());
+}
+
 /* TIM6 = 循迹 PID 周期（替代旧板 TIM2）；TIM7 = 陀螺仪任务（替代旧板 TIM4） */
 void TIM6_DAC_IRQHandler(void)
 {

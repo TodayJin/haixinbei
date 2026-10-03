@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：上位机+链路提速（用户 m20705）代码全部落盘并验证：固件 LPUART1 921600 + 收 DMA1_Ch2 循环 2048B + 发 DMA1_Ch3 槽位队列 8×144B（TASK_TX_PER_POLL 1→8、DUMP_PER_POLL 4→8、telem_hz 默认 100）；网页加 useMeta() 元快照 + ring.snapshotField() 单通道快照 + 热节流 50ms，Params/Settings/Control 日志卡改订阅元快照；桥默认波特率 921600 并删掉没人订阅的 frame 事件。验证：make -j8 通过（text 115712/data 364/bss 33944，bin 116084B）、firmware/test/run_tests.ps1 13/13、pytest 103 passed、vitest 166 passed、tsc --noEmit 干净、dist 已重建。
+未完成：①未烧录：板上仍是旧的 115200 固件，跑了 8793 的桥（PID 11904，21:43 启动）也是旧代码 ⇒ 两者必须一起换；②COM26 是 JLink CDC UART Port(VCOM)，能不能跑 921600 未验证，不行就按 460800/230400/115200 梯度改 DL_BAUD 重烧
+下一步：烧 firmware/build-app/haixin-app.bin（tools/flash.ps1）→ 立刻用新代码重启 8793 真车桥（python -m bridge.main --serial COM26 --no-browser --port 8793，默认 921600）→ 跑 RTT/网页确认 tx 约 100Hz、crc=0、txdrop=0、操控延迟下降
+
+## 2026-10-03
 完成：界面去英文缩写（9 个文件：ui.tsx 的 Badge/Stat 加 title、Shell.tsx 状态栏改成「收到·丢弃·校验错 / 实时推送 / 模式」、Settings/Overview/Control/Tasks/Drive/Sensors/Params 的中文标签 + 悬停解释 + Settings 新增缩写对照卡）；查清并修掉「操控不了车」的根因（桥 server.py 新增 _serial_port_ok 提前拒非法串口名、Settings.tsx 端口只在串行模式同步 + 回落列表第一个口，回归用例加进 tools/console/tests/test_api.py）。验证：npx tsc --noEmit exit 0；npx vitest run 17 文件 166 项通过；pytest tools\console\tests 103 passed；npm run build → dist/assets/index-DBynlDh_.js 341.54 kB + index-C0kvFr6m.css 37.34 kB
 未完成：带 server.py 新校验的桥尚未重启；真车链路当前是好的（COM26，rx 在涨）
 下一步：提交这批改动（含 dist 产物）；桥的改动要重启 8793 那个桥进程才会生效（改的是 bridge/server.py，进程里还跑着旧代码）
@@ -1156,9 +1161,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：PCB 布局尚未开始
 下一步：按附录 D 出详细布局/走线清单（AT8236 散热过孔、2oz 铜宽、Kelvin、地分割）
 
-## 2026-09-15
-完成：应要求把硬件规格**重写成面向固件/AI 的接口规格书**：新建根目录 `固件接口规格.md`（按 v4 netlist + DS12288 核对）。含：主控/时钟(HSE 25MHz, PLL /5×68/2, HSE_VALUE=25000000)、64 脚权威引脚总表（含 PC0/PC1 与 I2C1 命名纠正）、每个外设的协议与参数（AT8236 真值表、编码器 1980 计数/圈、舵机 50Hz、JY61P 11 字节协议、INA226 地址 0x40/CAL=1024/5mΩ、OLED 0x3C、五向键、蜂鸣器）、定时器与通信分配（TIM1/3/4/8/6/7、USART3/UART4/LPUART1/I2C1）、旧 F103 对照表、10 条坑清单、连接器/BOM/布局附录。
-未完成：用户可能需要把旧的 pcb/主板选型与设计.md 合并或删除
-下一步：进入 PCB 布局（附录 D 已有要点）
-
-> 更早的会话条目已归档到 187 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 188 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。

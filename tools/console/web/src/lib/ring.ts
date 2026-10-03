@@ -16,6 +16,13 @@ export interface Snapshot {
   count: number
 }
 
+/** 单通道窗口：波形一条泳道只用这一个 */
+export interface FieldSnapshot {
+  t: Float64Array
+  v: Float32Array
+  count: number
+}
+
 export class SeriesRing {
   private cap: number
   private fields: number
@@ -85,11 +92,9 @@ export class SeriesRing {
     return (this.head - this.len + k + this.cap * 2) % this.cap
   }
 
-  /** 取最近 windowMs 毫秒（相对最后一帧时间戳），按时间升序 */
-  snapshot(windowMs: number, nowMs?: number): Snapshot {
-    if (this.len === 0) {
-      return { t: new Float64Array(0), v: Array.from({ length: this.fields }, () => new Float32Array(0)), count: 0 }
-    }
+  /** 取最近 windowMs 毫秒的**起止下标**（二分定位，snapshot/snapshotField 共用） */
+  private range(windowMs: number, nowMs?: number): { lo: number; count: number } {
+    if (this.len === 0) return { lo: 0, count: 0 }
     const lastIdx = this.phys(this.len - 1)
     const end = nowMs === undefined ? this.t[lastIdx] : nowMs
     const from = end - Math.max(0, windowMs)
@@ -102,13 +107,39 @@ export class SeriesRing {
       if (this.t[this.phys(mid)] < from) lo = mid + 1
       else hi = mid
     }
-    const count = this.len - lo
+    return { lo, count: this.len - lo }
+  }
+
+  /** 取最近 windowMs 毫秒（相对最后一帧时间戳），按时间升序 */
+  snapshot(windowMs: number, nowMs?: number): Snapshot {
+    if (this.len === 0) {
+      return { t: new Float64Array(0), v: Array.from({ length: this.fields }, () => new Float32Array(0)), count: 0 }
+    }
+    const { lo, count } = this.range(windowMs, nowMs)
     const t = new Float64Array(count)
     const v = Array.from({ length: this.fields }, () => new Float32Array(count))
     for (let k = 0; k < count; k++) {
       const p = this.phys(lo + k)
       t[k] = this.t[p]
       for (let f = 0; f < this.fields; f++) v[f][k] = this.ch[f][p]
+    }
+    return { t, v, count }
+  }
+
+  /**
+   * 只取一个通道 —— 波形每条泳道画一根线就用它。
+   * `snapshot()` 会把全部通道都拷一份（21 个通道 × count），泳道只用一个通道时白拷 20 份。
+   */
+  snapshotField(windowMs: number, fieldIndex: number, nowMs?: number): FieldSnapshot {
+    const f = Math.max(0, Math.min(this.fields - 1, Math.floor(fieldIndex)))
+    const { lo, count } = this.range(windowMs, nowMs)
+    const t = new Float64Array(count)
+    const v = new Float32Array(count)
+    const src = this.ch[f]
+    for (let k = 0; k < count; k++) {
+      const p = this.phys(lo + k)
+      t[k] = this.t[p]
+      v[k] = src[p]
     }
     return { t, v, count }
   }

@@ -2,8 +2,8 @@
  * 全局数据层：一条 SSE 连接 + 一份环形缓冲 + 所有写操作。
  *
  * 为什么不用 redux/zustand：这个控制台的"热"路径只有一条 SSE。
- * 用一个手写的发布订阅 + `useSyncExternalStore`，热点更新（telem 10Hz 节流）
- * 不影响低频状态（params/actions/presets）。
+ * 用一个手写的发布订阅 + `useSyncExternalStore`，热点更新（telem 20Hz 合并）
+ * 不影响低频状态（params/actions/presets）：低频页面订阅 `useMeta()`。
  *
  * 契约要点：
  *  - 写操作失败 → 把后端 `error` 原文塞进 toast，不做二次翻译（API.md §1/§5）；
@@ -109,9 +109,26 @@ export interface ConsoleSnapshot {
   recordings: RecItem[]
 }
 
+/**
+ * 「不含热字段」的快照：`telem` / `ringFill` / `version` 每帧都动。
+ * 只显示低频状态（参数表、设置、日志）的页面用 `useMeta()` 订阅它，
+ * 就不会被 20Hz 的遥测拖着一起重渲染。
+ */
+export type MetaSnapshot = Omit<ConsoleSnapshot, 'telem' | 'ringFill' | 'version'>
+
+function snapshotMeta(s: ConsoleSnapshot): MetaSnapshot {
+  const { telem, ringFill, version, ...meta } = s
+  void telem
+  void ringFill
+  void version
+  return meta
+}
+
 const LOG_CAP = 500
 const ACK_CAP = 200
 const TOAST_CAP = 4
+/** 遥测是 100Hz，界面按这个间隔合并刷新（50ms = 20Hz，看得清又不费） */
+const HOT_MS = 50
 
 class ConsoleStore {
   private snap: ConsoleSnapshot = {
@@ -138,6 +155,8 @@ class ConsoleStore {
   readonly ring = new SeriesRing(loadSettings().ringPoints, CHANNELS.length)
 
   private listeners = new Set<() => void>()
+  private metaListeners = new Set<() => void>()
+  private metaSnap: MetaSnapshot = snapshotMeta(this.snap)
   private es: EventSource | null = null
   private toastSeq = 1
   private lastHotBump = 0
@@ -154,33 +173,52 @@ class ConsoleStore {
 
   getSnapshot = (): ConsoleSnapshot => this.snap
 
+  /** 低频状态（不含 telem），只显示参数/设置/日志的页面用它 */
+  subscribeMeta = (fn: () => void): (() => void) => {
+    this.metaListeners.add(fn)
+    return () => {
+      this.metaListeners.delete(fn)
+    }
+  }
+
+  getMetaSnapshot = (): MetaSnapshot => this.metaSnap
+
+  /** 低频变更（非遥测）：重建 meta 快照，两拨订阅者都通知 */
   private emit(): void {
+    this.snap = { ...this.snap, version: this.snap.version + 1 }
+    this.metaSnap = snapshotMeta(this.snap)
+    this.listeners.forEach((fn) => fn())
+    this.metaListeners.forEach((fn) => fn())
+  }
+
+  /** 热路径（遥测）：只换 version/telem，不碰 meta —— meta 订阅者不该跟着抖 */
+  private emitHotNow(): void {
     this.snap = { ...this.snap, version: this.snap.version + 1 }
     this.listeners.forEach((fn) => fn())
   }
 
-  /** telem 是 50Hz，界面按 10Hz 刷（波形自己按窗口取数，不吃这个节流）。
+  /** telem 是 100Hz，界面按 HOT_MS(50ms) 合并刷新（波形自己按窗口取数，不吃这个节流）。
    *  用全局 `setTimeout` 而不是 `window.setTimeout`：SSR 预览生成器（Node 里跑）
    *  喂遥测时也要能走同一条节流路径。 */
   private emitHot(): void {
     this.hotDirty = true
     const now = Date.now()
-    if (now - this.lastHotBump < 100) {
+    if (now - this.lastHotBump < HOT_MS) {
       if (this.hotTimer === null) {
         this.hotTimer = setTimeout(() => {
           this.hotTimer = null
           if (this.hotDirty) {
             this.hotDirty = false
             this.lastHotBump = Date.now()
-            this.emit()
+            this.emitHotNow()
           }
-        }, 100 - (now - this.lastHotBump))
+        }, HOT_MS - (now - this.lastHotBump))
       }
       return
     }
     this.hotDirty = false
     this.lastHotBump = now
-    this.emit()
+    this.emitHotNow()
   }
 
   // ---- toast ----
@@ -545,4 +583,9 @@ export const store = new ConsoleStore()
 
 export function useStore(): ConsoleSnapshot {
   return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot)
+}
+
+/** 只订阅低频状态：拿不到 `telem`，也就不会被 20Hz 的遥测拖着重渲染 */
+export function useMeta(): MetaSnapshot {
+  return useSyncExternalStore(store.subscribeMeta, store.getMetaSnapshot, store.getMetaSnapshot)
 }

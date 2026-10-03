@@ -128,7 +128,8 @@ def test_hello_from_real_firmware(pipe):
     assert h["proto"] == 2
     assert h["version"] == "0.2.0"
     assert h["name"] == "quandi-car"
-    assert h["telem_hz"] == 50
+    # 固件默认遥测 100Hz（2026-10 提速后从 50Hz 提到 100Hz；控制环 200Hz，留一半余量）
+    assert h["telem_hz"] == 100
     # 8 个能力位全开（protocol.py 的常量必须和固件 host_link.c 的 CAP_* 对齐）
     assert h["caps"] == (pr.CAP_TELEM2 | pr.CAP_ACTIONS | pr.CAP_SERVO | pr.CAP_DRIVE
                          | pr.CAP_CAL | pr.CAP_FLASH | pr.CAP_WATCHDOG | pr.CAP_TASK)

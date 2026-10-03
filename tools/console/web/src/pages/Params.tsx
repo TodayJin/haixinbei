@@ -1,7 +1,7 @@
 import React from 'react'
 import { RotateCcw, Save, Search, Upload } from 'lucide-react'
 import { Badge, Card, NumberField } from '../components/ui'
-import { store, useStore } from '../lib/store'
+import { store, useMeta } from '../lib/store'
 import { fmt } from '../lib/format'
 import type { ParamItem } from '../lib/types'
 
@@ -61,7 +61,7 @@ function ParamRow({ p }: { p: ParamItem }) {
 }
 
 export function ParamsPage() {
-  const { params } = useStore()
+  const { params } = useMeta()
   const [q, setQ] = React.useState('')
   const [onlyDirty, setOnlyDirty] = React.useState(false)
   const items = React.useMemo(() => {

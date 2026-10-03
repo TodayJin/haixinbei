@@ -1,7 +1,7 @@
 import React from 'react'
 import { CircleStop, Play, Power, Radio, RefreshCw, RotateCcw, Trash2 } from 'lucide-react'
 import { Badge, Card, StatusDot } from '../components/ui'
-import { store, useStore } from '../lib/store'
+import { store, useMeta, useStore } from '../lib/store'
 import { fmt, fmtClock } from '../lib/format'
 import { MODE_TEXT, NVRAM_TEXT, stateText, taskText } from '../lib/types'
 
@@ -13,21 +13,71 @@ const LOG_TONE: Record<string, string> = {
   rx: 'text-slate-400',
 }
 
-export function ControlPage() {
-  const { logs, acks, record, link, stats, params, telem } = useStore()
-  const recording = record?.recording ?? false
-  const isTaskRunning = telem?.task_id !== undefined && telem.task_id !== 0xff
-  const [hz, setHz] = React.useState(50)
+/**
+ * 日志 + ACK 两块单独抽出来：它们只吃 `useMeta()`（低频），
+ * 于是车上 100Hz 的遥测不会拖着几百条日志一起重渲染。
+ */
+function LogCards() {
+  const { logs, acks } = useMeta()
   const [filter, setFilter] = React.useState('')
-
-  React.useEffect(() => {
-    if (link?.telem_hz) setHz(Math.round(link.telem_hz))
-  }, [link?.telem_hz])
 
   const shown = React.useMemo(() => {
     const needle = filter.trim().toLowerCase()
     return logs.filter((l) => !needle || `${l.level} ${l.text}`.toLowerCase().includes(needle))
   }, [logs, filter])
+
+  return (
+    <>
+      <Card
+        title={`日志（${logs.length}）`}
+        right={
+          <div className="flex items-center gap-2">
+            <input className="field w-40" placeholder="过滤…" value={filter} onChange={(e) => setFilter(e.target.value)} />
+            <button className="btn-ghost" onClick={() => store.clearLogs()}>
+              <Trash2 size={13} /> 清空
+            </button>
+          </div>
+        }
+      >
+        <div className="max-h-[360px] overflow-y-auto rounded-lg bg-ink-900/60 p-2 font-mono text-[11.5px] leading-relaxed">
+          {shown.length === 0 && <div className="text-slate-500">暂无日志。</div>}
+          {shown.map((l, i) => (
+            <div key={`${l.ts_ms}-${i}`} className="flex gap-2">
+              <span className="shrink-0 text-slate-600">{fmtClock(l.ts_ms)}</span>
+              <span className={`shrink-0 ${LOG_TONE[l.level] ?? 'text-slate-300'}`}>[{l.level}]</span>
+              <span className={LOG_TONE[l.level] ?? 'text-slate-300'}>{l.text}</span>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card title={`ACK（${acks.length}）`}>
+        <div className="max-h-[220px] overflow-y-auto rounded-lg bg-ink-900/60 p-2 font-mono text-[11.5px]">
+          {acks.length === 0 && <div className="text-slate-500">还没有 ACK。</div>}
+          {acks.map((a) => (
+            <div key={a.seq} className="flex gap-2">
+              <StatusDot on={a.ok} tone={a.ok ? 'mint' : 'rose'} />
+              <span className="text-slate-500">#{a.seq}</span>
+              <span className={a.ok ? 'text-slate-300' : 'text-neon-rose'}>
+                {a.req} {a.ok ? 'OK' : `status ${a.status} ${a.text}`}
+              </span>
+            </div>
+          ))}
+        </div>
+      </Card>
+    </>
+  )
+}
+
+export function ControlPage() {
+  const { record, link, stats, params, telem } = useStore()
+  const recording = record?.recording ?? false
+  const isTaskRunning = telem?.task_id !== undefined && telem.task_id !== 0xff
+  const [hz, setHz] = React.useState(50)
+
+  React.useEffect(() => {
+    if (link?.telem_hz) setHz(Math.round(link.telem_hz))
+  }, [link?.telem_hz])
 
   return (
     <div className="grid gap-3 xl:grid-cols-[380px_minmax(0,1fr)]">
@@ -122,43 +172,7 @@ export function ControlPage() {
       </div>
 
       <div className="grid gap-3">
-        <Card
-          title={`日志（${logs.length}）`}
-          right={
-            <div className="flex items-center gap-2">
-              <input className="field w-40" placeholder="过滤…" value={filter} onChange={(e) => setFilter(e.target.value)} />
-              <button className="btn-ghost" onClick={() => store.clearLogs()}>
-                <Trash2 size={13} /> 清空
-              </button>
-            </div>
-          }
-        >
-          <div className="max-h-[360px] overflow-y-auto rounded-lg bg-ink-900/60 p-2 font-mono text-[11.5px] leading-relaxed">
-            {shown.length === 0 && <div className="text-slate-500">暂无日志。</div>}
-            {shown.map((l, i) => (
-              <div key={`${l.ts_ms}-${i}`} className="flex gap-2">
-                <span className="shrink-0 text-slate-600">{fmtClock(l.ts_ms)}</span>
-                <span className={`shrink-0 ${LOG_TONE[l.level] ?? 'text-slate-300'}`}>[{l.level}]</span>
-                <span className={LOG_TONE[l.level] ?? 'text-slate-300'}>{l.text}</span>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <Card title={`ACK（${acks.length}）`}>
-          <div className="max-h-[220px] overflow-y-auto rounded-lg bg-ink-900/60 p-2 font-mono text-[11.5px]">
-            {acks.length === 0 && <div className="text-slate-500">还没有 ACK。</div>}
-            {acks.map((a) => (
-              <div key={a.seq} className="flex gap-2">
-                <StatusDot on={a.ok} tone={a.ok ? 'mint' : 'rose'} />
-                <span className="text-slate-500">#{a.seq}</span>
-                <span className={a.ok ? 'text-slate-300' : 'text-neon-rose'}>
-                  {a.req} {a.ok ? 'OK' : `status ${a.status} ${a.text}`}
-                </span>
-              </div>
-            ))}
-          </div>
-        </Card>
+        <LogCards />
 
         <Card title="本机出口（桥 → 车）">
           <p className="text-[12px] leading-relaxed text-slate-400">

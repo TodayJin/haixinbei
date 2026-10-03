@@ -12,6 +12,26 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-03 — LPUART1 提速到 921600：收 = DMA1_Ch2 循环 2048B（主循环按 CNDTR 取），发 = DMA1_Ch3 槽位队列 8×144B（非阻塞、队满丢帧并计数）
+选择：LPUART1 提速到 921600：收 = DMA1_Ch2 循环 2048B（主循环按 CNDTR 取），发 = DMA1_Ch3 槽位队列 8×144B（非阻塞、队满丢帧并计数）
+放弃：保留 HAL_UART_Transmit 阻塞发 + 512B 收环形缓冲（旧的 115200 方案）—— 它在 921600 下依然要等队列，且一帧帧等仍会卡控制环
+因为：用户 m20705 要「通讯速率快一点、刷新快、下发快」；100Hz×64B 遥测 + 一次 4096B 任务读回（65 帧）在阻塞写法下会把主循环按住几百 ms（遥测断、OLED 不刷、可能触发 500ms 看门狗）
+
+## 2026-10-03 — 网页去卡顿走「meta 快照 + 单通道快照」：新增 store.useMeta()（Omit<ConsoleSnapshot,'telem'|'ringFill'|'version'>，只在非热 emit 里重建）、ring.snapshotField(windowMs, fieldIndex)，热通知节流 100 → 50ms
+选择：网页去卡顿走「meta 快照 + 单通道快照」：新增 store.useMeta()（Omit<ConsoleSnapshot,'telem'|'ringFill'|'version'>，只在非热 emit 里重建）、ring.snapshotField(windowMs, fieldIndex)，热通知节流 100 → 50ms
+放弃：只把节流从 100ms 调大（更卡）或给每个组件单独做细粒度选择器（改动面大、收益不如这两处）
+因为：所有组件都用 useStore() 订阅整份快照 ⇒ 每次热 emit 全部重渲染：Params 的 43 行表、Control 的日志/ACK 大列表本来跟 telem 无关却每 50ms 重建；ScopeChart/Trend 只画一个通道，snapshot() 却一次拷 21 个通道（每条泳道白拷 20 份）
+
+## 2026-10-03 — 删掉桥里那条 {"n":"frame", "src":{type,seq,len}} SSE 事件（原 bridge/state.py:402-404 的 else 分支）
+选择：删掉桥里那条 {"n":"frame", "src":{type,seq,len}} SSE 事件（原 bridge/state.py:402-404 的 else 分支）
+放弃：留着不用（白占 SSE 带宽，还会加剧网页卡顿）
+因为：全仓库 grep onFrame|'frame'|"frame" 只有这一处生产、没有任何消费方，等于每收到一帧非遥测帧就多推一条 JSON；帧数统计看每秒一次的 stats 就够
+
+## 2026-10-03 — 上位机桥、网页设置页、协议文档的波特率默认值全部从 115200 改成 921600（bridge/link.py、bridge/main.py --baud、bridge/server.py、state.py 的 link_payload、Settings.tsx、Overview.tsx、api.ts）
+选择：上位机桥、网页设置页、协议文档的波特率默认值全部从 115200 改成 921600（bridge/link.py、bridge/main.py --baud、bridge/server.py、state.py 的 link_payload、Settings.tsx、Overview.tsx、api.ts）
+放弃：只改固件、桥继续默认 115200（刷完固件车就「掉线」，会误判成固件坏了）
+因为：固件 DL_BAUD 是常量，桥上不一致就直接链路不通；用户 m20705 明确要用 921600
+
 ## 2026-10-03 — 界面上的英文缩写一律换成中文（收到/丢弃/校验错/实时推送/车上控制占用/校验和…），技术名词靠组件 `title` 悬停解释，Settings 末尾加一张「页面上的缩写、数字都是什么意思」对照卡
 选择：界面上的英文缩写一律换成中文（收到/丢弃/校验错/实时推送/车上控制占用/校验和…），技术名词靠组件 `title` 悬停解释，Settings 末尾加一张「页面上的缩写、数字都是什么意思」对照卡
 放弃：保持 rx / drop / crc / SSE / CRC16 / jsonl 这些裸英文原样

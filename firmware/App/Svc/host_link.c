@@ -2,7 +2,7 @@
  * @file  host_link.c
  * @brief 上位机通信链路：帧编解码 + 参数表 + 命令分发 + 遥测打包。
  *
- * 为什么不用文本协议：50Hz × 32 字节遥测在 115200 下只占 17%，
+ * 为什么不用文本协议：100Hz × 64 字节遥测在 921600 下只占几个百分点，
  * 而文本要 3~5 倍带宽、丢一个字节就整行错乱。详见 docs/上位机通信协议.md。
  *
  * 数据来源（都是**真实读数**，不编）：
@@ -136,16 +136,18 @@ static float s_param[NSPEC];
 static host_link_stats_t s_stats;
 
 /* 全表参数 dump 的分帧发送状态（见 handle_frame 的 T_PARAM_GET）：
- * 一次 dump 有 NSPEC 帧，不一次性发完，由 host_link_poll 每拍发 DUMP_PER_POLL 帧。 */
+ * 一次 dump 有 NSPEC 帧，不一次性发完，由 host_link_poll 每拍发 DUMP_PER_POLL 帧。
+ * 921600 + 发 DMA 槽位队列（board.c）之后一帧只是"拷 131 字节 + 返回"，
+ * 每拍 8 帧 ≈ 1KB ≈ 11ms 的串口时间，正好填满队列又不挡控制环。 */
 static uint16_t s_dump_i;
 static uint8_t  s_dump_seq;
 static uint8_t  s_dump_busy;
-#define DUMP_PER_POLL 4u
+#define DUMP_PER_POLL 8u
 
 /* v2 遥测帧选择（T_CMD / CMD_SET_TELEM_MODE）：
  *   0 = 只发老 32 字节 T_TELEM（带宽小）
  *   1 = 只发 64 字节 T_TELEM2（默认：新上位机要灰度/重心/角度环/模式这些量）
- *   2 = 两个都发（调试用，115200 下 50Hz 约占 37% 带宽） */
+ *   2 = 两个都发（调试用；早先 115200 下 50Hz 就占 37% 带宽，921600 之后随便发） */
 static uint8_t s_telem_mode = 1u;
 
 static int spec_index(uint16_t id)
@@ -283,8 +285,8 @@ static void frame_send(uint8_t type, uint8_t seq, const uint8_t *payload, uint8_
   crc = crc16_ccitt(&tx_buf[2], (uint16_t)(3u + len));
   tx_buf[5u + len] = (uint8_t)(crc & 0xFFu);
   tx_buf[6u + len] = (uint8_t)(crc >> 8);
-  /* 主循环里阻塞发一帧：50Hz 下 39 字节 ≈ 3.4ms @115200，可接受。
-     将来要提到 200Hz 再改 DMA / 环形发送。 */
+  /* 非阻塞：拷进发 DMA 的槽位队列就走（board.c），队列满只丢帧并计数。
+     921600 下一帧 39 字节 ≈ 0.4ms，主循环再也不用等串口。 */
   (void)board_dl_send(tx_buf, (uint16_t)(7u + len));
   s_stats.tx_frames++;
 }
@@ -593,18 +595,17 @@ static void rx_byte(uint8_t b)
  *  车只是执行机构：上位机把任务编成 task_prog 的二进制、分片 PUT 上来，
  *  COMMIT 校验通过才擦进 Flash（App/Svc/task_store.c：页 60/61/62 三个槽）。
  *
- *  为什么 LIST_R / DATA 不在这里连发：一帧 board_dl_send 是**同步阻塞**的
- *  （64 字节数据 + 11 字节帧头 ≈ 6.5ms @115200）。一次 GET 最长 TASK_STORE_CAP（4096）
- *  字节 ≈ 64 帧 ≈ 420ms，在 handle_frame 里连发会把主循环按住那么久：遥测断、
- *  OLED 不刷、驾驶看门狗（500ms）也可能被误判成掉线。所以照参数 dump 的老
- *  办法挂"待发"标记，由 host_link_poll 每拍推进一帧。
+ *  为什么 LIST_R / DATA 仍然由 poll 分拍推进：早先一帧 board_dl_send 是同步阻塞的
+ *  （64 字节数据 + 11 字节帧头 ≈ 6.5ms @115200），一次 GET 最长 TASK_STORE_CAP（4096）
+ *  字节 ≈ 64 帧 ≈ 420ms 会按住主循环。现在发是 DMA 槽位队列（非阻塞），但队列只有
+ *  8 帧深，一次全倒进去必然丢帧 —— 仍旧挂"待发"标记，每拍推 TASK_TX_PER_POLL 帧。
  *
  *  收尾约定（§5 的语法允许 n=0，桥按这个判"收完了"，文档同一节有写）：
  *    LIST_R：每个在场的槽一帧，最后**必发一帧空载荷**；
  *    DATA  ：从 off=0 起每帧最多 TASK_DATA_CHUNK 字节，最后**必发一帧空数据**。
  *  查询失败（槽是空的 / 分片没传够）不挂待发，直接回 ACK 错误码。
  * ===================================================================== */
-#define TASK_TX_PER_POLL 1u     /* 每拍最多推一帧：单帧阻塞与一帧 T_TELEM2（≈6ms）同量级 */
+#define TASK_TX_PER_POLL 8u     /* 每拍最多推 8 帧（= 发队列深度）：队列满会丢帧，留点余量给遥测 */
 #define TASK_DATA_CHUNK  64u    /* 一帧 DATA 的数据字节数（PUT 方向上位机可给到 120） */
 #define TASK_STATUS_LEN  11u    /* id(2) state(1) running(1) block(2) elapsed(4) flags(1) */
 
@@ -726,9 +727,10 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
     if (len < 2u) { send_ack(seq, ST_BAD_PARAM); break; }
     id = (uint16_t)p[0] | ((uint16_t)p[1] << 8);
     if (id == 0xFFFFu) {
-      /* 全表 dump 不在这里连发：原来循环 31 次 send_param_report，每帧
-       * board_dl_send 都是同步阻塞的（115200 下一帧 ≈1.1ms）⇒ 主循环停约 35ms，
-       * 期间 UI 不刷、遥测不发。改成挂个"待发"标记，由 host_link_poll 每拍发几帧。 */
+      /* 全表 dump 不在这里连发：原来循环 31 次 send_param_report，当时发还是同步阻塞的
+       *（115200 下一帧 ≈1.1ms）⇒ 主循环停约 35ms，期间 UI 不刷、遥测不发。
+       * 现在发是 DMA 槽位队列（非阻塞），但队列只有 8 帧深，一次倒 31 帧照样丢 ——
+       * 仍旧挂个"待发"标记，由 host_link_poll 每拍发几帧。 */
       s_dump_seq  = seq;
       s_dump_i    = 0;
       s_dump_busy = 1u;
@@ -1040,7 +1042,9 @@ void host_link_init(void)
   uint16_t i;
   for (i = 0; i < NSPEC; i++) s_param[i] = SPECS[i].def;
   memset(&s_stats, 0, sizeof(s_stats));
-  s_stats.telem_hz = 50u;
+  /* 遥测默认 100Hz（10ms 一格）：控制环是 200Hz，取 100 既能看清又有余量；
+   * 上位机可以用 CMD_SET_TELEM_HZ 随时改（网页"设置 → 遥测频率"）。 */
+  s_stats.telem_hz = 100u;
   s_telem_mode = 1u;          /* 默认发 64 字节 T_TELEM2（新上位机要扩展量） */
   HostExt_Init();
 
@@ -1089,10 +1093,11 @@ void host_link_tick_1hz(void)
   uint32_t now = HAL_GetTick();
   if (now - last < 1000u) return;
   last = now;
-  SEGGER_RTT_printf(0, "HOST: rx=%lu tx=%lu crc=%lu resync=%lu sets=%lu hz=%u\r\n",
+  SEGGER_RTT_printf(0, "HOST: rx=%lu tx=%lu crc=%lu resync=%lu sets=%lu hz=%u txdrop=%lu rxover=%lu\r\n",
                     (unsigned long)s_stats.rx_frames, (unsigned long)s_stats.tx_frames,
                     (unsigned long)s_stats.crc_errors, (unsigned long)s_stats.resyncs,
-                    (unsigned long)s_stats.param_sets, (unsigned)s_stats.telem_hz);
+                    (unsigned long)s_stats.param_sets, (unsigned)s_stats.telem_hz,
+                    (unsigned long)board_dl_tx_dropped(), (unsigned long)board_dl_rx_overrun());
 }
 
 const host_link_stats_t *host_link_stats(void) { return &s_stats; }
