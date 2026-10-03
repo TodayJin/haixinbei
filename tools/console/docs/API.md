@@ -142,6 +142,7 @@
 |---|---|---|
 | `state` | 连接时 1 次 | `{"link":…,"params":…,"actions":…,"presets":[…],"cal":…}` |
 | `telem` | ≤ 小车遥测频率（默认 50Hz） | 见下 |
+| `telem_batch` | 同 `telem`，但连续帧按 `--sse-batch-ms` 攒成一条 | `[<telem>, <telem>, …]`（2 帧起） |
 | `stats` | 1 Hz | `{"stats":…,"telem_hz":50,"last_rx_ms":3,"busy_pct":12.3}` |
 | `log` | 事件驱动 | `{"ts_ms":…,"level":"rx"\|"tx"\|"info"\|"warn"\|"error","text":"…"}` |
 | `ack` | 事件驱动 | `{"seq":12,"req":"params.set","status":0,"ok":true,"text":"…"}` |
@@ -149,6 +150,14 @@
 | `params` | 读回/保存后 | 同 §3.2 |
 | `cal` | 读回时 | 同 §3.4 |
 | `error` | 事件驱动 | `{"text":"串口被拔出"}` |
+
+**攒批（`--sse-batch-ms`，默认 20ms）**：桥把连续遥测攒够一个窗口再发同一条
+`telem_batch`；`0` = 关，退回"一条事件一帧"的老行为。这是**拿延迟换唤醒数**：
+`python -m bridge.bench --replay --hz 100,200` 实测 —— 帧率不变（100.4→100.2、
+199.3→199.8 帧/s），遥测报文数 100Hz 402→135、200Hz 803→134（约 1/3 ~ 1/6），
+单条报文 740B→2132B/4260B，字节率基本不变（73.2→72.1 KB/s）；代价是单帧最坏晚
+一个窗口（20ms 档实测报文到达间隔 p95 31.9ms / max 32.4ms）。前端 `openStream`
+对 `telem_batch` 逐帧喂同一个 `onTelem`，上层无感。
 
 `telem` 字段（**未做的量一律给真实默认值、不假装**）：
 ```json

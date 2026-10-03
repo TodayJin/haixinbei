@@ -14,7 +14,7 @@ import time
 import webbrowser
 
 from .link import available_ports, find_default_port
-from .server import Bridge, serve
+from .server import Bridge, serve, SSE_BATCH_MS_DEFAULT
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONSOLE_DIR = os.path.dirname(HERE)
@@ -60,6 +60,9 @@ def parse_args(argv=None):
     ap.add_argument("--list-ports", action="store_true", help="列出串口后退出")
     ap.add_argument("--low-res-timer", action="store_true",
                     help="不提高 Windows 计时器精度（默认提高：链路轮询才跑得动 100Hz 遥测）")
+    ap.add_argument("--sse-batch-ms", type=int, default=SSE_BATCH_MS_DEFAULT, metavar="N",
+                    help=f"SSE 按 N 毫秒攒批，连续遥测合成一条 telem_batch（默认 "
+                         f"{SSE_BATCH_MS_DEFAULT}；0 = 不合并，一事件一报文）")
     return ap.parse_args(argv)
 
 
@@ -80,7 +83,8 @@ def main(argv=None) -> int:
     hi_res = False if args.low_res_timer else raise_timer_resolution()
     b = Bridge(mode=mode, port=args.serial or "", baud=args.baud,
                replay=args.replay or "", replay_speed=args.replay_speed,
-               web_root=args.web or "", console_dir=CONSOLE_DIR)
+               web_root=args.web or "", console_dir=CONSOLE_DIR,
+               sse_batch_ms=args.sse_batch_ms)
     try:
         b.start()
     except SystemExit as e:
@@ -108,6 +112,8 @@ def main(argv=None) -> int:
           + (f" → {b.console.rec_path}" if b.console.rec_path else ""))
     print("  计时器  : " + ("1ms（已提高：链路轮询 ~180 次/s，100Hz 遥测不再成串到）"
                             if hi_res else "系统默认（Windows 上约 15.6ms）"))
+    print("  SSE 合并: " + (f"{b.sse_batch_ms}ms（连续遥测合成一条 telem_batch）"
+                            if b.sse_batch_ms else "关（一事件一报文）"))
     print("  停止    : Ctrl+C")
     print("=" * 66)
 

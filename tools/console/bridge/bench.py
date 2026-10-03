@@ -74,6 +74,24 @@ def pct(vals: list[float], q: float) -> float:
     return v[min(len(v) - 1, max(0, int(round(q / 100.0 * (len(v) - 1)))))]
 
 
+def expand(events: list[tuple[str, object, float, int]]) -> list[tuple[object, float, int]]:
+    """把 `telem_batch` 摊回"一帧一条"：`[(载荷, 到达时刻, 该帧摊到的字节数)]`。
+
+    桥默认按 `--sse-batch-ms` 攒批（连续遥测合成一条 `telem_batch` + 载荷数组），
+    所以**帧率必须按载荷里的帧数算，不能按报文数算** —— 否则一开合并就报"帧率减半"。
+    字节数按帧数摊（报文字节数包含 `event: …\\ndata: …\\n\\n` 的外壳，摊完单帧字节
+    会略小于不合并时，这正是合并省下来的东西）。非遥测事件这里直接丢掉。
+    """
+    out: list[tuple[object, float, int]] = []
+    for name, payload, t, nbytes in events:
+        if name == "telem":
+            out.append((payload, t, nbytes))
+        elif name == "telem_batch" and isinstance(payload, list) and payload:
+            k = len(payload)
+            out += [(it, t, nbytes // k) for it in payload]
+    return out
+
+
 def summarize(events: list[tuple[str, object, float, int]], dt: float,
               fed_frames: int | None = None, cpu: float | None = None,
               log: str | None = None) -> dict:
@@ -82,9 +100,10 @@ def summarize(events: list[tuple[str, object, float, int]], dt: float,
     `fed_frames` 是同一时段里**桥自己记的收帧数**（`/api/link` 的 `stats.rx` 增量）：
     它减掉客户端收到的遥测条数就是"路上丢了多少"（窗口两端会各差 ±1 帧，正常）。
     `cpu` 是同一窗口内的单核占用百分比均值。
+    帧数走 `expand()`（`telem_batch` 里的每帧都要算），报文数（`events`）才是 SSE 报文数。
     """
-    telem = [e for e in events if e[0] == "telem"]
-    times = [e[2] for e in telem]
+    frames = expand(events)
+    times = [f[1] for f in frames]
     gaps = [(times[i + 1] - times[i]) * 1000.0 for i in range(len(times) - 1)]
     nbytes = sum(e[3] for e in events)
     kinds: dict[str, int] = {}
@@ -92,11 +111,11 @@ def summarize(events: list[tuple[str, object, float, int]], dt: float,
         kinds[e[0]] = kinds.get(e[0], 0) + 1
     return {
         "seconds": dt,
-        "telem": len(telem),
-        "fps": (len(telem) / dt) if dt else 0.0,
+        "telem": len(frames),
+        "fps": (len(frames) / dt) if dt else 0.0,
         "fed": fed_frames,
         "fed_fps": (fed_frames / dt) if (fed_frames is not None and dt) else None,
-        "dropped": (max(0, fed_frames - len(telem)) if fed_frames is not None else None),
+        "dropped": (max(0, fed_frames - len(frames)) if fed_frames is not None else None),
         "gap_p50": pct(gaps, 50),
         "gap_p95": pct(gaps, 95),
         "gap_max": (max(gaps) if gaps else 0.0),
@@ -105,6 +124,8 @@ def summarize(events: list[tuple[str, object, float, int]], dt: float,
         "bytes": nbytes,
         "kb_per_s": (nbytes / dt / 1024.0) if dt else 0.0,
         "bytes_per_event": nbytes / max(1, len(events)),
+        "batched": kinds.get("telem_batch", 0),
+        "per_event": (len(frames) / len(events)) if events else 0.0,
         "kinds": kinds,
         "cpu": cpu,
         "log": log,
@@ -117,15 +138,25 @@ def format_report(rep: dict, title: str) -> list[str]:
     if rep.get("fed_fps") is not None:
         fed = "（链路喂了 %6.1f 帧/s，丢 %d 帧）" % (rep["fed_fps"], rep.get("dropped") or 0)
     line1 = "  %s → 实收遥测 %6.1f 帧/s%s" % (title, rep["fps"], fed)
-    line2 = ("               间隔 p50 %5.1fms  p95 %5.1fms  max %6.1fms | "
+    gap_tag = "（报文级）" if rep.get("batched") else ""
+    line2 = ("               间隔%s p50 %5.1fms  p95 %5.1fms  max %6.1fms | "
              "SSE %6.1f 事件/s %7.1f KB/s 单条 %4.0fB"
-             % (rep["gap_p50"], rep["gap_p95"], rep["gap_max"],
+             % (gap_tag, rep["gap_p50"], rep["gap_p95"], rep["gap_max"],
                 rep["ev_per_s"], rep["kb_per_s"], rep["bytes_per_event"]))
     cpu = (("%5.1f%%（单核，窗口内均值）" % rep["cpu"]) if rep.get("cpu") is not None
            else "取不到")
     line3 = "               桥进程 CPU %s | 事件构成 %s | 日志 %s" % (
         cpu, rep["kinds"], os.path.basename(rep["log"]) if rep.get("log") else "-")
-    return [line1, line2, line3]
+    out = [line1, line2, line3]
+    single = rep["kinds"].get("telem", 0)
+    if rep.get("batched"):
+        msgs = single + rep["batched"]
+        out.append("               SSE 合并：%d 条 telem_batch 装了 %d 帧（遥测报文平均每条 %.1f 帧，"
+                   "报文数 %d → 不合并时 %d）；上面那行的间隔是**报文**到达口径"
+                   "（同一条里的帧同刻到达），单帧最坏晚一个攒批窗口"
+                   % (rep["batched"], rep["telem"] - single,
+                      (rep["telem"] / msgs) if msgs else 0.0, msgs, rep["telem"]))
+    return out
 
 
 def serial_verdict(link: dict, got_frames: int) -> tuple[int, str]:
@@ -232,13 +263,15 @@ class Sse:
 
 
 # --------------------------------------------------------------------- 起桥/杀桥
-def spawn(extra_args: list[str], port: int, tag: str, low_res_timer: bool):
+def spawn(extra_args: list[str], port: int, tag: str, low_res_timer: bool,
+          sse_batch_ms: int | None = None):
     env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
     log_path = os.path.join(CONSOLE, "data", "logs", "bench_bridge_%s.log" % tag)
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     fh = open(log_path, "wb")
     cmd = [PY, "-m", "bridge.main", "--port", str(port), "--no-browser",
-           *extra_args, *(["--low-res-timer"] if low_res_timer else [])]
+           *extra_args, *(["--low-res-timer"] if low_res_timer else []),
+           *(["--sse-batch-ms", str(sse_batch_ms)] if sse_batch_ms is not None else [])]
     p = subprocess.Popen(cmd, cwd=CONSOLE, env=env, stdin=subprocess.DEVNULL,
                          stdout=fh, stderr=subprocess.STDOUT)
     for _ in range(120):
@@ -336,11 +369,12 @@ def make_replay(hz: int, frames: int) -> str:
     return out
 
 
-def bench_replay(hz: int, seconds: float, low_res_timer: bool) -> dict:
+def bench_replay(hz: int, seconds: float, low_res_timer: bool,
+                 sse_batch_ms: int | None = None) -> dict:
     path = make_replay(hz, max(60, int(hz * (seconds + 2))))
     port = free_port()
     p, log = spawn(["--replay", path, "--replay-speed", "1.0"], port, "replay%dhz" % hz,
-                   low_res_timer)
+                   low_res_timer, sse_batch_ms)
     try:
         time.sleep(0.3)
         m = measure(port, seconds, cpu_pid=p.pid)
@@ -353,9 +387,11 @@ def bench_replay(hz: int, seconds: float, low_res_timer: bool) -> dict:
 
 
 # ------------------------------------------------------------ 串口模式（真车）
-def bench_serial(dev: str, baud: int, seconds: float, low_res_timer: bool = False) -> dict:
+def bench_serial(dev: str, baud: int, seconds: float, low_res_timer: bool = False,
+                 sse_batch_ms: int | None = None) -> dict:
     port = free_port()
-    p, log = spawn(["--serial", dev, "--baud", str(baud)], port, "serial", low_res_timer)
+    p, log = spawn(["--serial", dev, "--baud", str(baud)], port, "serial", low_res_timer,
+                   sse_batch_ms)
     try:
         time.sleep(0.5)
         m = measure(port, seconds, cpu_pid=p.pid)
@@ -369,9 +405,10 @@ def bench_serial(dev: str, baud: int, seconds: float, low_res_timer: bool = Fals
 
 
 # ------------------------------------------------------------- 仿真车：指令往返
-def bench_sim(seconds: float, low_res_timer: bool = False) -> dict:
+def bench_sim(seconds: float, low_res_timer: bool = False,
+              sse_batch_ms: int | None = None) -> dict:
     port = free_port()
-    p, log = spawn(["--sim"], port, "sim", low_res_timer)
+    p, log = spawn(["--sim"], port, "sim", low_res_timer, sse_batch_ms)
     try:
         time.sleep(0.5)
         sse = Sse(port)
@@ -382,9 +419,9 @@ def bench_sim(seconds: float, low_res_timer: bool = False) -> dict:
         drv: list[float] = []
         for _ in range(6):
             base = None
-            for n, o, _t, _nb in sse.pump(0.3):
-                if n == "telem" and isinstance(o, dict) and "drive" in o:
-                    base = o["drive"]
+            for it, _t, _nb in expand(sse.pump(0.3)):
+                if isinstance(it, dict) and "drive" in it:
+                    base = it["drive"]
             if base is None:
                 continue
             body = ({"mode": "wheels", "vl": 900, "vr": 900}
@@ -394,8 +431,8 @@ def bench_sim(seconds: float, low_res_timer: bool = False) -> dict:
             rtts.append(r.get("rtt_ms"))
             seen = None
             while time.monotonic() < t0 + 3.0:
-                for n, o, t, _nb in sse.pump(0.2):
-                    if n == "telem" and isinstance(o, dict) and o.get("drive") != base:
+                for it, t, _nb in expand(sse.pump(0.2)):
+                    if isinstance(it, dict) and it.get("drive") != base:
                         seen = (t - t0) * 1000.0
                         break
                 if seen is not None:
@@ -452,7 +489,10 @@ def main(argv=None) -> int:
     ap.add_argument("--seconds", type=float, default=6.0, help="每档量多久，默认 6s")
     ap.add_argument("--low-res-timer", action="store_true",
                     help="起桥时不提高 Windows 计时器精度（对照：轮询掉到 ~64 次/s）")
+    ap.add_argument("--sse-batch-ms", type=int, default=None, metavar="N",
+                    help="起桥时用 N 毫秒攒批（0 = 不合并；不给就用桥的默认 20ms）")
     args = ap.parse_args(argv)
+    batch = args.sse_batch_ms
 
     print("=" * 100)
     print("  主机侧承载量测  python %s  console=%s" % (sys.version.split()[0], CONSOLE))
@@ -473,7 +513,7 @@ def main(argv=None) -> int:
         return 0
 
     if args.serial:
-        b = bench_serial(args.serial, args.baud, args.seconds, args.low_res_timer)
+        b = bench_serial(args.serial, args.baud, args.seconds, args.low_res_timer, batch)
         for line in format_report(b["rep"], "%s @%d" % (args.serial, args.baud)):
             print(line)
         for line in format_serial(b):
@@ -482,14 +522,14 @@ def main(argv=None) -> int:
         return b["rc"]
 
     if args.sim:
-        sim = bench_sim(args.seconds, args.low_res_timer)
+        sim = bench_sim(args.seconds, args.low_res_timer, batch)
         for line in format_sim(sim):
             print(line)
         print("=" * 100)
         return 0
 
     for hz in [int(x) for x in args.hz.split(",") if x.strip()]:
-        rep = bench_replay(hz, args.seconds, args.low_res_timer)
+        rep = bench_replay(hz, args.seconds, args.low_res_timer, batch)
         for line in format_report(rep, "回放 %3dHz" % hz):
             print(line)
     print("=" * 100)

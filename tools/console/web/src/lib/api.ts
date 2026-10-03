@@ -181,6 +181,12 @@ export function openStream(handlers: {
   })
   es.addEventListener('state', (e) => handlers.onState(JSON.parse((e as MessageEvent).data)))
   es.addEventListener('telem', (e) => handlers.onTelem(JSON.parse((e as MessageEvent).data) as Telem))
+  // 桥按 sse_batch_ms 攒批：连续遥测会一次发来 N 帧（契约 §4 的 `telem_batch`），
+  // 逐帧喂同一个 onTelem —— 上层（ring 缓冲 + 50ms 合并渲染）对此完全无感。
+  es.addEventListener('telem_batch', (e) => {
+    const arr = JSON.parse((e as MessageEvent).data) as Telem[]
+    for (const t of arr) handlers.onTelem(t)
+  })
   es.addEventListener('stats', (e) => handlers.onStats(JSON.parse((e as MessageEvent).data) as StatsEvent))
   es.addEventListener('log', (e) => handlers.onLog(JSON.parse((e as MessageEvent).data) as LogItem))
   es.addEventListener('ack', (e) => handlers.onAck(JSON.parse((e as MessageEvent).data) as AckItem))

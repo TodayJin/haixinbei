@@ -21,6 +21,32 @@ from .link import SerialLink, SimLink, ReplayLink, LinkRunner, available_ports, 
 
 VERSION = "1.0"
 WEB_ROOT_DEFAULT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web", "dist")
+SSE_BATCH_MS_DEFAULT = 20        # 0 = 不合并（一条事件一条报文，和提速前一样）
+
+
+def group_sse(evs: list[dict], batch_max: int = 64) -> list[tuple[str, object]]:
+    """把一批事件压成要发的 `[(事件名, 载荷)]`：**连续的遥测合成一条 `telem_batch`**。
+
+    契约 §4：`data` 是事件载荷本身。单帧仍发 `telem`（形状不变），≥2 帧连在一起就发
+    `telem_batch` + 载荷数组 —— 每条 SSE 报文都要 `event: …\\ndata: …\\n\\n` 二十来个字节，
+    也各唤醒一次浏览器去解析：100Hz 下合并到 20ms 一报，报文数和唤醒数直接减半
+    （实测见 `bridge.bench`）。`batch_max` 只限制**一条报文最多装几帧**，防偶发积压时
+    吐出巨大报文；超出的部分留到下一组，不丢帧。非遥测事件（log/ack/stats/…）原样穿过。
+    """
+    out: list[tuple[str, object]] = []
+    i = 0
+    while i < len(evs):
+        ev = evs[i]
+        if ev.get("n") != "telem":
+            out.append((ev.get("n", "msg"), ev.get("src", ev)))
+            i += 1
+            continue
+        items: list[object] = []
+        while i < len(evs) and evs[i].get("n") == "telem" and len(items) < batch_max:
+            items.append(evs[i].get("src", evs[i]))
+            i += 1
+        out.append(("telem", items[0]) if len(items) == 1 else ("telem_batch", items))
+    return out
 
 
 class Bridge:
@@ -28,7 +54,8 @@ class Bridge:
 
     def __init__(self, mode: str = "sim", port: str = "", baud: int = 921600,
                  replay: str = "", web_root: str = "", log_dir: str = "",
-                 preset_dir: str = "", console_dir: str = "", replay_speed: float = 1.0):
+                 preset_dir: str = "", console_dir: str = "", replay_speed: float = 1.0,
+                 sse_batch_ms: int = SSE_BATCH_MS_DEFAULT):
         from .state import Console
         self.web_root = web_root or WEB_ROOT_DEFAULT
         self.console_dir = console_dir or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -41,6 +68,7 @@ class Bridge:
         self.baud = baud
         self.replay = replay
         self.replay_speed = replay_speed
+        self.sse_batch_ms = max(0, int(sse_batch_ms))
         self.runner: LinkRunner | None = None
         self.console: Console | None = None
 
@@ -484,6 +512,12 @@ class Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------------ SSE
     def _stream(self):
+        """一路 SSE。`bridge.sse_batch_ms > 0` 时按固定网格攒批（见 `group_sse`）。
+
+        攒批是个**有意的延迟交换**：报文最多晚 `sse_batch_ms` 毫秒发出去，换报文数与
+        浏览器唤醒数减半。默认 20ms（100Hz 遥测 ≈ 每条报文 2 帧、显示晚半帧），
+        `--sse-batch-ms 0` 就退回"一条事件一条报文"的老行为。
+        """
         sub = self.con.subscribe()
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -491,16 +525,24 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Connection", "keep-alive")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.end_headers()
+        batch = max(0, int(getattr(self.bridge, "sse_batch_ms", 0) or 0)) / 1000.0
         try:
             self._sse(sub, "state", self.con.snapshot())
             last_ping = time.time()
+            pending: list[dict] = []
+            next_flush = time.monotonic() + batch
             while True:
-                evs = sub.pop_all(timeout=1.0)
-                if evs:
-                    for ev in evs:
-                        name = ev.get("n", "msg")
-                        # 契约 §4：`data` 是事件载荷本身（`src`），不是 `{"n":…,"src":…}` 外壳
-                        self._sse(sub, name, ev.get("src", ev))
+                pending += sub.pop_all(timeout=0.2 if batch else 1.0)
+                now = time.monotonic()
+                if pending and (not batch or now >= next_flush or len(pending) >= 128):
+                    if batch:
+                        for name, payload in group_sse(pending):
+                            self._sse(sub, name, payload)
+                    else:                       # 0 = 关：一事件一报文（老行为）
+                        for ev in pending:
+                            self._sse(sub, ev.get("n", "msg"), ev.get("src", ev))
+                    pending = []
+                    next_flush = now + batch
                     last_ping = time.time()
                 elif time.time() - last_ping >= 15.0:
                     self.wfile.write(b": ping\n\n")

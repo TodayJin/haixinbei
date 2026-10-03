@@ -89,6 +89,35 @@ def test_summarize_without_fed_count_reports_none_not_zero():
     assert rep["fed"] is None and rep["dropped"] is None and rep["fed_fps"] is None
 
 
+# --------------------------------------------------------------------- expand
+def test_expand_unpacks_telem_batch_and_splits_bytes():
+    evs = [("telem_batch", [{"i": 1}, {"i": 2}], 1.0, 200), ("telem", {"i": 3}, 2.0, 90)]
+    out = bench.expand(evs)
+    assert [o[0] for o in out] == [{"i": 1}, {"i": 2}, {"i": 3}]
+    assert [o[2] for o in out] == [100, 100, 90]          # 报文字节按帧数摊
+    assert bench.expand([_ev("stats", 0.0)]) == []        # 非遥测事件不算帧
+
+
+def test_summarize_counts_frames_inside_batches_not_messages():
+    evs = [("telem_batch", [{"i": 1}, {"i": 2}, {"i": 3}], 0.00, 300),
+           ("telem_batch", [{"i": 4}, {"i": 5}, {"i": 6}], 0.01, 300)]
+    rep = bench.summarize(evs, dt=1.0, fed_frames=6)
+    assert rep["telem"] == 6 and rep["fps"] == 6.0        # 合并了也要报 6 帧/s，不是 2
+    assert rep["events"] == 2 and rep["ev_per_s"] == 2.0
+    assert rep["batched"] == 2 and rep["per_event"] == 3.0
+    assert rep["dropped"] == 0
+    assert rep["kinds"] == {"telem_batch": 2}
+
+
+def test_format_report_adds_batch_line_only_when_batched():
+    evs = [("telem_batch", [{"i": 1}, {"i": 2}], 0.00, 200),
+           ("telem_batch", [{"i": 3}, {"i": 4}], 0.01, 200)]
+    lines = bench.format_report(bench.summarize(evs, dt=1.0, fed_frames=4), "回放 100Hz")
+    assert len(lines) == 4 and "telem_batch" in lines[3] and "2 条" in lines[3]
+    plain = bench.summarize([_ev("telem", 0.0), _ev("telem", 0.01)], dt=1.0)
+    assert len(bench.format_report(plain, "回放 50Hz")) == 3   # 没合并就不加那行
+
+
 # --------------------------------------------------------------- format_report
 def test_format_report_shows_the_measured_numbers():
     rep = bench.summarize([_ev("telem", 0.00), _ev("telem", 0.01), _ev("telem", 0.02)],
