@@ -19,6 +19,11 @@
 #include "jy61p.h"
 #include "trace_cal.h"
 
+#ifdef HOST_PIPE_REAL_NVRAM
+#include "app_ui.h"     /* app_settings_t g_cfg / app_ui_* */
+#include "tracing.h"    /* trace_read_channel 的原型（与真 tracing.c 一致，别自己另写一个签名） */
+#endif
+
 #ifdef HOST_PIPE_REAL_SERVO
 
 void bsp_servo_init(void) { }       /* 真板子上是配 TIM1 + 四路 PWM，主机上是空操作 */
@@ -40,9 +45,35 @@ uint32_t jy61p_frame_count(void)
     return 0u;      /* 主机上没有真陀螺仪：遥测里的"帧数"恒 0，别拿它当断言 */
 }
 
+#ifdef HOST_PIPE_REAL_NVRAM
+/*
+ * 链真 App/Svc/nvram.c 时，它还缺 5 个符号（上位机 app_ui.c 与真 tracing.c 才有）。
+ * 这里给最小替身，让「真 host_ext.c → nvram_touch() → nvram_poll/service → 真 Flash 记录」
+ * 这条链路能端到端跑起来。g_cfg 是 nvram snapshot/apply 的落点，gyro 轴档与
+ * `app_ui_settings_loaded()` 是它的两个钩子。
+ */
+app_settings_t g_cfg;
+
+static uint8_t s_pipe_gyro_axis;
+static int     s_pipe_settings_loaded;
+
+uint8_t app_ui_gyro_axis_mode(void) { return s_pipe_gyro_axis; }
+void    app_ui_set_gyro_axis_mode(uint8_t mode) { s_pipe_gyro_axis = (uint8_t)(mode & 7u); }
+void    app_ui_settings_loaded(void) { s_pipe_settings_loaded++; }
+
+int trace_read_channel(uint8_t idx)
+{
+    (void)idx;
+    return 0;       /* 主机上没有灰度传感器：当成"全白"，别拿它当断言 */
+}
+
+#else
+
 void trace_cal_get_data(trace_cal_data_t *out)
 {
     if (out != NULL) {
         memset(out, 0, sizeof(*out));
     }
 }
+
+#endif /* HOST_PIPE_REAL_NVRAM */

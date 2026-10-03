@@ -38,12 +38,15 @@ INCLUDES = ("firmware/test/stub", "firmware/Core/Inc", "firmware/App/Inc", "firm
 # 与 run_tests.ps1 同配方：MinGW 没有 asan/ubsan 运行库，所以用 trap 模式（越界/溢出/除零/空指针
 # 会直接变成非法指令把进程杀掉，不会静默算出一个假值）
 # `-DHOST_PIPE_REAL_SERVO`：关掉 host_appstub.c 的假舵机，改用真 App/Bsp/servo.c
+# `-DHOST_PIPE_REAL_NVRAM`：关掉假 nvram_touch，改用真 App/Svc/nvram.c + trace_cal.c，
+# 于是 T_PARAM_SAVE 真的会写（假）Flash —— 掉电重启闭环见 test_param_save_survives_a_power_cycle
 FLAGS = ["-std=gnu11", "-O1", "-g", "-Wall", "-Wextra", "-Wno-unused-parameter",
          "-fsanitize=undefined", "-fsanitize-undefined-trap-on-error",
-         "-DHOST_PIPE_REAL_SERVO"]
+         "-DHOST_PIPE_REAL_SERVO", "-DHOST_PIPE_REAL_NVRAM"]
 
 SOURCES = ("firmware/test/pipe_hostlink.c", "firmware/App/Svc/host_link.c",
            "firmware/App/Svc/host_ext.c", "firmware/App/Bsp/servo.c",
+           "firmware/App/Svc/nvram.c", "firmware/App/Svc/trace_cal.c",
            "firmware/test/stub/host_appstub.c", "firmware/test/stub/host_pipestub.c",
            "firmware/test/stub/host_hal.c", "firmware/test/stub/host_board.c",
            "firmware/test/stub/host_rtt.c")
@@ -54,8 +57,8 @@ def _repo(*parts: str) -> str:
 
 
 @pytest.fixture(scope="module")
-def pipe(tmp_path_factory):
-    """编一次，返回 `run(*chunks, pad=64) -> list[Frame]`。"""
+def pipe_exe(tmp_path_factory):
+    """编一次，返回可执行文件路径（要自己带命令行参数跑就直接用它）。"""
     if not (os.path.isfile(GCC) or shutil.which(GCC)):
         pytest.skip(f"没有 gcc，跳过真固件对拍（可用 PIPE_GCC 指定）：{GCC}")
 
@@ -68,21 +71,30 @@ def pipe(tmp_path_factory):
     assert cp.returncode == 0, ("固件管道程序编译失败：\n"
                                 + cp.stdout.decode("utf-8", "replace")
                                 + cp.stderr.decode("utf-8", "replace"))
+    return exe
 
+
+def _run_exe(exe, chunks, pad: int = 64, args=()):
+    """喂 `chunks` + pad 个 0x00 静默字节，解回帧列表。"""
+    # pad 个 0x00 是"没帧的静默时间"：1 字节 = 4 拍 × 5ms = 20ms 假时钟
+    raw = b"".join(chunks) + b"\x00" * pad
+    p = subprocess.run([exe] + list(args), input=raw, capture_output=True, timeout=180)
+    assert p.returncode == 0, ("管道程序异常退出 %d（trap 模式：多半是真源码里踩了 UB）：%s"
+                               % (p.returncode, p.stderr.decode("utf-8", "replace")))
+    err = p.stderr.decode("utf-8", "replace").strip()
+    assert err == "", f"管道程序不该往 stderr 写东西：{err}"
+    dec = pr.FrameDecoder()
+    frames = dec.feed(p.stdout)
+    assert dec.crc_errors == 0 and dec.resyncs == 0, \
+        f"真固件发的字节流有坏 CRC/重同步：crc_errors={dec.crc_errors} resyncs={dec.resyncs}"
+    return frames
+
+
+@pytest.fixture(scope="module")
+def pipe(pipe_exe):
+    """返回 `run(*chunks, pad=64) -> list[Frame]`（不带命令行参数）。"""
     def run(*chunks: bytes, pad: int = 64):
-        # pad 个 0x00 是"没帧的静默时间"：1 字节 = 4 拍 × 5ms = 20ms 假时钟
-        raw = b"".join(chunks) + b"\x00" * pad
-        p = subprocess.run([exe], input=raw, capture_output=True, timeout=180)
-        assert p.returncode == 0, ("管道程序异常退出 %d（trap 模式：多半是真源码里踩了 UB）：%s"
-                                   % (p.returncode, p.stderr.decode("utf-8", "replace")))
-        err = p.stderr.decode("utf-8", "replace").strip()
-        assert err == "", f"管道程序不该往 stderr 写东西：{err}"
-        dec = pr.FrameDecoder()
-        frames = dec.feed(p.stdout)
-        assert dec.crc_errors == 0 and dec.resyncs == 0, \
-            f"真固件发的字节流有坏 CRC/重同步：crc_errors={dec.crc_errors} resyncs={dec.resyncs}"
-        return frames
-
+        return _run_exe(pipe_exe, chunks, pad=pad)
     return run
 
 
@@ -252,3 +264,73 @@ def test_save_requests_are_acked(pipe):
     frames = pipe(pr.frame_action_save(12), pr.frame_param_save(13))
     status = {f.seq: pr.decode_ack(f.payload)["status"] for f in frames if f.type == pr.T_ACK}
     assert status.get(12) == pr.ST_OK and status.get(13) == pr.ST_OK, status
+
+
+def test_param_save_survives_a_power_cycle(pipe_exe, tmp_path):
+    """上位机点「固化」→ 真 nvram 落盘 → 断电重启后参数还是新值（协议层闭环）。
+
+    管道构建链了真 `App/Svc/nvram.c`（`-DHOST_PIPE_REAL_NVRAM`），所以 T_PARAM_SAVE 走的是
+    真路径：`host_ext.c:226 nvram_touch()` → `nvram_poll/service` → 假 Flash 页 63
+    （0x0801F800）。两个进程之间**只交换页 63 的 2048 字节**（--dump-flash / --flash），
+    第二个进程的 RAM 参数表是全新的 ⇒ 还能 dump 出新值只可能是从 Flash 盖回来的。
+
+    这条和 `firmware/test/t_nvram.c`（模块级）互补：那边直接调 nvram API，这边走真协议字节。
+    """
+    flash = str(tmp_path / "page63.bin")
+    spec = P.BY_KEY["pivot_kd"]
+    saved = 321.0
+
+    # 第 1 次"开机"：改参数 + 点固化（pad=8 ⇒ 只给 160ms；够不着 1.5s 自动防抖，
+    # 所以下面的写入只可能来自"固化"这个动作本身）
+    f1 = _run_exe(pipe_exe,
+                  [pr.frame_hello_req(1),
+                   pr.frame_param_set(2, spec.id, saved),
+                   pr.frame_param_save(3)],
+                  pad=8, args=["--dump-flash", flash])
+    status = {f.seq: pr.decode_ack(f.payload)["status"] for f in f1 if f.type == pr.T_ACK}
+    assert status.get(2) == pr.ST_OK and status.get(3) == pr.ST_OK, status
+    assert os.path.isfile(flash), "固化之后没写出 Flash 镜像 ⇒ nvram 根本没落盘"
+    assert os.path.getsize(flash) == 2048
+    with open(flash, "rb") as fh:
+        blob = fh.read()
+    # 记录头：magic "HXB1"（0x31425848）+ version u16 = 5（v5 payload 才存动作角度）
+    assert blob[:4] == b"HXB1", f"Flash 里不是 nvram 记录：{blob[:8].hex()}"
+    assert int.from_bytes(blob[4:6], "little") == 5, \
+        f"nvram 记录版本不是 v5：{int.from_bytes(blob[4:6], 'little')}"
+
+    def param_dump(args):
+        frames = _run_exe(pipe_exe, [pr.frame_hello_req(1), pr.frame_param_get(2, 0xFFFF)],
+                          pad=200, args=args)
+        return {pid: val for pid, val in
+                (pr.decode_param_report(f.payload) for f in frames if f.type == pr.T_PARAM_REPORT)}
+
+    # 第 2 次"开机"：带上 Flash 镜像 ⇒ 参数表被 Flash 里的记录盖回来
+    restored = param_dump(["--flash", flash])
+    assert restored.get(spec.id) == pytest.approx(saved), (
+        f"掉电重启后 {spec.key}(0x{spec.id:04X}) 不是固化过的 {saved}，"
+        f"而是 {restored.get(spec.id)}（Flash 里的记录没生效）")
+
+    # 对照组：不带镜像开机 ⇒ 回到出厂默认（证明上面那个值确实来自那个 Flash 文件）
+    fresh = param_dump([])
+    assert fresh.get(spec.id) == pytest.approx(spec.default), \
+        f"空白 Flash 开机应该是出厂默认 {spec.default}，实际 {fresh.get(spec.id)}"
+
+
+def test_param_change_alone_does_not_touch_flash(pipe_exe, tmp_path):
+    """只改参数、没点固化、也还没到 1.5s 自动防抖 ⇒ Flash 一个字节都不许动。
+
+    上一条的对照组：写进 Flash 的是"固化"这个动作，而不是"跑够时间自己就写了"。
+    防抖窗口见 `firmware/App/Svc/nvram.c` 的 `NVRAM_SAVE_DELAY_MS 1500`；这里静默
+    800ms（pad=40）就 EOF，管道程序的收尾也只把**已排队**的固化跑完。
+    """
+    flash = str(tmp_path / "untouched.bin")
+    spec = P.BY_KEY["pivot_kd"]
+
+    frames = _run_exe(pipe_exe, [pr.frame_param_set(2, spec.id, 321.0)],
+                      pad=40, args=["--dump-flash", flash])
+    status = {f.seq: pr.decode_ack(f.payload)["status"] for f in frames if f.type == pr.T_ACK}
+    assert status.get(2) == pr.ST_OK, status
+
+    with open(flash, "rb") as fh:
+        blob = fh.read()
+    assert blob == b"\xFF" * 2048, "没点固化（也没到 1.5s 防抖）时 Flash 记录页被动了"

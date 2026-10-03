@@ -155,11 +155,19 @@ float Servo_GetAngle(int x) { return (x >= 1 && x <= 2) ? stub_servo_angle[x] : 
 #endif /* !HOST_PIPE_REAL_SERVO */
 
 /* ---- nvram ---- */
+/* 带 `-DHOST_PIPE_REAL_NVRAM` 时改用真 App/Svc/nvram.c（管道对拍要验"固化→掉电→重启"），
+ * 这两个假桩必须让位，否则符号冲突。`stub_nvram_touch/stub_nvram_state` 观测变量保持无条件
+ * （t_hostext.c 读它们）。 */
+#ifndef HOST_PIPE_REAL_NVRAM
 void    nvram_touch(void) { stub_nvram_touch++; }
 uint8_t nvram_state(void) { return stub_nvram_state; }
+#endif /* !HOST_PIPE_REAL_NVRAM */
 
 /* ---- trace_cal / PID_tracing ---- */
+/* trace_cal_level() 真 trace_cal.c 里也有（`-DHOST_PIPE_REAL_NVRAM` 会链它）⇒ 同样要让位 */
+#ifndef HOST_PIPE_REAL_NVRAM
 uint8_t trace_cal_level(uint8_t idx) { return (uint8_t)(idx * 10u + 5u); }
+#endif
 float   PID_Tracing_TracePos(void) { return 4.25f; }
 float   PID_Tracing_PidOutput(void) { return -123.0f; }
 uint8_t tracing_cross(void) { return 1u; }
