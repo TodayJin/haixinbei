@@ -350,15 +350,24 @@ class ConsoleStore {
   }
 
   // ---- 参数 ----
-  /** 本地改一个参数（id 或 key 都收；只改内存，点「下发」才到车） */
+  /** 本地改一个参数（id 或 key 都收）：先本地立刻生效，再把值同步进桥的缓存。
+   *  桥不会自动下发 —— 点「全部下发」才把脏的那批 push 到车（契约 §2）。 */
   setParam(idOrKey: number | string, value: number): void {
     const p = this.snap.params
     if (!p) return
+    const hit = p.items.find((it) =>
+      typeof idOrKey === 'number' ? it.id === idOrKey : it.key === idOrKey,
+    )
+    if (!hit) return
     const items = p.items.map((it) =>
-      (typeof idOrKey === 'number' ? it.id === idOrKey : it.key === idOrKey) ? { ...it, value } : it,
+      it === hit ? { ...it, value, dirty: value !== it.default } : it,
     )
     this.snap = { ...this.snap, params: { ...p, items } }
     this.emit()
+    // 脏标记的权威在桥那边（脏 = 与车上值不同）；桥改完会走 SSE `params` 回灌
+    void api.paramSet(hit.key, value).catch((e) => {
+      this.toast('err', `参数没同步进桥：${(e as Error).message}`)
+    })
   }
 
   async pushParams(keys?: string[]): Promise<void> {

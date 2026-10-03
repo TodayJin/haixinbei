@@ -288,12 +288,11 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._json(con.param_set(body.get("id", body.get("key")), body.get("value")))
         elif path == "/api/params/push":
-            self._json(con.param_push())
+            self._json(con.param_push(ids=body.get("ids"), keys=body.get("keys")))
         elif path == "/api/params/reload":
             self._json(con.param_reload())
         elif path == "/api/params/defaults":
-            push = str(body.get("push", "1")) not in ("0", "false", "False", "no")
-            self._json(con.param_defaults(push=push))
+            self._json(con.param_defaults(ids=body.get("ids"), keys=body.get("keys")))
         elif path == "/api/params/save":
             self._json(con.param_save())
         elif path == "/api/actions/set":
@@ -336,7 +335,8 @@ class Handler(BaseHTTPRequestHandler):
             values = body.get("values")
             if values is None:
                 values = self._collect_preset(kind, targets)
-            keys = body.get("keys") or targets
+            # keys = 这份预设到底装了哪几类（前端列表要显示）——抓当前时按实际抓到的算
+            keys = body.get("keys") or targets or sorted((values or {}).keys())
             self._json({"ok": True, "preset": con.preset_save(name, kind, keys,
                                                               body.get("note", ""), values)})
         elif path == "/api/presets/apply":

@@ -12,6 +12,9 @@ firmware/test/build/
 # 台架/上位机临时输出（日志、CSV、图片、抓屏）
 out/
 
+# 上位机运行期数据（桥的日志/录制/预设，本地生成、每跑一次就变）
+tools/console/data/
+
 # Python
 **/__pycache__/
 *.py[cod]

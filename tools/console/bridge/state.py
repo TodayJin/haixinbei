@@ -573,10 +573,16 @@ class Console:
             return kind in (t, "mixed")
 
         if pick("params"):
+            pkeys = []
             for k, v in vals.get("params", {}).items():
-                r = self.param_set(k, v)
+                r = self.param_set(k, v)              # 先只改桥这边缓存
                 res["results"].append(r)
-                res["sent"] += 1 if r.get("ok") else 0
+                if r.get("ok"):
+                    pkeys.append(k)
+            if pkeys:                                 # 再一起下发到车
+                r = self.param_push(keys=pkeys)
+                res["results"].append(r)
+                res["sent"] += int(r.get("sent") or 0)
         if pick("actions"):
             for n, a in vals.get("actions", {}).items():
                 r = self.action_set(int(n), a[0], a[1])
@@ -593,24 +599,75 @@ class Console:
         return res
 
     # ------------------------------------------------------------------ 业务动作
+    def _car_value(self, sp) -> float:
+        """车上的当前值；还没握手/reload 过就用出厂默认。`dirty`= 本机值 ≠ 它。"""
+        return self.car_values.get(sp.id, sp.default)
+
+    def _want_params(self, ids=None, keys=None, only_dirty=True) -> list:
+        """挑出要动的参数：给了 ids/keys 就按它，否则 only_dirty 决定是否只挑脏的。"""
+        sel = set()
+        for x in (ids or []):
+            sp = P.by_id_or_key(x)
+            if sp is not None:
+                sel.add(sp.id)
+        for x in (keys or []):
+            sp = P.by_id_or_key(x)
+            if sp is not None:
+                sel.add(sp.id)
+        given = ids is not None or keys is not None
+        out = []
+        with self.lock:
+            for it in self.params:
+                sp = P.BY_ID.get(it["id"])
+                if sp is None:
+                    continue
+                if given:
+                    if sp.id in sel:
+                        out.append((sp, it["value"]))
+                elif (not only_dirty) or it["dirty"]:
+                    out.append((sp, it["value"]))
+        return out
+
     def param_set(self, id_or_key, value) -> dict:
+        """只改桥这边缓存（契约 §2：不自动下发），`push` 才到车。"""
         sp = P.by_id_or_key(id_or_key)
         if sp is None:
             return {"ok": False, "error": f"没有这个参数：{id_or_key}"}
         v = P.clamp(sp, float(value))
-        r = self.send_wait(pr.T_PARAM_SET, pr.pack_u16(sp.id) + pr.pack_f32(v),
-                           want=(pr.T_ACK, pr.T_PARAM_REPORT))
-        r["id"] = sp.id
-        r["key"] = sp.key
-        r["value"] = v
-        if r.get("answered"):
-            with self.lock:
-                self._set_car_value(sp.id, v)
-            self.emit({"n": "params", "src": self.params_payload()})
-        return r
+        with self.lock:
+            it = next((i for i in self.params if i["id"] == sp.id), None)
+            if it is None:
+                return {"ok": False, "error": f"参数表里没有 {sp.key}"}
+            it["value"] = v
+            it["dirty"] = bool(v != self._car_value(sp))
+            dirty = it["dirty"]
+        self.emit({"n": "params", "src": self.params_payload()})
+        return {"ok": True, "id": sp.id, "key": sp.key, "value": v,
+                "dirty": dirty, "pushed": False}
 
-    def param_push(self) -> dict:
-        """读回车上全部参数（0xFFFF dump：车每拍发 4 帧，所以要等一会儿）。"""
+    def param_push(self, ids=None, keys=None) -> dict:
+        """把本机缓存里的值逐条下发到车（不给 ids/keys 就下发所有脏的）。"""
+        want = self._want_params(ids, keys)
+        results, sent = [], 0
+        for sp, v in want:
+            r = self.send_wait(pr.T_PARAM_SET, pr.pack_u16(sp.id) + pr.pack_f32(v),
+                               want=(pr.T_ACK, pr.T_PARAM_REPORT))
+            ok = bool(r.get("ok") and r.get("answered"))
+            if ok:
+                with self.lock:
+                    self._set_car_value(sp.id, v)
+                sent += 1
+            results.append({"id": sp.id, "key": sp.key, "value": v, "ok": ok,
+                            "status": r.get("status"), "status_name": r.get("status_name")})
+        with self.lock:
+            left = [i["key"] for i in self.params if i["dirty"]]
+        self.emit({"n": "params", "src": self.params_payload()})
+        self.log("info", f"下发参数：{sent}/{len(want)} 条到车，还脏 {len(left)} 条")
+        return {"ok": sent == len(want), "sent": sent, "of": len(want),
+                "dirty_left": left, "results": results}
+
+    def param_reload(self) -> dict:
+        """从车读回全表（0xFFFF dump：车每拍发 4 帧，所以要等一会儿）。"""
         n0 = len(self.car_values)
         seq = self.send(pr.T_PARAM_GET, pr.pack_u16(0xFFFF))
         deadline = time.time() + 1.2
@@ -624,30 +681,23 @@ class Console:
         with self.lock:
             items = [dict(it) for it in self.params]
         self.emit({"n": "params", "src": self.params_payload()})
-        return {"ok": True, "seq": seq, "read": got, "of": len(P.PARAMS),
-                "before": n0, "params": items}
+        self.log("info", f"从车读回参数：{got}/{len(P.PARAMS)}（读回前有 {n0} 条）")
+        return {"ok": True, "seq": seq, "read": got, "of": len(P.PARAMS), "params": items}
 
-    def param_reload(self) -> dict:
-        r = self.param_push()
-        self.log("info", f"从车读回参数：{r['read']}/{r['of']}")
-        return r
-
-    def param_defaults(self, push: bool = True) -> dict:
-        """恢复出厂默认（`push=1` 时逐项下发到车）。"""
-        out = []
-        for sp in P.PARAMS:
-            if push:
-                out.append(self.param_set(sp.id, sp.default))
-            else:
-                with self.lock:
-                    for it in self.params:
-                        if it["id"] == sp.id:
-                            it["value"] = sp.default
-                            it["dirty"] = True
-        ok = all(o.get("ok") for o in out) if out else True
-        self.log("info", f"恢复出厂默认（{'已下发' if push else '仅本机表'}）："
-                         f"{'全部成功' if ok else '有失败'}")
-        return {"ok": ok, "count": len(P.PARAMS), "pushed": push, "results": out}
+    def param_defaults(self, ids=None, keys=None) -> dict:
+        """恢复出厂默认：只改本机表 + 标脏，等 `push` 下发（契约 §2）。"""
+        want = self._want_params(ids, keys, only_dirty=False)
+        with self.lock:
+            for sp, _ in want:
+                it = next((i for i in self.params if i["id"] == sp.id), None)
+                if it is None:
+                    continue
+                it["value"] = P.clamp(sp, sp.default)
+                it["dirty"] = bool(it["value"] != self._car_value(sp))
+        self.emit({"n": "params", "src": self.params_payload()})
+        self.log("info", f"恢复出厂默认（仅本机表）：{len(want)} 项，等下发")
+        return {"ok": True, "count": len(want), "pushed": False,
+                "keys": [sp.key for sp, _ in want]}
 
     def param_save(self) -> dict:
         r = self.send_wait(pr.T_PARAM_SAVE, b"", want=(pr.T_ACK, pr.T_TEXT))

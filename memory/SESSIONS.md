@@ -14,6 +14,14 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：删掉旧 Qt 上位机并整仓清理：`tools/host/`（git 跟踪 28 文件、约 8256 行）已从 git 与磁盘删除（从提交 `5051a4d` 可取回），连只服务于它的草稿脚本 `tools/_patch3.py`、`tools/_render_field.py` 一起删；`.gitignore` 补 `firmware/test/build/`（run_tests.ps1 生成的 .exe）与 `.pytest_cache/`，并把已跟踪的 10 个 .exe 从索引移除。三个新提交：`dbda415` 固件 v2 扩展、`cf237eb` 新上位机 tools/console（67 文件）、`daef5ca` 清理；工作树干净。文档指向已改对（`docs/上位机通信协议.md`、`docs/全地形机器人比赛规则与场地.md:137`、`固件接口规格.md:422`）。回归：`pwsh -File firmware/test/run_tests.ps1` → 通过 10 / 失败 0 / 编译失败 0。
+下一步：`memory/PROJECT.md` 的「怎么跑和怎么测」还写着“当前 9 个测试”（实为 10，新增 t_hostext）与「现状」里旧的 text 111012/data 368/bss 15264、烧录 111388 字节（现为 114732/364/15656、115104 字节），下次顺手订正。
+
+## 2026-10-03
+完成：把「真车串口收不到数据」定性到底：**J-Link 的标准 20 脚排线里根本没有 UART 线**，所以 `COM26 = JLink CDC UART Port` 与板子 U12 的 5/6 脚（LPUART1_RX=PC0 / LPUART1_TX=PC1）之间不存在电气通路 —— 依据是 SEGGER 官方接口文档（SWD 模式 pin 17 = Not used/NC、pin 19 = 5V-Supply、偶数脚全 GND；https://www.segger.com/products/debug-probes/j-link/technology/interface-description/）。固件侧无病：SWD 读到 `s_stats @0x20000CBC` rx=0/tx 以~50Hz 增长/crc=resync=0、LPUART1 CR1=0x2D（UE/RE/TE/RXNEIE）、BRR=0x5C3B2（=170MHz/115200）、PC0/PC1 = AF8+上拉、PC1 的 IDR 在翻转；清掉 ISR(ICR=0x1F) 后静置 1.5s、再让 PC 从 COM26 发 3 帧 HELLO_REQ，IDLE 不再回来且 rx/crc/resync 恒 0 ⇒ PC0 从未收到过字节。本机 J-Link 是 PLUS V9.70 / FW V9（S/N 602711039、VTref=3.309V，SWD 确实通）。
+下一步：接真车串口只有两条路：把无线下载器插回 U12（它同时带 SWD+虚拟串口），或用 USB-TTL 交叉接 U12 的 4=GND / 5=PC0 / 6=PC1（适配器 TX→PC0、RX→PC1）。插好后 `python out/_linkprobe.py <新COM口> 115200 3` 复验（车侧 rx_frames 应 +3），再 `python -m bridge.main --serial <新COM口>`。
+
+## 2026-10-03
 完成：查清「上位机串口收不到数据」的原因，并证明固件侧无辜。SWD 读寄存器：LPUART1 CR1=0x0000002D（UE/RE/TE/RXNEIE 全 1）、BRR=0x0005C3B2（=170MHz/115200，误差 6e-7）、GPIOC PC0/PC1 MODER=AF、PUPDR=上拉、AFRL=0x88（AF8）、s_stats 的 tx_frames 以 ~50Hz 增长且 PC1 的 IDR 在 0/1 间跳（真的在发）；反向证据：清掉 LPUART1 ISR(ICR=0x1F) 后静置 1.5s、再让 PC 从 COM26 发 3 帧 HELLO_REQ，IDLE 位不再回来且 rx_frames/crc_errors/resyncs 恒为 0 ⇒ PC0 上从来没有过一个字节。PC 侧 COM26 = JLink CDC UART Port（VID:PID 1366:0105），写出去的帧自己也收不到。工具（可复用）：out/_linkstats.ps1（-Mode read|probe|idle，靠 arm-none-eabi-nm 解析 s_stats 地址后 mem32 读数）与 out/_linkprobe.py（用 tools/console 的 bridge.protocol.frame_hello_req 发帧、先静听 0.5s 再发再收 1s）。
 下一步：把无线下载器插到 U12（或 USB-TTL 接脚 5/6/4）后，用 out/_linkprobe.py <新COM口> 115200 3 复验（车侧 rx_frames 应 +N），再 python -m bridge.main --serial <新COM口> 跑真机。
 

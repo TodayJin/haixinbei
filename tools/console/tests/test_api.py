@@ -73,27 +73,60 @@ def test_params_contract_fields(live):
 
 def test_param_set_push_reload_defaults(live):
     base, _, con = live
+    # 1) set 只改桥这边的缓存，不自动下发（契约 §2：点了「下发」才到车）
     code, j, _ = POST(base + "/api/params/set", {"key": "pivot_kp", "value": 1200})
-    assert code == 200 and j["ok"] is True and j["answered"] is True
-    code, j, _ = POST(base + "/api/params/set", {"id": 0x0207, "value": 20000})
-    assert j["ok"] is True
+    assert code == 200 and j["ok"] is True and j["pushed"] is False
+    item = next(i for i in GET(base + "/api/params")[1]["items"] if i["key"] == "pivot_kp")
+    assert item["value"] == pytest.approx(1200.0)
+    assert item["dirty"] is True, "改了还没下发就是脏"
+
+    code, j, _ = POST(base + "/api/params/set", {"id": 0x0207, "value": 1200})
+    assert j["ok"] is True, "id 形式和 key 形式都要收"
     code, j, _ = POST(base + "/api/params/set", {"key": "pivot_kp", "value": 99999})
     assert j["ok"] is False, "越界必须被桥挡住"
     code, j, _ = POST(base + "/api/params/set", {"key": "没有这个键", "value": 1})
     assert j["ok"] is False
 
+    # 2) push 才真的到车；车一认下来就不脏了
     code, j, _ = POST(base + "/api/params/push", {})
-    assert code == 200 and j["ok"] is True and j["read"] >= 1
-    code, j, _ = POST(base + "/api/params/reload", {})
-    assert j["ok"] is True
+    assert code == 200 and j["ok"] is True and j["sent"] == j["of"] >= 1
     item = next(i for i in GET(base + "/api/params")[1]["items"] if i["key"] == "pivot_kp")
-    assert item["value"] == pytest.approx(20000.0), "reload 之后要回到车上的值"
+    assert item["value"] == pytest.approx(1200.0) and item["dirty"] is False
+
+    # 3) defaults 只改本机表并标脏（等 push）；reload 从车读回 = 刚才下发的值
+    code, j, _ = POST(base + "/api/params/defaults", {"keys": ["pivot_kp"]})
+    assert j["ok"] is True and j["pushed"] is False and j["keys"] == ["pivot_kp"]
+    item = next(i for i in GET(base + "/api/params")[1]["items"] if i["key"] == "pivot_kp")
+    assert item["value"] == pytest.approx(item["default"]) and item["dirty"] is True
+
+    code, j, _ = POST(base + "/api/params/reload", {})
+    assert j["ok"] is True and j["read"] >= 1
+    item = next(i for i in GET(base + "/api/params")[1]["items"] if i["key"] == "pivot_kp")
+    assert item["value"] == pytest.approx(1200.0), "reload 之后要回到车上的值"
     assert item["dirty"] is False
 
-    code, j, _ = POST(base + "/api/params/defaults", {})
-    assert j["ok"] is True
     code, j, _ = POST(base + "/api/params/save", {})
     assert j["ok"] is True
+
+
+def test_preset_apply_reaches_the_car(live):
+    """预设里的参数必须真的下发到车（不是只改桥这边的表）。"""
+    base, _, _ = live
+    POST(base + "/api/params/set", {"key": "pivot_kd", "value": 111})
+    code, j, _ = POST(base + "/api/params/push", {"keys": ["pivot_kd"]})
+    assert j["ok"] is True and j["sent"] == 1
+    code, j, _ = POST(base + "/api/presets", {"name": "__t_preset__", "kind": "params"})
+    assert j["ok"] is True
+    POST(base + "/api/params/set", {"key": "pivot_kd", "value": 222})
+    POST(base + "/api/params/push", {"keys": ["pivot_kd"]})
+    code, j, _ = POST(base + "/api/presets/apply",
+                      {"name": "__t_preset__", "targets": ["params"]})
+    assert code == 200 and j["ok"] is True and j["sent"] >= 1
+    code, j, _ = POST(base + "/api/params/reload", {})
+    item = next(i for i in GET(base + "/api/params")[1]["items"] if i["key"] == "pivot_kd")
+    assert item["value"] == pytest.approx(111.0), "应用预设后车上应该是预设里的值"
+    assert item["dirty"] is False
+    assert DELETE(base + "/api/presets?name=__t_preset__")[1]["ok"] is True
 
 
 def test_actions_endpoints(live):
@@ -186,6 +219,13 @@ def test_presets_roundtrip(live):
     assert code == 200 and j["ok"] is True
     names = [p["name"] for p in GET(base + "/api/presets")[1]["items"]]
     assert "测试预设" in names
+    # 不带 targets（前端「保存当前」）：keys 要写出这份预设装了哪几类，否则列表显示不全
+    code, j, _ = POST(base + "/api/presets", {"name": "全部预设", "note": "pytest"})
+    assert code == 200 and j["ok"] is True
+    full = next(p for p in GET(base + "/api/presets")[1]["items"] if p["name"] == "全部预设")
+    assert set(full["keys"]) == {"params", "actions", "servo"}, full["keys"]
+    assert http_get(base + "/api/presets?name=" + urllib.parse.quote("全部预设"),
+                    method="DELETE")[1]["ok"] is True
     assert POST(base + "/api/presets", {"name": ""})[1]["ok"] is False
     code, j, _ = POST(base + "/api/presets/apply", {"name": "测试预设"})
     assert code == 200, j
@@ -261,6 +301,10 @@ def GET(url: str):
 
 def POST(url: str, body: dict):
     return http_get(url, method="POST", body=body)
+
+
+def DELETE(url: str):
+    return http_get(url, method="DELETE")
 
 
 def http_get(url: str, method: str = "GET", body: dict | None = None):

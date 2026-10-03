@@ -47,13 +47,12 @@
 
 - `固件接口规格.md` — **硬件接口权威文档**（引脚/外设/寄存器/坑清单）。
 - `docs/全地形机器人比赛规则与场地.md` — **赛项规则摘要 + 场地图 + 11 个障碍尺寸 + 对机械/固件的硬约束**（原文 PDF 在 `docs/`）。地图只在这份文档里，**上位机没有任何地图/赛道仿真**。
-- `firmware/` — **固件工程（双目标）**：`Core/`(G474)、`App/`(`Svc/` = renwu/tracing/gyro/pid/**host_link**；`Bsp/`；`Src/app_ui.c`；`Fonts/`)、`Middlewares/`。
+- `firmware/` — **固件工程（双目标）**：`Core/`(G474)、`App/`(`Svc/` = renwu/tracing/gyro/pid/**host_link**/**host_ext**；`Bsp/`；`Src/app_ui.c`；`Fonts/`)、`Middlewares/`。
   - **上位机链路已实现并编译通过**：`App/Svc/host_link.c` + `board.c` 的 LPUART1（PC0=RX/PC1=TX，**AF8** 查手册确认）+ 512B 环形缓冲 + `LPUART1_IRQHandler`，主循环 `host_link_poll()`。
   - **未做**：参数写 Flash（回未就绪）、编码器测速（遥测 v_l/v_r 恒 0）、陀螺在线标志、以及**把 `pid.c`/`gyro_control.c` 的 `#define` 换成 `host_param_get()` —— 在这之前改参数不影响控制律**。验证步骤见协议文档 §10。
-- `tools/host/` — **上位机 = 调参台**（Python3 + PySide6，101 用例自测）：`run_host.bat` 双击启动。
-  - **看波形**（每通道独立量程）、**看/改参数并下发**（23 项，双击即下发，预设）、**实时图形**（灰度条/表盘/轮速条/**参数总览条形图**）。
-  - 调参工作流：**存基线对比**（改前虚线/改后实线）、**鼠标游标读数**、**量化指标**（峰峰/均值/标准差/过零，`metrics.py`）、**参数 diff 高亮**、会话记忆 `config.json`。
-  - 模式：**演示数据**（`simulator.py` 只是信号发生器）/ 串口 / CSV 回放；`--ui tk` 备胎。
+- `tools/console/` — **上位机（新，唯一的一套；旧 Qt 上位机 `tools/host/` 已于 2026-10-03 删除，需要时从 git 提交 `5051a4d` 取回）**：
+  - `bridge/` = 纯标准库 HTTP/SSE 桥（`protocol.py` 编解码、`params.py` 参数镜像 43 项、`state.py` 链路状态、`sim.py` 仿真车、`server.py` 路由、`link.py` 串口、`main.py` 入口）；`web/` = React+TS+Vite+Tailwind+uPlot 前端（`web/dist/` 是构建产物，**要进版本库**）；`docs/API.md` = HTTP/SSE 契约（SSE 的 `data` 就是载荷本体）；`tests/` = 47 项 pytest。
+  - 跑：`python -m bridge.main --sim`（无硬件）/ `--serial COM<n>`（真车）；前端改动后 `npm run build`（在 `web/` 下）。
 - `docs/上位机通信协议.md` — 通信协议（帧/CRC16/32B 遥测/参数表/**§8.1 固件实现状态**/**§10 硬件验证步骤**）。位姿帧 T_POSE 已随地图删除。
 - `docs/控制算法升级方案.md` — 分段惯性导航 + 状态机改造方案（P0→P3）。
 - `.agents/skills/`；`pcb/`；`docs/datasheets/`；`tools/`；`out/`(可删产物)
