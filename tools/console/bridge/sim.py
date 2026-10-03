@@ -26,6 +26,24 @@ ACTION_DEFAULT = [(0, 0), (60, 120), (105, 120), (135, 150), (80, 170), (100, 12
                   (40, 10), (100, 80), (115, 120), (85, 120), (40, 0), (90, 60), (30, 60)]
 COMPOUND = {5: "135/170 →0.4s→ 90 →0.1s→ 80", 9: "70/10 →0.2s→ 100/50 →0.1s→ 100/80"}
 
+# ---- 角度环（MOTION_GYRO）仿真常数 ----------------------------------------
+# 原来的仿真只把航向按左右轮差速**开环**积分，从没把 yaw 拉向 yaw_ref：驾驶模式
+# base_turn 的目标航向（固件里 b = 角度 °）在仿真里根本看不见动作，朝向类指令
+# 只能测到协议通不通。这里补一个和真车同结构的 P 环：误差 → 期望角速度 → 左右轮差速。
+SIM_TICK_MS = 5.0            # 物理步长的标定基准（LinkRunner 默认 5ms 一拍）
+ANGLE_KP_RATE = 1.5          # °/s per °（角度环 P）
+ANGLE_RATE_MAX = 120.0       # 期望角速度限幅 °/s
+ANGLE_RATE_DEAD = 0.6        # 死区：误差小于这个就不再差速，免得在原地抖
+ANGLE_DV_PER_RATE = 13.4     # 左右轮差速 mm/s per (°/s)（由 yaw 积分常数反推）
+
+
+def norm180(deg: float) -> float:
+    """把角度收进 (-180, 180]：与固件 NormalizeAngle 同意图（角度环误差要走近路）。"""
+    d = math.fmod(deg + 180.0, 360.0)
+    if d <= 0.0:
+        d += 360.0
+    return d - 180.0
+
 
 def servo_deg_to_us(deg: float) -> int:
     """与固件 Servo_SetAngleDev 一致：500µs + 2000µs*angle/180。"""
@@ -58,6 +76,9 @@ class SimCar:
         self.pwm_r = 0.0
         self.yaw = -64.7
         self.yaw_ref = -64.7
+        self.yaw_base = -64.7                 # base 模式锁存的基准航向（= 固件 s_base_yaw）
+        self.base_speed = 0.0                 # base_turn 的基准速度（角度环里做直行分量）
+        self.last_phys_ms = 0
         self.pitch = 5.8
         self.roll = 4.7
         self.vbat = 12010
@@ -163,9 +184,28 @@ class SimCar:
         for i in (0, 1):
             self.servo_us[i] = servo_deg_to_us(self.servo_deg[i]) + int(self.deviation[i])
 
+        # 这一拍有多长（按 SIM_TICK_MS 归一，标定常数都按 5ms 写）：链路 pump 换周期
+        # 时航向/轮速的"每秒"行为不变。
+        tick = 1.0 if not self.last_phys_ms else (now_ms - self.last_phys_ms) / SIM_TICK_MS
+        tick = max(0.2, min(8.0, tick))
+        self.last_phys_ms = now_ms
+
+        # 角度环 + 速度环（MOTION_GYRO；驾驶模式 base_turn 走的就是这条）：
+        # 航向误差 → 期望角速度（P 律 + 限幅 + 死区）→ 左右轮差速目标。
+        # 少了这一段，仿真里 yaw 只是被左右轮开环积分，目标航向永远拉不回来。
+        if self.mode == 1 and self.drive_enabled:
+            err = norm180(self.yaw_ref - self.yaw)
+            if abs(err) < ANGLE_RATE_DEAD:
+                rate = 0.0
+            else:
+                rate = max(-ANGLE_RATE_MAX, min(ANGLE_RATE_MAX, err * ANGLE_KP_RATE))
+            dv = rate * ANGLE_DV_PER_RATE
+            self.vl_t = self.base_speed - dv
+            self.vr_t = self.base_speed + dv
+
         # 转向 → 航向积分；左右轮差速 → 也带一点转向
         diff = (self.pwm_r - self.pwm_l) / 7200.0
-        self.yaw += diff * 3.0 + math.sin(now_ms / 900.0) * 0.05
+        self.yaw += (diff * 3.0 + math.sin(now_ms / 900.0) * 0.05) * tick
         if self.mode == 2:                      # 循迹：虚拟线跟着重心走
             self.track += (3.5 - self.track) * 0.06 + self.rng.gauss(0, 0.02)
             self.rng.random()
@@ -345,14 +385,23 @@ class SimCar:
                 self.drive_enabled = mode != 0
                 if mode == 1:
                     self.vl_t, self.vr_t = float(a), float(b)
+                    self.base_speed = 0.0
                     self.mode = 0
                 elif mode == 2:
+                    # 与固件 HostExt_DriveSet 同口径：**只在进入 base 模式时锁存基准航向**，
+                    # 之后重复帧（桥每 200ms 的保活/新目标）只改目标偏移，不会把目标
+                    # 拖着跟车一起跑 —— 拉不住的话角度环就永远追不上。
+                    if self.mode != 1:
+                        self.yaw_base = self.yaw
+                    self.base_speed = float(a)
                     self.mode = 1
-                    self.yaw_ref = self.yaw + b
+                    self.yaw_ref = self.yaw_base + float(b)
                 elif mode == 3:
+                    self.base_speed = 0.0
                     self.mode = 3
                 else:
                     self.vl_t = self.vr_t = 0.0
+                    self.base_speed = 0.0
                     self.mode = 0
                 self._ack(f.seq, pr.ST_OK)
             self._drive_frame(f.seq)

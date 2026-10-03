@@ -1,15 +1,75 @@
 import React from 'react'
 import { store, useStore } from '../lib/store'
-import { AttitudeGauge, Badge, Card, NumberField, Stat } from '../components/ui'
+import { AttitudeGauge, Badge, Card, Slider, Stat } from '../components/ui'
 import { MiniTrend } from '../components/Trend'
-import { fmt, fmtSigned, normDeg } from '../lib/format'
+import { fmt, fmtInt, fmtSigned, normDeg } from '../lib/format'
+import { TURN_TICK_MS, norm180, offsetLabel } from '../lib/heading'
 
 export function ImuPage() {
   const { telem, link } = useStore()
   const t = telem
-  const [cmd, setCmd] = React.useState(0)
+  const [offset, setOffset] = React.useState(0)
+  const [armed, setArmed] = React.useState(false)
 
   const fwCaps = link?.fw?.caps ?? 0
+
+  // 朝向控制：滑块 → `base_turn`（基准速度 0 + 目标偏移度），车上的角度环把车头
+  // 拧到这个朝向并保持。滑动条拖很快，挡一下频率再下发（桥那边只管转发）。
+  const yawRef = React.useRef(0)
+  yawRef.current = t?.yaw ?? 0
+  const baseYawRef = React.useRef<number | null>(null)
+  const armedRef = React.useRef(false)
+  const offsetRef = React.useRef(0)
+  const lastMsRef = React.useRef(0)
+  const timerRef = React.useRef<number | null>(null)
+
+  const pushNow = () => {
+    if (!armedRef.current) {
+      // 第一次下发 = 接管那一刻：车上的 s_base_yaw 就是这时候的航向，记下来显示目标
+      armedRef.current = true
+      baseYawRef.current = yawRef.current
+      setArmed(true)
+    }
+    void store.drive({ mode: 'base_turn', base: 0, turn: Math.round(offsetRef.current) })
+  }
+
+  const onChange = (v: number) => {
+    setOffset(v)
+    offsetRef.current = v
+    const now = Date.now()
+    if (now - lastMsRef.current >= TURN_TICK_MS) {
+      lastMsRef.current = now
+      pushNow()
+    } else if (timerRef.current === null) {
+      // 拖动的尾巴补一次，别丢掉最后一个值
+      timerRef.current = window.setTimeout(() => {
+        timerRef.current = null
+        lastMsRef.current = Date.now()
+        pushNow()
+      }, TURN_TICK_MS)
+    }
+  }
+
+  const release = () => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+    if (!armedRef.current) return
+    armedRef.current = false
+    baseYawRef.current = null
+    setArmed(false)
+    void store.drive({ mode: 'off' })
+  }
+
+  // 离开页面就把驾驶交还车上（不然切页之后车头还在被角度环按着）
+  React.useEffect(() => () => {
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current)
+    if (armedRef.current) void store.drive({ mode: 'off' })
+  }, [])
+
+  const baseYaw = baseYawRef.current
+  const target = baseYaw === null ? null : norm180(baseYaw + offset)
 
   return (
     <div className="grid gap-3 xl:grid-cols-[420px_minmax(0,1fr)]">
@@ -42,6 +102,51 @@ export function ImuPage() {
       </Card>
 
       <div className="grid gap-3">
+        <Card
+          title="朝向控制"
+          right={<Badge tone={armed ? 'mint' : 'slate'}>{armed ? '角度环接管中' : '未接管'}</Badge>}
+        >
+          <div className="flex items-baseline justify-between text-[13px]">
+            <span className="text-slate-300">目标航向偏移（+ = 左转 = 偏航角增大）</span>
+            <span className="num text-slate-400">
+              {fmtInt(offset)}° {offset !== 0 && <span className="text-slate-500">（{offsetLabel(offset)}）</span>}
+            </span>
+          </div>
+          <div className="mt-1">
+            <Slider value={offset} min={-180} max={180} step={1} onChange={onChange} />
+          </div>
+          <div className="mt-1 flex justify-between text-[11px] text-slate-500">
+            <span>−180° 右转到底</span>
+            <span>0° 基准朝向</span>
+            <span>+180° 左转到底</span>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
+            <Stat
+              label="基准朝向"
+              value={baseYaw === null ? '--' : fmt(baseYaw, 1)}
+              unit="°"
+              hint="第一次拖动那一刻的航向"
+            />
+            <Stat label="目标朝向" value={target === null ? '--' : fmt(target, 1)} unit="°" tone="cyan" hint="基准 + 偏移" />
+            <Stat label="当前朝向" value={fmt(t?.yaw, 1)} unit="°" tone="mint" />
+            <Stat label="角度环误差" value={fmtSigned(t?.angle.err, 2)} unit="°" tone="violet" hint="目标 − 当前" />
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button className="btn-ghost" onClick={() => onChange(0)}>
+              回到 0°
+            </button>
+            <button className="btn-ghost" onClick={release} disabled={!armed}>
+              交还车上任务
+            </button>
+            <span className="text-[12px] text-slate-500">
+              滑块值就是<span className="text-slate-300">下发的目标转角（度）</span>：车上的角度环 + 速度环把车头拧过去并保持；
+              基准速度给 0 = 原地转。松开滑块继续保持这个朝向，改值就是换目标。
+            </span>
+          </div>
+        </Card>
+
         <Card title="角度环内部量">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <Stat label="目标角" value={fmt(normDeg(t?.angle.err ?? 0) + (t?.yaw ?? 0), 1)} unit="°" hint="= 当前 + 误差" />
@@ -65,37 +170,15 @@ export function ImuPage() {
           </div>
         </Card>
 
-        <Card title="陀螺操作">
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <div className="mb-1 text-[12px] text-slate-400">转角命令（度，正=左转）</div>
-              <NumberField value={cmd} onChange={setCmd} min={-360} max={360} step={5} unit="°" />
-            </div>
-            <button
-              className="btn"
-              onClick={() => void store.cmd('gyro_turn', cmd)}
-              title={(fwCaps & 0x1) === 0 ? '固件没声明支持也不影响试：桥会照发' : undefined}
-            >
-              转这个角度
-            </button>
-            <button className="btn-ghost" onClick={() => void store.cmd('gyro_zero')}>
-              当前角作为 0°
-            </button>
-            <button className="btn-ghost" onClick={() => void store.cmd('gyro_cal')}>
-              陀螺校准
-            </button>
-            <span className="text-[12px] text-slate-500">
-              固件能力位 0x{fwCaps.toString(16)}（bit0 遥测2 / bit1 动作表 / bit2 舵机 / bit3 驾驶 / bit4 标定 / bit5 Flash / bit6 看门狗）
-            </span>
-          </div>
-        </Card>
-
         <Card title="温度/状态（如果有）">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <Stat label="遥测帧率" value={fmt(link?.telem_hz, 1)} unit="Hz" />
             <Stat label="主循环" value={fmt(t?.loop_us, 0)} unit="µs" />
             <Stat label="状态机" value={`${t?.mode ?? '--'}`} hint={`renwu ${t?.renwu ?? 0}`} />
             <Stat label="动作号" value={`${t?.action ?? '--'}`} />
+          </div>
+          <div className="mt-3 text-[12px] text-slate-500">
+            固件能力位 0x{fwCaps.toString(16)}（bit0 遥测2 / bit1 动作表 / bit2 舵机 / bit3 驾驶 / bit4 标定 / bit5 Flash / bit6 看门狗）
           </div>
         </Card>
       </div>

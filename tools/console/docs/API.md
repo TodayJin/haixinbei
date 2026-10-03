@@ -41,7 +41,7 @@
 | POST | `/api/servo` | `{ch:1\|2, angle:0..180}` 直接摆一路舵机 |
 | POST | `/api/servo/center` | 两路回 0°（收回位） |
 | POST | `/api/servo/deviation` | `{ch, dev_us}` 中位偏差微调（±100µs） |
-| POST | `/api/drive` | `{mode:"off"\|"wheels"\|"base_turn", vl?,vr?,base?,turn?}` |
+| POST | `/api/drive` | `{mode:"off"\|"wheels"\|"base_turn", vl?,vr?,base?,turn?}`：`wheels` 左右轮直接给 mm/s；`base_turn` 的 **`base` = 基准速度 mm/s、`turn` = 目标航向偏移（度，正 = 左转 = 偏航角增大）**，基准航向在**进入**该模式时锁存（= 固件 `s_base_yaw`），之后重复帧只改目标；`base=0` 即"原地用车上的角度环转到并保持这个朝向" |
 | POST | `/api/cmd` | `{cmd, arg?}`：`stop/start_a/start_b/start_c/clear_fault/reset/telem_hz` |
 | GET | `/api/stream` | **SSE**：实时数据流（见 §4） |
 | GET | `/api/log?limit=200` | 最近的文本日志 |
@@ -152,6 +152,9 @@
 - 设计：深色优先（`#0b1020` 级背景）、玻璃拟态卡片（`bg-white/5 + backdrop-blur + ring-1 ring-white/10`）、圆角 16px、青/紫霓虹强调色、切换 150ms 过渡、状态点脉冲动效；桌面三栏自适应，窄屏折叠侧栏。
 - 页面：**总览 / 操控 / IMU / 传感器 / 舵机与动作 / 调参 / 波形 / 控制与日志 / 设置**。
 - 操控页：键盘 **W/S = 前进/后退、A/D = 左/右转**（方向键同义），可组合（W+A = 边走边左转），A+D 或 W+S 相互抵消；空格的优先级最高 = 急停交还车上任务流程。所有键松开 ⇒ `{mode:"off"}`。前端只在指令变化时 POST 一次 `/api/drive`，之后靠桥的 200 ms 驾驶保活喂车上的 500 ms 看门狗。
+- 键盘给的转向是**角速度**（°/s，滑块 0..`TURN_RATE_LIMIT`=180），前端每 100 ms 把角速度积分成**目标航向偏移**（累计最多 `HOLD_LIMIT`=540°）再下发；松键 = 保持当前朝向（不发 off），A/D 的符号与固件一致：**按 A（左转）发正 `turn`**。
+- IMU 页「朝向控制」：一个 −180°..+180° 滑块（左侧 = 右转、右侧 = 左转），拖动即接管角度环（`{mode:"base_turn", base:0, turn:offset}`，节流 100 ms + 尾部补一帧），松手保持；「回到 0°」归零，「交还车上任务」发 `{mode:"off"}`。读数：基准朝向 / 目标朝向 / 当前朝向 / 角度环误差。
+- 不要用 `gyro_cal` / `gyro_zero` / `gyro_turn` 这三个命令名：桥的 `CMD_NAMES` 里没有（只有 `calib_gyro`），固件 `CMD_CALIB_GYRO 0x05` 也没实现（明确回 `ST_NOT_READY`）；只有开发用 mock 认这三个名字。朝向控制的正确做法就是上面的 `/api/drive` `base_turn`。
 - 数据：`EventSource('/api/stream')` + 本地环形缓冲（默认 30 000 点，可在设置里改）。断开自动重连并保留缓冲。
 - 波形页：每通道**独立量程泳道**（节约纵向空间）、可选 5/10/20/30 s 窗口、暂停/继续、游标读数、CSV 导出（前端生成）。
 - 每个写操作后给出 1 行反馈（成功/失败原因），失败要用后端返回的 `error` 原文。

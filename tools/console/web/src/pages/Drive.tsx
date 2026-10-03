@@ -4,7 +4,16 @@ import { store, useStore } from '../lib/store'
 import { Badge, Card, Slider, Stat, Toggle } from '../components/ui'
 import { MiniTrend } from '../components/Trend'
 import { fmt, fmtInt } from '../lib/format'
-import { isTypingTarget, keyId, keyRoleById, rolesToDrive, type KeyRole } from '../lib/keys'
+import { isTypingTarget, keyId, keyRoleById, rolesToIntent, type KeyRole } from '../lib/keys'
+import {
+  TURN_RATE_LIMIT,
+  TURN_TICK_MS,
+  initDriveRuntime,
+  norm180,
+  offsetLabel,
+  stepDrive,
+  type DriveRuntime,
+} from '../lib/heading'
 
 /** 键位盒子：`keys` 里只放"渲染用"的键（W/A/S/D 各一个盒子，方向键映射到同一个盒子）。 */
 function KeyBox({ label, on, sub }: { label: string; on: boolean; sub?: string }) {
@@ -27,9 +36,9 @@ export function DrivePage() {
   const t = telem
   const driving = !!t?.flags.host_drive
 
-  // 速度：前进/后退的基准；转向：左右差（正 = 右转，与固件 T_DRIVE 的 b 同号）
+  // 速度：前进/后退的基准 mm/s；转向：按住 A/D 时航向每秒变多少度（车上是角度环在追）。
   const [speed, setSpeed] = React.useState(600)
-  const [turnRate, setTurnRate] = React.useState(500)
+  const [turnRate, setTurnRate] = React.useState(90)
   const [heldKeys, setHeldKeys] = React.useState<string[]>([])
   const step = settings.driveStep
 
@@ -42,26 +51,44 @@ export function DrivePage() {
     return out
   }, [heldKeys])
 
-  const cmd = React.useMemo(() => rolesToDrive(roles, { speed, turn: turnRate }), [roles, speed, turnRate])
+  const input = React.useMemo(() => rolesToIntent(roles, { speed, turn: turnRate }), [roles, speed, turnRate])
   const on = React.useCallback((r: KeyRole) => roles.includes(r), [roles])
 
-  // 只在"指令变了"的时候下发一次；之后靠桥的 200ms 驾驶保活喂车上的 500ms 看门狗。
-  const lastSent = React.useRef<string>('')
+  // 状态机放在纯函数里（lib/heading.ts stepDrive）：这里只负责"按节拍喂意图、把帧发出去"。
+  const rt = React.useRef<DriveRuntime>(initDriveRuntime())
+  const intentRef = React.useRef(input)
+  intentRef.current = input
+  const yawRef = React.useRef(0)
+  yawRef.current = t?.yaw ?? 0
+  // 接管那一刻的航向就是车上 `s_base_yaw`（HostExt_DriveSet 进入 base 模式时锁存），
+  // 页面上要显示目标航向就得记住它。
+  const baseYawRef = React.useRef<number | null>(null)
+  const [offset, setOffset] = React.useState(0)
+
+  const pump = React.useCallback((dtMs: number) => {
+    const wasArmed = rt.current.armed
+    const r = stepDrive(rt.current, intentRef.current, dtMs)
+    rt.current = r.rt
+    setOffset(r.rt.offset)
+    if (!wasArmed && r.rt.armed) baseYawRef.current = yawRef.current
+    if (!r.rt.armed) baseYawRef.current = null
+    for (const f of r.send) void store.drive(f)
+  }, [])
+
+  const turning = input.turnRate !== 0 && !input.stop
+
+  // 意图一变立刻结算一次；按着转向键的时候每 TURN_TICK_MS 再积分一拍。
   React.useEffect(() => {
-    const sig = JSON.stringify([cmd.mode, cmd.base, cmd.turn])
-    if (sig === lastSent.current) return
-    lastSent.current = sig
-    if (cmd.mode === 'off') void store.drive({ mode: 'off' })
-    else void store.drive({ mode: 'base_turn', base: cmd.base, turn: cmd.turn })
-  }, [cmd.mode, cmd.base, cmd.turn])
+    pump(0)
+    if (!turning) return
+    const id = window.setInterval(() => pump(TURN_TICK_MS), TURN_TICK_MS)
+    return () => window.clearInterval(id)
+  }, [input.base, input.turnRate, input.stop, turning, pump])
 
   // 离开这个页面就把驾驶交还车上（不然切页之后车还在按最后一条指令跑）。
-  React.useEffect(
-    () => () => {
-      if (lastSent.current && lastSent.current !== JSON.stringify(['off', 0, 0])) void store.drive({ mode: 'off' })
-    },
-    [],
-  )
+  React.useEffect(() => () => {
+    if (rt.current.armed) void store.drive({ mode: 'off' })
+  }, [])
 
   React.useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -95,8 +122,16 @@ export function DrivePage() {
     }
   }, [])
 
-  const wheelL = cmd.base + cmd.turn
-  const wheelR = cmd.base - cmd.turn
+  const baseYaw = baseYawRef.current
+  const target = baseYaw === null ? null : norm180(baseYaw + offset)
+
+  const halt = () => {
+    setHeldKeys([])
+    rt.current = initDriveRuntime()
+    baseYawRef.current = null
+    setOffset(0)
+    void store.drive({ mode: 'off' })
+  }
 
   return (
     <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_380px]">
@@ -124,16 +159,28 @@ export function DrivePage() {
               </div>
             </div>
 
-            <div className="min-w-[240px] flex-1">
+            <div className="min-w-[260px] flex-1">
               <div className="mb-1 flex items-baseline gap-2">
                 <span className="text-[13px] text-slate-300">当前指令</span>
-                <span className="text-[13px] font-semibold text-neon-cyan">{cmd.label}</span>
+                <span className="text-[13px] font-semibold text-neon-cyan">{input.label}</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <Stat label="基准速度（前进量）" value={fmtInt(cmd.base)} unit="mm/s" tone={cmd.base ? 'mint' : undefined} />
-                <Stat label="转向（左右差）" value={fmtInt(cmd.turn)} unit="mm/s" tone={cmd.turn ? 'amber' : undefined} />
-                <Stat label="推算左轮" value={on('stop') ? '0' : fmtInt(wheelL)} unit="mm/s" />
-                <Stat label="推算右轮" value={on('stop') ? '0' : fmtInt(wheelR)} unit="mm/s" />
+                <Stat label="基准速度（前进量）" value={fmtInt(input.base)} unit="mm/s" tone={input.base ? 'mint' : undefined} />
+                <Stat
+                  label="转向速度"
+                  value={fmtInt(input.turnRate)}
+                  unit="°/s"
+                  tone={input.turnRate ? 'amber' : undefined}
+                  hint="按住 A/D 时航向每秒变多少"
+                />
+                <Stat label="目标偏移" value={fmtInt(offset)} unit="°" tone={offset ? 'amber' : undefined} hint={offsetLabel(offset)} />
+                <Stat
+                  label="目标航向"
+                  value={target === null ? '--' : fmt(target, 1)}
+                  unit="°"
+                  tone="cyan"
+                  hint={baseYaw === null ? '还没接管' : `基准 ${fmt(baseYaw, 1)}° + 偏移`}
+                />
               </div>
             </div>
           </div>
@@ -148,19 +195,19 @@ export function DrivePage() {
             </div>
             <div>
               <div className="mb-1 flex items-center justify-between text-[13px]">
-                <span className="text-slate-300">转会速度（差速）</span>
-                <span className="num text-slate-400">{turnRate} mm/s</span>
+                <span className="text-slate-300">转向速度（角度环给的目标角速度）</span>
+                <span className="num text-slate-400">{turnRate} °/s</span>
               </div>
-              <Slider value={turnRate} min={0} max={3000} step={step} onChange={setTurnRate} />
+              <Slider value={turnRate} min={0} max={TURN_RATE_LIMIT} step={5} onChange={setTurnRate} />
             </div>
           </div>
 
           <div className="mt-4 flex flex-wrap items-center gap-2">
-            <button className="btn-danger px-5 py-2 text-sm" onClick={() => void store.drive({ mode: 'off' })}>
+            <button className="btn-danger px-5 py-2 text-sm" onClick={halt}>
               <OctagonX size={16} /> 停车（空格）
             </button>
             <span className="text-[12px] text-slate-500">
-              松开所有键 = 自动交还车上任务流程；只要还按着，指令会一直被保活喂给车。
+              松开所有键 = 自动交还车上任务流程；只要还按着，桥每 200ms 喂一次驾驶保活。
             </span>
           </div>
         </Card>
@@ -177,15 +224,15 @@ export function DrivePage() {
             </div>
             <div className="rounded-lg bg-ink-900/50 px-3 py-2">
               <span className="num font-semibold text-slate-200">A</span>
-              <span className="ml-2 text-slate-400">原地左转（左轮反转）</span>
+              <span className="ml-2 text-slate-400">按住就以设定角速度左转，松开保持当前朝向（最多累计 540°）</span>
             </div>
             <div className="rounded-lg bg-ink-900/50 px-3 py-2">
               <span className="num font-semibold text-slate-200">D</span>
-              <span className="ml-2 text-slate-400">原地右转</span>
+              <span className="ml-2 text-slate-400">同上，向右转</span>
             </div>
             <div className="rounded-lg bg-ink-900/50 px-3 py-2">
               <span className="num font-semibold text-slate-200">W + A</span>
-              <span className="ml-2 text-slate-400">一边前进一边左转（斜着走）</span>
+              <span className="ml-2 text-slate-400">一边前进一边左转（弧线）</span>
             </div>
             <div className="rounded-lg bg-ink-900/50 px-3 py-2">
               <span className="num font-semibold text-slate-200">W + D</span>
@@ -193,11 +240,17 @@ export function DrivePage() {
             </div>
             <div className="rounded-lg bg-ink-900/50 px-3 py-2">
               <span className="num font-semibold text-slate-200">A + D</span>
-              <span className="ml-2 text-slate-400">左右抵消 ⇒ 转向为 0（W 还按着就是直行）</span>
+              <span className="ml-2 text-slate-400">左右抵消 ⇒ 不再转（W 还按着就是直行）</span>
             </div>
             <div className="rounded-lg bg-ink-900/50 px-3 py-2">
               <span className="num font-semibold text-slate-200">W + S</span>
               <span className="ml-2 text-slate-400">前后抵消 ⇒ 不前进（A/D 还按着就原地转）</span>
+            </div>
+            <div className="rounded-lg bg-ink-900/50 px-3 py-2 md:col-span-2">
+              <span className="num font-semibold text-slate-200">全松开 / 空格</span>
+              <span className="ml-2 text-slate-400">
+                交还车上任务流程并把"基准朝向"重新对到当前朝向 —— 下次按 A/D 是从新的正前方开始算
+              </span>
             </div>
           </div>
         </Card>
@@ -208,8 +261,8 @@ export function DrivePage() {
           <div className="grid grid-cols-2 gap-3">
             <Stat label="实测左 / 右" value={`${fmt(t?.vl, 0)} / ${fmt(t?.vr, 0)}`} unit="mm/s" />
             <Stat label="PWM 左 / 右" value={`${fmtInt(t?.pwm_l)} / ${fmtInt(t?.pwm_r)}`} tone="amber" />
-            <Stat label="偏航" value={fmt(t?.yaw, 1)} unit="°" tone="cyan" />
-            <Stat label="角度环修正" value={fmtInt(t?.angle.corr)} tone="violet" />
+            <Stat label="当前航向" value={fmt(t?.yaw, 1)} unit="°" tone="cyan" />
+            <Stat label="角度环误差" value={fmt(t?.angle.err, 2)} unit="°" tone="violet" hint="目标 − 当前" />
           </div>
           <div className="mt-3 grid gap-3">
             <div>
@@ -224,7 +277,11 @@ export function DrivePage() {
         </Card>
         <Card title="提示">
           <ul className="list-disc space-y-1 pl-4 text-[12px] leading-relaxed text-slate-400">
-            <li>按 W/S 走、A/D 转；组合键就是差速：左转时右轮加速、左轮减速，正好是车上的三环串级 PID 在跟这个目标。</li>
+            <li>
+              这里只下发<span className="text-slate-200">目标速度 + 目标转向角</span>，怎么打轮是车上的角度环/速度环在算
+              （`base_turn` 模式）。原地转就是基准速度给 0。
+            </li>
+            <li>转向不是"左右轮差速 mm/s"，而是目标航向角（度，正 = 左转）：角度环把车头拧到那个朝向并保持。</li>
             <li>只要这个页面开着并且按着键，桥每 200ms 会喂一次驾驶保活；真车模式下 0.5s 收不到会自动停车（防失联跑飞）。</li>
             <li>切走页面 / 窗口失焦 / 松开所有键 ⇒ 立刻交还车上任务流程，不会自己接着跑。</li>
             <li>比赛规则不允许遥控干预，这套只用于调试与标定。</li>

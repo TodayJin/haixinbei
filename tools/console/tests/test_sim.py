@@ -5,7 +5,7 @@ import pytest
 
 from bridge import params as P
 from bridge import protocol as pr
-from bridge.sim import ACTION_DEFAULT, SimCar
+from bridge.sim import ACTION_DEFAULT, SimCar, norm180
 
 
 def req(car: SimCar, ftype: int, payload: bytes = b"", seq: int = 1,
@@ -225,3 +225,49 @@ def test_yaw_reacts_to_wheel_difference():
         car.poll(i * 20)
     assert car.yaw > y0                                     # 右轮快 → 航向增加
     assert -180 <= car.yaw <= 180
+
+
+def test_base_turn_angle_loop_converges_and_holds_base():
+    """`base_turn` = "转到某个绝对航向并保持"：角度环必须真的把 yaw 拉过去
+    （只锁存 yaw_ref 不闭环的话，仿真里朝向指令看起来毫无作用），而且
+    重复帧（桥每 200ms 的保活）不能把基准航向拖着跟车跑。"""
+    car = SimCar()
+    car.start(0)
+    yaw0 = car.yaw
+    req(car, pr.T_DRIVE, bytes([2]) + pr.pack_i16(300) + pr.pack_i16(30), seq=61, now=0)
+    assert car.mode == 1 and car.drive_enabled is True
+    assert car.base_speed == 300.0
+    assert car.yaw_base == pytest.approx(yaw0, abs=1e-6)          # 基准 = 进入时的航向
+    assert car.yaw_ref == pytest.approx(norm180(yaw0 + 30.0), abs=1e-6)
+    assert car.vr_t > car.vl_t                                    # 目标在左 ⇒ 右轮快（yaw 增大）
+
+    seq = 62
+    for i in range(1, 601):                                       # 3s，每 5ms 一拍
+        now = i * 5
+        if i % 40 == 0:                                           # 桥的 200ms 保活
+            req(car, pr.T_DRIVE_REPORT, b"", seq=seq, now=now)
+            seq += 1
+        car.poll(now)
+    assert car.drive_enabled is True                              # 保活 → 看门狗不咬
+    assert car.drive_trips == 0
+    assert car.yaw == pytest.approx(norm180(yaw0 + 30.0), abs=3.0)
+    assert abs(norm180(car.yaw_ref - car.yaw)) < 3.0
+
+    # 再来一帧同样的目标（保活里带目标的情况）→ 基准不动、目标不动
+    req(car, pr.T_DRIVE, bytes([2]) + pr.pack_i16(300) + pr.pack_i16(30), seq=seq, now=3100)
+    seq += 1
+    assert car.yaw_base == pytest.approx(yaw0, abs=1e-6)
+    assert car.yaw_ref == pytest.approx(norm180(yaw0 + 30.0), abs=1e-6)
+
+    # 停车交还：清零并退出角度环
+    req(car, pr.T_DRIVE, bytes([0]) + pr.pack_i16(0) + pr.pack_i16(0), seq=seq, now=3200)
+    seq += 1
+    assert car.mode == 0 and car.drive_enabled is False
+    assert car.base_speed == 0.0 and car.vl_t == 0.0 and car.vr_t == 0.0
+
+    # 重新接管：基准航向按**这一刻**重新锁存（与固件 s_mode!=BASE 就重锁一致）
+    car.poll(3210)                                                # 先让物理走一拍
+    yaw1 = car.yaw
+    req(car, pr.T_DRIVE, bytes([2]) + pr.pack_i16(0) + pr.pack_i16(-20), seq=seq, now=3220)
+    assert car.yaw_base == pytest.approx(yaw1, abs=1e-6)
+    assert car.yaw_ref == pytest.approx(norm180(yaw1 - 20.0), abs=1e-6)

@@ -50,9 +50,6 @@ export function ControlPage() {
             <button className="btn-ghost" onClick={() => void store.cmd('clear_fault')}>
               <RefreshCw size={13} /> 清故障
             </button>
-            <button className="btn-ghost" onClick={() => void store.cmd('gyro_cal')}>
-              陀螺校准
-            </button>
             <button className="btn-ghost" onClick={() => void store.cmd('reset')}>
               <RotateCcw size={13} /> 软复位
             </button>
