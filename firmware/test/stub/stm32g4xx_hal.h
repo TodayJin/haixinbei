@@ -134,6 +134,12 @@ uint32_t FLASH_Program(uint32_t address, uint64_t data);
 void     FLASH_Unlock(void);
 void     FLASH_Lock(void);
 uint64_t FLASH_ReadDoubleWord(uint32_t address);   /* 测试自检用 */
+/* 假 Flash 的 LOCK 状态（上电 = 1，与真板复位值一致）：测试用来断言
+ * "上锁时擦写必须失败"，防止再次出现漏 HAL_FLASH_Unlock() 的真板 Bug。 */
+int      host_flash_locked(void);
+int      host_flash_try_erase_page(uint32_t page);
+void     host_flash_unlock(void);
+void     host_flash_lock(void);
 
 /* ---- TIM：比较寄存器读写 ----
  * 真 HAL 的 __HAL_TIM_SET_COMPARE 是写 TIMx->CCRy；这里落到 host_hal.c 的

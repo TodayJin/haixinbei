@@ -28,9 +28,12 @@
 #define NVRAM_FLASH_BASE 0x08000000UL
 #define NVRAM_PAGE_INDEX 63UL                      /* 128KB / 2KB - 1 = 最后一页 */
 #define NVRAM_PAGE_ADDR  (NVRAM_FLASH_BASE + NVRAM_PAGE_INDEX * 0x800UL)
-/* 本板 Flash 实际组织（2026-09-30 实测）：2 bank × 32 页 × 2KB，PNB 只有 0..31 有效。
- * 所以 0x0801F800 这颗地址必须用「BKER=1（bank2）+ PNB=31」去擦，详见 nvram_page_erase()。 */
-#define NVRAM_BANK_PAGE   31UL                     /* bank 内页号：bank2 页 31 = 0x0801F800 */
+/* 本板 Flash 实际组织（2026-10-04 真板实测，块模型）：单 bank、32 个 **4KB 擦除块**，
+ * 块号 = PNB，块地址 = 0x08000000 + PNB×0x1000；PNB 0..31 全部有效，BKER 被硬件忽略。
+ * NVRAM 页 0x0801F800（绝对页 63）落在块 31 里 ⇒ 块 31 = 页 62 + 页 63。
+ * ⚠️ 所以每次存参数都会**连带擦掉页 62**：页 62 必须保持"无人使用"（任务存储在页 58..61，
+ *    见 App/Svc/task_store.h 的页分配注释）。 */
+#define NVRAM_BANK_PAGE   31UL                     /* = 块号：块 31 = 页 62+63 = 0x0801F800 */
 
 #define NVRAM_CHECK_PERIOD_MS  200U    /* 多久对比一次"当前值 vs 已存值" */
 #define NVRAM_SAVE_DELAY_MS   1500U    /* 最后一次改动之后静这么久才动 Flash */
@@ -288,16 +291,18 @@ static void apply(const nvram_payload_t *p)
 
 /* ------------------------------------------------- 页擦除（自己写寄存器） */
 
-/* 本板 Flash 组织（2026-09-30 实测）：2 bank × 32 页 × 2KB，PNB 有效范围 0..31，
- * NVRAM 页 0x0801F800 = bank2 的页 31。
+/* 本板 Flash 组织（2026-10-04 真板实测，块模型）：单 bank、32 个 4KB 擦除块，
+ * **块号 = PNB，块地址 = 0x08000000 + PNB×4096，BKER 被硬件忽略**。页 0x0801F800 是
+ * 块 31 里的第二页 ⇒ 用 PNB=31 擦块 31（连带页 62，正是没人用的那一页）。
  *
  * **不要改回 HAL_FLASHEx_Erase()**：它按 FLASH_OPTR 的 DBANK 位决定 BKER，而这颗料的
  * DBANK 位读出来是 0（与硬件实际行为不符）⇒ FLASH_PageErase() 会清掉 BKER 再用
- * PNB=63 去擦；PNB 越界时硬件**静默忽略**（SR 不置错、页内容不变）⇒ 擦除永远无效、
+ * PNB=63 去擦；PNB 越界（>31）时硬件**静默忽略**（SR 不置错、页内容不变）⇒ 擦除永远无效、
  * 接着在还没擦的地方编程得到 PROGERR ⇒ 设置永远存不进 Flash、每 5s 重试一次并反复弹
  * "正在保存"（用户 m03645 报的 bug 就是这么来的）。
- * 判据：J-Link 手写 FLASH->CR = BKER|PNB=31|PER|STRT 后该页立刻变成 0xFF；
- *       而 PNB=62/63 擦三次都是 SR 干净且页不变。 */
+ * 判据：J-Link 手写 FLASH->CR = BKER|PNB=31|PER|STRT 后页 63 立刻变成 0xFF；
+ *       而 PNB=63（越界）擦三次都是 SR 干净且页不变；
+ *       探针实测 PNB 29/30/31 分别命中块 0x0801D000 / 0x0801E000 / 0x0801F000。 */
 static uint8_t nvram_page_erase(void)
 {
     uint8_t  dcache = (READ_BIT(FLASH->ACR, FLASH_ACR_DCEN) != 0U) ? 1U : 0U;

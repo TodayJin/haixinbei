@@ -234,7 +234,8 @@ int TaskStore_Load(uint8_t slot)
 }
 
 uint8_t TaskStore_Page(uint8_t slot) { return (uint8_t)(TASK_STORE_PROG_PAGE0 + (slot % TASK_STORE_PROG_PAGES)); }
-uint8_t TaskStore_BankPage(uint8_t slot) { return (uint8_t)(TaskStore_Page(slot) - 32u); }
+/* 块号 = 页号 / 2（本板擦除粒度是 4KB 块，不是 2KB 页；见 App/Svc/task_store.c） */
+uint8_t TaskStore_Block(uint8_t slot) { return (uint8_t)(TaskStore_Page(slot) / 2u); }
 
 /* ---- TaskRun_* ---- */
 int TaskRun_Load(const uint8_t *prog, uint32_t len)

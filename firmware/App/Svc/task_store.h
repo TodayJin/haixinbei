@@ -4,12 +4,18 @@
  *
  * 页分配（用户已拍板口径：共 4 页 = 8KB，最多 8 个任务）：
  *
- *   页 59 = 0x0801D800                     目录页（magic/ver/count + 8 条记录）
- *   页 60..62 = 0x0801E000..0x0801F7FF     程序区 6144 B（任务镜像紧凑摆放）
+ *   页 58 = 0x0801D000                     目录页（magic/ver/count + 8 条记录）
+ *   页 59..61 = 0x0801D800..0x0801EFFF     程序区 6144 B（任务镜像紧凑摆放）
+ *   页 62 = 0x0801F000                     空着：nvram 擦块 31 时会连带擦掉它，见下
  *   页 63 = 0x0801F800                     nvram（既有，本模块绝不碰）
  *
- * 链接脚本 `firmware/STM32G474RBTx_FLASH.ld` 的 FLASH 收到 **118K**（= 页 59 起点
- * 0x1D800）：固件镜像长进任务区必须是链接错误，而不是静默把车上的任务压掉。
+ * **擦除粒度是 4KB**（2026-10-04 真板实测）：目录页 58 与程序页 59 属块 29、程序页 60/61
+ * 属块 30，于是本模块只擦块 29/30，正好不碰镜像（块 27/28 = 页 54..57）与 nvram 的块 31。
+ * 早先的布局（目录页 59 + 程序页 60..62）在块模型下会擦到块 27/28/31 —— 那是真机上把固件
+ * 自己的字体页擦掉（页 54/55/56 HardFault）的根因。
+ *
+ * 链接脚本 `firmware/STM32G474RBTx_FLASH.ld` 的 FLASH 收到 **116K**（= 页 58 起点
+ * 0x1D000）：固件镜像长进任务区必须是链接错误，而不是静默把车上的任务压掉。
  *
  * 目录页字节布局（小端；主机测试按这些偏移直接查页内容）：
  *
@@ -28,7 +34,7 @@
  *               10 char name[30]
  *
  * 写入语义（与 nvram.c 同一条铁律：**运动中绝不擦写**）：
- *   - 写一个任务 = 擦目录页 + 擦程序区 3 页 + 整份重写（约 4 页擦 + 8KB 编程）。
+ *   - 写一个任务 = 擦目录页所在块 + 擦程序区所在块 + 整份重写（2 个 4KB 块擦 + 8KB 编程）。
  *   - **先擦目录页**：掉电中断时车上看到的是"没有任务"，而不是"半个新程序配着旧偏移"
  *     ——只有前者是安全的（跑错轨迹比不跑更糟）。
  *   - 每条记录独立校验（结构 + CRC16），坏记录 = 空槽；目录 magic/ver 坏 = 整片空
@@ -39,10 +45,17 @@
 
 #include <stdint.h>
 
-/* ---- 页分配 ---- */
+/* ---- 页分配 ----
+ * ⚠️ 本板的**擦除粒度是 4KB 块**（块号 = 页号 / 2，块地址 = 0x08000000 + 块号×4096，
+ * 2026-10-04 真板实测，见 task_store.c 的 ts_block_erase()）：擦页 58 会连带擦掉页 59。
+ * 所以整片地址空间必须按"4KB 块"划，而不是按 2KB 页：
+ *   块 27 = 页 54/55、块 28 = 页 56/57   ← 全是**固件镜像**（`.ld` 收到 116K = 到页 57 为止）
+ *   块 29 = 页 58/59、块 30 = 页 60/61   ← 任务存储：目录页 58 + 程序页 59/60/61
+ *   块 31 = 页 62/63                      ← nvram（页 63）；页 62 空着，nvram 会连带擦它
+ * 谁都不许把擦除目标放到自己所在的块以外 —— 这就是本模块和 nvram 能共存的全部理由。 */
 #define TASK_STORE_PAGE_SIZE   2048u
-#define TASK_STORE_DIR_PAGE    59u
-#define TASK_STORE_PROG_PAGE0  60u
+#define TASK_STORE_DIR_PAGE    58u
+#define TASK_STORE_PROG_PAGE0  59u
 #define TASK_STORE_PROG_PAGES  3u
 #define TASK_STORE_PROG_BYTES  6144u    /* 3 × 2048，程序区总字节 */
 
@@ -86,9 +99,9 @@ uint8_t  TaskStore_Flags(uint8_t slot);
 uint8_t  TaskStore_Name(uint8_t slot, char *out, uint8_t cap);
 /* 直接指 Flash 里的镜像（XIP，无拷贝）；空槽返回 NULL */
 const uint8_t *TaskStore_Image(uint8_t slot);
-/* 镜像所在绝对页号 / bank 内页号（诊断用）；空槽返回 0xFF */
+/* 镜像所在绝对页号 / 所在 4KB 擦除块号（诊断用，块号 = 页号 / 2）；空槽返回 0xFF */
 uint8_t  TaskStore_Page(uint8_t slot);
-uint8_t  TaskStore_BankPage(uint8_t slot);
+uint8_t  TaskStore_Block(uint8_t slot);
 /* 带开机自启标记（flags.bit0）里 id 最小的槽；没有则 TASK_STORE_NO_SLOT */
 uint8_t  TaskStore_AutoSlot(void);
 /* 校验过的镜像载入解释器（空槽回 TASK_STORE_E_EMPTY，其余透传 TaskRun_Load 的返回值） */

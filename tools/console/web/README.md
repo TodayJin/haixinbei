@@ -69,8 +69,8 @@ node mock/server.mjs   # 直接开 http://127.0.0.1:8770 ，托管 dist/
 - 设置持久化在 `localStorage['console.settings.v1']`（窗口、缓冲点数、勾选通道、操控页步进、安全提示开关）。
 - 任务页的数据层是**另一条线**（不进 `store`，页面自己 `useState` + `localStorage['hxb.tasks.v1']`）：
   `task.ts`（镜像编解码）= 与车上同一份格式；`taskedit.ts` = 拖拽/增删/脏数据修复/编译预览；
-  `taskapi.ts` = `/api/tasks*` 的 HTTP 客户端（每文件各带一份 `.test.ts`）。车上存储：**页 59 = 目录**
-  （最多 8 条记录，每条 `id/off/len/crc16/flags/name`）、**页 60..62 = 程序区 6 KB**（`0x0801E000` 起，
+  `taskapi.ts` = `/api/tasks*` 的 HTTP 客户端（每文件各带一份 `.test.ts`）。车上存储：**页 58 = 目录**
+  （最多 8 条记录，每条 `id/off/len/crc16/flags/name`）、**页 59..61 = 程序区 6 KB**（`0x0801D800` 起，
   单条任务 ≤ 4096 B）；编译卡上的「占用 %」就是按 6144 B 算的。烧写栏的**「开机自启」开关**会把
   COMMIT 帧的 `flags` bit0 置上，车下次上电自己跑这个任务（`TASK_STORE_FLAG_AUTO`）。
   「等固件/桥支持」提示态现在是按**能力位 bit7（`HOST_CAP_TASK`）**切的，不是按端点 404 切的。

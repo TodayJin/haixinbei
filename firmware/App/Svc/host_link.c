@@ -28,7 +28,7 @@
 #include "nvram.h"         /* v2：T_PARAM_SAVE 真保存（nvram_touch） */
 #include "servo.h"         /* v2：动作表/舵机角度 */
 #include "task_run.h"      /* v2：任务解释器（T_TASK_RUN 启动 / T_TASK_STATUS 查询） */
-#include "task_store.h"    /* v2：任务程序 Flash 三槽（页 60/61/62） */
+#include "task_store.h"    /* v2：任务程序 Flash 存储（页 58 目录 + 页 59..61 程序区） */
 #include "trace_cal.h"     /* v2：T_CAL_GET 标定回读 */
 #include "tracing.h"
 #include "SEGGER_RTT.h"
@@ -593,7 +593,7 @@ static void rx_byte(uint8_t b)
  *  v2：上位机任务程序（T_TASK_*，见 docs/任务编程.md §5）
  *
  *  车只是执行机构：上位机把任务编成 task_prog 的二进制、分片 PUT 上来，
- *  COMMIT 校验通过才擦进 Flash（App/Svc/task_store.c：页 60/61/62 三个槽）。
+ *  COMMIT 校验通过才擦进 Flash（App/Svc/task_store.c：页 58 目录 + 页 59..61 程序区）。
  *
  *  为什么 LIST_R / DATA 仍然由 poll 分拍推进：早先一帧 board_dl_send 是同步阻塞的
  *  （64 字节数据 + 11 字节帧头 ≈ 6.5ms @115200），一次 GET 最长 TASK_STORE_CAP（4096）

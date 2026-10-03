@@ -27,7 +27,7 @@
 #include "motion.h"
 #include "gyro_control.h"  /* 角度环：任务块里的转向/摆正由它执行，见主循环的每拍推进 */
 #include "task_run.h"      /* 上位机可编程任务（状态机）解释器，见主循环末尾的每拍推进 */
-#include "task_store.h"    /* 任务程序在 Flash 里的 3 个槽位（页 60/61/62）+ 开机自启 */
+#include "task_store.h"    /* 任务程序在 Flash 里（页 58 目录 + 页 59..61 程序区）+ 开机自启 */
 #include "motor_bench.h" /* 只在 -DMOTOR_BENCH 的构建里干活，见 motor_bench.c */
 
 extern volatile uint32_t g_oled_tx_done;
@@ -140,7 +140,7 @@ int main(void)
   nvram_init();
   SEGGER_RTT_printf(0, "nvram loaded=%u\r\n", (unsigned)nvram_loaded());
 
-  /* 上位机烧进 Flash 的任务程序（页 59 目录 + 页 60..62 程序区，见 App/Svc/task_store.c）。
+  /* 上位机烧进 Flash 的任务程序（页 58 目录 + 页 59..61 程序区，见 App/Svc/task_store.c）。
    * 放在 nvram_init() 之后：两者各读自己的 Flash 页，但任务一启动就接管电机，必须等
    * 参数表（PID 等标定量）已经从存档恢复完。 */
   TaskStore_Init();

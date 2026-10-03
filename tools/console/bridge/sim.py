@@ -490,7 +490,7 @@ class SimCar:
             self._ack(f.seq, pr.ST_UNKNOWN_TYPE)
 
     # ---------------------------------------------------------- 任务程序（0x60..0x69）
-    # 与固件口径对齐：TASK_STORE_SLOTS 8 条记录（页 59 目录）+ 页 60..62 共 6144 B 程序区，
+    # 与固件口径对齐：TASK_STORE_SLOTS 8 条记录（页 58 目录）+ 页 59..61 共 6144 B 程序区，
     # 单条 ≤ TASK_STORE_CAP 4096 B（= pr.TASK_SLOT_BYTES，解释器 RAM 上限）。
     TASK_SLOTS = 8
     TASK_PROG_BYTES = 6144
@@ -557,7 +557,7 @@ class SimCar:
             return
         used = sum(len(b) for k, b in self.tasks.items() if k != tid)
         if used + length > self.TASK_PROG_BYTES:
-            self._ack(seq, pr.ST_BAD_PARAM)      # 程序区（页 60..62 = 6144 B）装不下
+            self._ack(seq, pr.ST_BAD_PARAM)      # 程序区（页 59..61 = 6144 B）装不下
             return
         self.tasks[tid] = img
         if name:

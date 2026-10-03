@@ -2,9 +2,12 @@
  * @file  t_taskstore.c   主机侧单元测试：任务程序在 Flash 里的存储（App/Svc/task_store.c）
  *
  * 页分配（App/Svc/task_store.h 是唯一权威）：
- *   页 59       目录页      magic/ver/count/seq + 8 条 40 B 记录
- *   页 60..62   程序区     任务镜像紧凑摆放（8 字节对齐）
+ *   页 58       目录页      magic/ver/count/seq + 8 条 40 B 记录
+ *   页 59..61   程序区     任务镜像紧凑摆放（8 字节对齐）
+ *   页 62       空着       属于 nvram 的擦除块 31，任务模块绝不碰
  *   页 63       nvram      本模块绝不碰
+ *  （擦除粒度是 4KB 块 = 页号/2，所以存储区落在块 29/30；块 27/28 是固件镜像，
+ *    见本文件最后一节的回归用例。）
  *
  * 盯六件事：
  *   1) **布局**：目录页每个字段的字节偏移、程序区里 off 的紧凑与 8 字节对齐、
@@ -35,14 +38,21 @@
 extern void     host_flash_reset(void);
 extern uint8_t *host_flash_page(uint32_t page);
 extern int      host_flash_uses_real_addr(void);
+/* 上锁语义（host_hal.c 的假 Flash 照真板演：LOCK=1 时硬件忽略 FLASH->CR 写） */
+extern int      host_flash_locked(void);
+extern int      host_flash_try_erase_page(uint32_t page);
+extern void     host_flash_unlock(void);
+extern void     host_flash_lock(void);
 
 /* ---- host_appstub.c 的观测点 ---- */
 extern int stub_motion_mode;
 extern int stub_sc_enabled;
 
-#define DIR_PAGE         TASK_STORE_DIR_PAGE                       /* 59 */
-#define PROG_PAGE0       TASK_STORE_PROG_PAGE0                     /* 60 */
-#define SNAP_PAGES       5u                                        /* 页 59..63 */
+#define DIR_PAGE         TASK_STORE_DIR_PAGE                       /* 58 */
+#define PROG_PAGE0       TASK_STORE_PROG_PAGE0                     /* 59 */
+#define SNAP_PAGES       6u                                        /* 页 58..63（存储区 + 空闲页 62 + nvram 页 63） */
+#define FW_PAGE0         54u    /* 真板上块 27 = 页 54/55（App 的字体/数据页） */
+#define FW_PAGE1         57u    /* 块 28 = 页 56/57，页 56 是 App 镜像的最后一页 */
 #define PROG_TAG_OFF     22u    /* build_prog() 把 tag 放在第一个块的 p0（12+8+2） */
 
 /* ------------------------------------------------------------------ 小工具 */
@@ -76,7 +86,7 @@ static uint16_t dir_u16(const uint8_t *p)
     return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
 }
 
-/* 页 59..63 全部快照 / 与快照逐字节相同（"一个 bit 都不许变"的判据） */
+/* 页 58..63 全部快照 / 与快照逐字节相同（"一个 bit 都不许变"的判据） */
 static void snap_all(void)
 {
     uint32_t i;
@@ -108,6 +118,23 @@ static int page_all_ff(uint32_t page)
     }
     for (i = 0U; i < 2048U; i++) {
         if (p[i] != 0xFFU) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* 整页是不是全等于某个字节（本测试用来冒充"固件镜像页"：全 0xA5） */
+static int page_all(uint32_t page, uint8_t v)
+{
+    const uint8_t *p = host_flash_page(page);
+    uint32_t       i;
+
+    if (p == NULL) {
+        return 0;
+    }
+    for (i = 0U; i < 2048U; i++) {
+        if (p[i] != v) {
             return 0;
         }
     }
@@ -274,7 +301,7 @@ int main(void)
         CHECK_EQ_I(TaskStore_Crc((uint8_t)i), 0);
         CHECK_EQ_I(TaskStore_Flags((uint8_t)i), 0);
         CHECK_EQ_I(TaskStore_Page((uint8_t)i), TASK_STORE_NO_SLOT);
-        CHECK_EQ_I(TaskStore_BankPage((uint8_t)i), TASK_STORE_NO_SLOT);
+        CHECK_EQ_I(TaskStore_Block((uint8_t)i), TASK_STORE_NO_SLOT);
         CHECK_EQ_I(TaskStore_Name((uint8_t)i, (char *)name, sizeof name), 0);
         CHECK_EQ_I(name[0], '\0');
         CHECK_EQ_I(TaskStore_Load((uint8_t)i), TASK_STORE_E_EMPTY);
@@ -302,8 +329,8 @@ int main(void)
     CHECK(memcmp(name, "循迹", 6u) == 0);
     CHECK_EQ_I(TaskStore_Present(0u), 0);
     CHECK_EQ_I(TaskStore_Present(2u), 0);
-    CHECK_EQ_I(TaskStore_Page(1u), 60);
-    CHECK_EQ_I(TaskStore_BankPage(1u), 28);
+    CHECK_EQ_I(TaskStore_Page(1u), 59);
+    CHECK_EQ_I(TaskStore_Block(1u), 29);
     /* 第一个任务的 off 是 0（紧凑摆放），Image 就是程序区开头，XIP 直读 */
     CHECK(TaskStore_Image(1u) == (const uint8_t *)host_flash_page(PROG_PAGE0));
     CHECK(memcmp(TaskStore_Image(1u), g_prog, 40u) == 0);
@@ -369,9 +396,9 @@ int main(void)
     CHECK_EQ_I(img_tag(TaskStore_Image(1u)), 0x3100u);
     CHECK_EQ_I(img_tag(TaskStore_Image(2u)), 0x3200u);
     CHECK(TaskStore_Image(1u) == (host_flash_page(PROG_PAGE0) + 56U));
-    CHECK_EQ_I(TaskStore_Page(0u), 60);
-    CHECK_EQ_I(TaskStore_Page(1u), 60);
-    CHECK_EQ_I(TaskStore_Page(2u), 60);
+    CHECK_EQ_I(TaskStore_Page(0u), 59);
+    CHECK_EQ_I(TaskStore_Page(1u), 59);
+    CHECK_EQ_I(TaskStore_Page(2u), 59);
     CHECK_EQ_I(TaskStore_Len(0u), 50);
     CHECK_EQ_I(TaskStore_Load(0u), 0);
     CHECK_EQ_I(TaskRun_ProgLen(), 50);
@@ -431,8 +458,8 @@ int main(void)
     /* 目录满 8 个也不影响覆盖写：把槽 7 换成一个大程序（off 仍是 280 ⇒ 还在第 0 页里） */
     CHECK_EQ_I(put_slot(7u, 2048u, 0x5100u, 0u, "z", 1u, 0u), TASK_STORE_OK);
     CHECK_EQ_I(TaskStore_Len(7u), 2048);
-    CHECK_EQ_I(TaskStore_Page(7u), 60);                /* off=280 ⇒ 第 0 页 */
-    CHECK_EQ_I(TaskStore_BankPage(7u), 28u);
+    CHECK_EQ_I(TaskStore_Page(7u), 59);                /* off=280 ⇒ 第 0 页 */
+    CHECK_EQ_I(TaskStore_Block(7u), 29u);
 
     /* ===============================================================
      * ⑥ 容量：3 × 2000 B 装满 6144 B 程序区，第 4 个必须被挡且一字未动
@@ -444,8 +471,8 @@ int main(void)
     CHECK_EQ_I(put_slot(2u, 2000u, 0x6200u, 0u, "p2", 2u, 0u), TASK_STORE_OK);
     CHECK_EQ_I(dir_u16(dir_ent(1U) + 2U), 2000);
     CHECK_EQ_I(dir_u16(dir_ent(2U) + 2U), 4000);
-    CHECK_EQ_I(TaskStore_Page(1u), 60);                /* 2000/2048 仍在第 0 页 */
-    CHECK_EQ_I(TaskStore_Page(2u), 61);                /* 4000 → 第 1 页 */
+    CHECK_EQ_I(TaskStore_Page(1u), 59);                /* 2000/2048 仍在第 0 页 */
+    CHECK_EQ_I(TaskStore_Page(2u), 60);                /* 4000 → 第 1 页 */
     CHECK_EQ_I(img_tag(TaskStore_Image(1u)), 0x6100u);
     CHECK_EQ_I(img_tag(TaskStore_Image(2u)), 0x6200u);
     snap_all();
@@ -813,6 +840,54 @@ int main(void)
     CHECK_EQ_I(TaskStore_AutoSlot(), TASK_STORE_NO_SLOT);
     CHECK_EQ_I(dir_u16(dir_page() + 4U), 0xFFFF);     /* 目录页整页是擦除态 */
     CHECK(page_all_ff(63u));
+
+    /* ===============================================================
+     * ⑭ Flash 上锁语义（复位后 FLASH->CR.LOCK = 1，与真板一致）
+     *    2026-10-04 真板 Bug 的回归点：task_store.c 漏 HAL_FLASH_Unlock()，
+     *    上锁时写 CR 被硬件忽略（SR 不置错、STRT 没被接受）⇒ ts_block_erase()
+     *    "成功返回"却一页没擦 ⇒ E_FLASH ⇒ 上位机看到「提交任务被车拒绝：参数错」。
+     * =============================================================== */
+    host_flash_reset();
+    CHECK_EQ_I(host_flash_locked(), 1);                /* 复位值就是上锁 */
+    TaskStore_Init();
+    CHECK_EQ_I(put_slot(3u, 40u, 0xD000u, 0u, "lock", 4u, 0u), TASK_STORE_OK);
+    CHECK_EQ_I(TaskStore_Present(3u), 1);
+    CHECK_EQ_I(img_tag(TaskStore_Image(3u)), 0xD000);
+    CHECK_EQ_I(host_flash_locked(), 1);                /* 落盘后要自己锁回去 */
+
+    /* 上锁时手写 CR 擦页必须被忽略：页内容一个字都不许变；解锁后同一个请求才真擦得掉 */
+    memcpy(dir_page_w(), "MARK", 4u);
+    CHECK_EQ_I(host_flash_try_erase_page(DIR_PAGE), 0);      /* 上锁 ⇒ 擦不动 */
+    CHECK(memcmp(dir_page(), "MARK", 4u) == 0);
+    host_flash_unlock();
+    CHECK_EQ_I(host_flash_try_erase_page(DIR_PAGE), 1);      /* 解锁 ⇒ 真擦掉 */
+    CHECK_EQ_I(dir_page()[0], 0xFF);
+    host_flash_lock();
+
+    /* ===============================================================
+     * ⑮ 「别擦掉固件自己」：擦除目标公式错位的真机事故回归
+     *    真板 2026-10-04 实测：硬件按 **4KB 块**擦，块号 = PNB，块地址 =
+     *    0x08000000 + PNB×0x1000，BKER 被忽略。老代码却写 PNB = 页号 - 32：
+     *      擦"页 59" ⇒ PNB 27 ⇒ 块 27 = 页 54/55（App 的字体/数据页）
+     *      擦"页 60" ⇒ PNB 28 ⇒ 块 28 = 页 56/57（页 56 是 App 镜像的最后一页）
+     *    ⇒ 上位机一提交任务，App 自己立刻 HardFault（PC 0x0800FA90 / 0x0800127A）。
+     *    新代码用块号 = 页号/2（存储区只占块 29/30 = 页 58..61），所以这里把块
+     *    27/28 全刷成一个假"固件镜像"字节，Commit/Erase 之后必须一个字节都不变。
+     * =============================================================== */
+    host_flash_reset();
+    TaskStore_Init();
+    for (i = (int)FW_PAGE0; i <= (int)FW_PAGE1; i++) {
+        memset(host_flash_page((uint32_t)i), 0xA5, 2048U);   /* 冒充固件镜像 */
+    }
+    CHECK_EQ_I(put_slot(1u, 40u, 0xE000u, 0u, "fw", 2u, 0u), TASK_STORE_OK);
+    for (i = (int)FW_PAGE0; i <= (int)FW_PAGE1; i++) {
+        CHECK(page_all((uint32_t)i, 0xA5));                  /* 固件页没被擦 */
+    }
+    CHECK_EQ_I(img_tag(TaskStore_Image(1u)), 0xE000u);       /* 而任务确实存进去了 */
+    CHECK_EQ_I(TaskStore_Erase(1u), TASK_STORE_OK);          /* 删任务同样不碰固件页 */
+    for (i = (int)FW_PAGE0; i <= (int)FW_PAGE1; i++) {
+        CHECK(page_all((uint32_t)i, 0xA5));
+    }
 
     return T_SUMMARY();
 }

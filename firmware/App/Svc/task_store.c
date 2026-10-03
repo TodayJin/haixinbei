@@ -1,6 +1,6 @@
 /**
  * @file  task_store.c
- * @brief  任务程序的 Flash 持久层：页 59 目录 + 页 60..62 程序区（见 task_store.h）
+ * @brief  任务程序的 Flash 持久层：页 58 目录 + 页 59..61 程序区（见 task_store.h）
  *
  * 设计要点（为什么长这样）：
  *   1. 目录页 + 紧凑程序区，而不是"一任务一页"：用户的页预算是 4 页 8KB / 最多 8 个任务
@@ -9,12 +9,15 @@
  *      整片空（自愈：下一次 Commit 把目录整页写回去）。
  *   3. 程序区里的镜像**逐字节就是 task_prog 的线上格式**，回读时按 off 直接指 Flash
  *      （XIP），没有第二份拷贝、没有第二种编码。
- *   4. 擦写顺序：**先擦目录页** ⇒ 掉电中断时车上看到的是"没有任务"，而不是
+ *   4. 擦写顺序：**先擦目录页所在块** ⇒ 掉电中断时车上看到的是"没有任务"，而不是
  *      "半个新程序配着旧偏移"。只有前者是安全的（跑错轨迹比不跑更糟）。
- *   5. 全片重排（写 1 个任务 = 擦 4 页 + 写 8KB）：这是"程序区紧凑摆放"的必然代价。
- *      擦一页 CPU 停几十毫秒 ⇒ 与 nvram.c 同一条铁律：**运动中绝不擦写**（判据见
+ *   5. 全片重排（写 1 个任务 = 擦 2 个 4KB 块 + 写 8KB）：这是"程序区紧凑摆放"的必然代价。
+ *      擦一个块 CPU 停几十毫秒 ⇒ 与 nvram.c 同一条铁律：**运动中绝不擦写**（判据见
  *      store_busy()）。
- *   6. 擦除本板会静默失败（HAL_FLASHEx_Erase / FLASH_PageErase 在此板不可用，见
+ *   6. **本板的擦除粒度是 4KB 块，不是 2KB 页**（2026-10-04 真板实测，见 ts_block_erase()）：
+ *      块号 = 页号 / 2，块地址 = 0x08000000 + 块号 × 4096，BKER 被硬件忽略。布局必须整体
+ *      按块划（见 task_store.h 的页分配注释），否则会擦到固件自己的页。
+ *   7. 擦除本板会静默失败（HAL_FLASHEx_Erase / FLASH_PageErase 在此板不可用，见
  *      nvram.c:294-296 的铁律注释），所以这里手写 FLASH->CR 序列，并且在编程前
  *      **逐页确认真的擦回 0xFFFFFFFF**，写后再 memcmp 回读。
  */
@@ -29,9 +32,9 @@
 #include "task_prog.h"
 #include "task_run.h"
 
-/* ---- Flash 物理参数（G474RB：单 bank 2KB × 64 页；bank 内页号 = 绝对页号 - 32） ---- */
+/* ---- Flash 物理参数（G474RB：单 bank 128KB = 32 个 4KB 擦除块） ---- */
 #define TS_FLASH_BASE       0x08000000UL
-#define TS_BANK_SHIFT       32UL
+#define TS_BLOCK_SIZE       4096UL      /* 硬件擦除粒度；块号 = 页号 / 2 */
 #define TS_ERASE_TIMEOUT_MS 50U
 
 /* ---- 目录页记录 / 镜像（与 task_store.h 里的字节布局一一对应） ---- */
@@ -60,6 +63,10 @@ typedef char ts_dir_hdr_ck[((TASK_STORE_DIR_HDR_LEN + TASK_STORE_SLOTS * TASK_ST
                             sizeof(ts_dir_t)) ? 1 : -1];
 typedef char ts_dir_dw_ck[((sizeof(ts_dir_t) % 8u) == 0u) ? 1 : -1];
 typedef char ts_prog_dw_ck[((TASK_STORE_PROG_BYTES % 8u) == 0u) ? 1 : -1];
+/* 布局铁律（按 4KB 块划，见 task_store.h）：目录页 58 + 程序页 59/60/61 ⇒ 只擦块 29/30。
+ * 谁要挪这几页，必须先想清楚"新块里还有谁"（固件镜像在块 27/28、nvram 在块 31）。 */
+typedef char ts_layout_ck[((TASK_STORE_DIR_PAGE == 58u) && (TASK_STORE_PROG_PAGE0 == 59u) &&
+                           ((TASK_STORE_PROG_PAGE0 + TASK_STORE_PROG_PAGES - 1u) == 61u)) ? 1 : -1];
 
 /* ---- 目录缓存（上电扫描一次，之后由本模块自己维护） ---- */
 static uint8_t  s_present[TASK_STORE_SLOTS];
@@ -90,12 +97,21 @@ static const uint8_t *ts_prog(void)
     return (const uint8_t *)ts_page_addr(TASK_STORE_PROG_PAGE0);
 }
 
-/* 擦一页：照抄 firmware/App/Svc/nvram.c 的手写 CR 序列（HAL_FLASHEx_Erase 在本板静默失败）。
- * 返回 1 = 没看到错误标志（真正的"擦干净了"由调用方按页首字确认）。 */
-static uint8_t ts_page_erase(uint32_t page)
+/* 擦一个 4KB 块。block = 页号 / 2（本板的物理事实，见下）。
+ *
+ * 2026-10-04 真板实测（TEMP-TSDBG 探针 + 逐页 dump，见 memory/SESSIONS.md）：
+ *   - 擦除粒度是 **4KB 块**：写 PNB=29/30/31 分别擦掉 0x0801D000 / 0x0801E000 / 0x0801F000
+ *     各 4KB（每块 = 相邻两个 2KB 页），PNB 0..31 全部有效；
+ *   - **BKER 被硬件忽略**（置 1 也仍是同一个块），这里保留置位以贴近实测过的配置；
+ *   - STRT 是"写 1 触发、硬件自己清"的位，不必手动清；
+ *   - 原来那句 `page - 32`（把它当成"bank 内页号"）是**真机上把固件擦坏的根因**：
+ *     "页 59" 实发 PNB=27 ⇒ 擦掉 0x0801B000 = 页 54/55（App 的字体/数据），
+ *     "页 60" ⇒ PNB=28 ⇒ 页 56/57（App 最后一页）⇒ 擦完 App 立刻 HardFault。
+ * 返回 1 = 没看到错误标志；"真的擦干净了"由调用方按页首字确认。 */
+static uint8_t ts_block_erase(uint32_t block)
 {
     uint8_t  dcache = (READ_BIT(FLASH->ACR, FLASH_ACR_DCEN) != 0U) ? 1U : 0U;
-    uint32_t bank_page = page - TS_BANK_SHIFT;
+    uint32_t addr = (uint32_t)(TS_FLASH_BASE + (block * TS_BLOCK_SIZE));
     uint32_t t0;
 
     if (dcache != 0U) {
@@ -104,13 +120,20 @@ static uint8_t ts_page_erase(uint32_t page)
     __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
     CLEAR_BIT(FLASH->CR, FLASH_CR_PG | FLASH_CR_PER | FLASH_CR_PNB | FLASH_CR_BKER |
                          FLASH_CR_MER1 | FLASH_CR_MER2);
-    SET_BIT(FLASH->CR, FLASH_CR_BKER);                                   /* 页号 ≥ 32 ⇒ BKER=1 */
-    MODIFY_REG(FLASH->CR, FLASH_CR_PNB, (bank_page << FLASH_CR_PNB_Pos));
+    SET_BIT(FLASH->CR, FLASH_CR_BKER);                                   /* 被硬件忽略，保留原样 */
+    MODIFY_REG(FLASH->CR, FLASH_CR_PNB, (block << FLASH_CR_PNB_Pos));
     SET_BIT(FLASH->CR, FLASH_CR_PER);
     SET_BIT(FLASH->CR, FLASH_CR_STRT);
 
+    /* 等擦完。擦除期间 CPU 取指会被 Flash 总线拦住，所以 BSY 轮询本身就是"等硬件"；
+     * 但为了不依赖 BSY 的采样时机（写完 STRT 立刻读 SR 有可能还看不到 BSY），
+     * 这里再按**目标块首字**确认一次：只有真读到 0xFFFFFFFF 才算擦完（超时兜底）。 */
     t0 = HAL_GetTick();
-    while ((FLASH->SR & FLASH_SR_BSY) != 0U) {
+    for (;;) {
+        if ((FLASH->SR & FLASH_SR_BSY) == 0U &&
+            (*(volatile uint32_t *)(uintptr_t)addr == 0xFFFFFFFFUL)) {
+            break;
+        }
         if ((uint32_t)(HAL_GetTick() - t0) > TS_ERASE_TIMEOUT_MS) {
             break;
         }
@@ -317,24 +340,39 @@ static int store_build(uint8_t target, const uint8_t *img, uint16_t len, uint16_
     return TASK_STORE_OK;
 }
 
-/* 把 s_new / s_prog 写进 Flash（先擦目录页 → 再擦程序区 → 编程 → 回读复查） */
-static int store_flash_write(void)
+/* 把 s_new / s_prog 写进 Flash（先擦目录页所在块 → 再擦程序区所在块 → 编程 → 回读复查）。
+ * 调用前 Flash 必须已解锁，见下面的 store_flash_write()。 */
+static int store_flash_write_locked(void)
 {
     uint32_t prog_addr = (uint32_t)ts_page_addr(TASK_STORE_PROG_PAGE0);
     uint32_t dir_addr  = (uint32_t)ts_page_addr(TASK_STORE_DIR_PAGE);
+    uint32_t blk[3];
+    uint32_t nb = 0U;
     uint32_t i;
 
-    /* 先擦目录页：中断在这里 = 车上"没有任务"（安全） */
-    if (ts_page_erase(TASK_STORE_DIR_PAGE) == 0U) {
-        return TASK_STORE_E_FLASH;
+    /* 硬件按 4KB 块擦，所以"要擦哪些页"要换算成"要擦哪些块"（块号 = 页号 / 2），
+     * 同一块只擦一次 —— 每多一次块擦就多停几十毫秒（见文件头第 5 条）。
+     * 先目录页所在块：掉电中断在这里 = 车上"没有任务"（安全侧）。 */
+    blk[nb++] = TASK_STORE_DIR_PAGE / 2U;
+    for (i = 0U; (i < TASK_STORE_PROG_PAGES) && (nb < (sizeof(blk) / sizeof(blk[0]))); i++) {
+        uint32_t b = (TASK_STORE_PROG_PAGE0 + i) / 2U;
+        uint32_t k;
+        for (k = 0U; k < nb; k++) {
+            if (blk[k] == b) {
+                break;
+            }
+        }
+        if (k == nb) {
+            blk[nb++] = b;
+        }
     }
-    for (i = 0U; i < TASK_STORE_PROG_PAGES; i++) {
-        if (ts_page_erase(TASK_STORE_PROG_PAGE0 + i) == 0U) {
+    for (i = 0U; i < nb; i++) {
+        if (ts_block_erase(blk[i]) == 0U) {
             return TASK_STORE_E_FLASH;
         }
     }
 
-    /* 擦除静默失败（本板 PNB 越界时不置错误标志）只剩这一道防线：
+    /* 擦除静默失败（上锁 / 块号不对时都不置错误标志）只剩这一道防线：
      * 每页首字必须真的回到 0xFFFFFFFF，否则宁可不写。 */
     if (*(volatile uint32_t *)ts_page_addr(TASK_STORE_DIR_PAGE) != 0xFFFFFFFFUL) {
         return TASK_STORE_E_FLASH;
@@ -363,6 +401,31 @@ static int store_flash_write(void)
     s_dir = s_new;
     cache_load(&s_dir);
     return TASK_STORE_OK;
+}
+
+/**
+ * 落盘入口：**必须自己解锁 Flash**。
+ *
+ * 2026-10-04 真板定位：本模块原来直接写 FLASH->CR 却没解锁 —— 上电复位后
+ * FLASH->CR.LOCK = 1，上锁时硬件**忽略**对 CR 的写（SR 不置错、STRT 根本没被
+ * 接受），于是 ts_block_erase() 一路"成功返回"、页却还是老内容，只在后面那一道
+ * "页首必须 0xFFFFFFFF"的检查里翻车 ⇒ E_FLASH ⇒ 上位机看到「参数错」。
+ * nvram.c:355 一直是先 HAL_FLASH_Unlock() 再动的，这里照做。
+ *
+ * ⚠️ 同一次真板定位还查出第二个、更凶的 Bug：擦除目标公式写错（`page - 32`），
+ * 真机上是把**固件自己的页 54/55/56** 擦了（App 立刻 HardFault）。根因与修法见
+ * ts_block_erase() 的注释；上位机看到的现象同样是「参数错」。
+ */
+static int store_flash_write(void)
+{
+    int rc;
+
+    if (HAL_FLASH_Unlock() != HAL_OK) {
+        return TASK_STORE_E_FLASH;
+    }
+    rc = store_flash_write_locked();
+    (void)HAL_FLASH_Lock();
+    return rc;
 }
 
 /* ------------------------------------------------------------------ 公共 API */
@@ -407,11 +470,12 @@ uint8_t TaskStore_Page(uint8_t slot)
     return (uint8_t)(TASK_STORE_PROG_PAGE0 + (s_off[slot] / TASK_STORE_PAGE_SIZE));
 }
 
-uint8_t TaskStore_BankPage(uint8_t slot)
+uint8_t TaskStore_Block(uint8_t slot)
 {
     uint8_t page = TaskStore_Page(slot);
 
-    return (page == TASK_STORE_NO_SLOT) ? TASK_STORE_NO_SLOT : (uint8_t)(page - TS_BANK_SHIFT);
+    /* 块号 = 页号 / 2：本板的擦除粒度是 4KB，不是 2KB 页（见 ts_block_erase） */
+    return (page == TASK_STORE_NO_SLOT) ? TASK_STORE_NO_SLOT : (uint8_t)(page / 2u);
 }
 
 uint8_t TaskStore_Name(uint8_t slot, char *out, uint8_t cap)
