@@ -12,6 +12,41 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-03 — IMU 页 3D 车模型用纯手写 CSS 3D（preserve-3d 叠长方体），不引 three.js、不用 Canvas 等轴测、不加模型文件
+选择：IMU 页 3D 车模型用纯手写 CSS 3D（preserve-3d 叠长方体），不引 three.js、不用 Canvas 等轴测、不加模型文件
+放弃：three.js——多一个运行时依赖且仍然截图不了；Canvas 自己画等轴测——要手写投影，还丢了 CSS 3D 的透视/背面剔除
+因为：本沙箱跑不了浏览器（Chrome/Edge 无头都无输出），3D 是唯一没法像素自证的东西，所以把能自证的部分最大化：符号/相机/罗盘全放纯函数 lib/attitude3d.ts 用 vitest 钉死，DOM 层（components/Car3D.tsx）只拼盒子
+
+## 2026-10-03 — 上位机 3D 模型和读数都用遥测原始帧，不套固件给 OLED 用的 M1..M8 轴序交换
+选择：上位机 3D 模型和读数都用遥测原始帧，不套固件给 OLED 用的 M1..M8 轴序交换
+放弃：直接复用 app_ui.c:681 的 gyro_angles()（*roll=-pitch_x10、*pitch=-roll_x10）——把 OLED 的经验值当成物理约定
+因为：那八档（app_ui.c s_gyro_axis_mode，默认 M3）是用户 m02505 对着 OLED 视角经验挑的，跟着它走会出现"数字说横滚、车却在点头"；真车方向不对只改 lib/attitude3d.ts 里一行符号
+
+## 2026-10-03 — Sparkline 的高度改由 className 决定（viewBox 的 height 只是坐标刻度），并新增 zeroScale 让纵轴以 0 为中心
+选择：Sparkline 的高度改由 className 决定（viewBox 的 height 只是坐标刻度），并新增 zeroScale 让纵轴以 0 为中心
+放弃：继续用 height 数字当 CSS 高度（改不了渲染尺寸），以及给波形页的 uPlot 换一套缩放——波形页不动
+因为：姿态角用自动缩放时，0 附近几度的抖动会被拉满整屏，看着像车在剧烈晃；高度靠类名给才能让三张波形卡等高
+
+## 2026-10-03 — IMU 页的「朝向控制」直接用已有 `/api/drive {mode:"base_turn", base:0, turn:度}`，不新增固件命令、不实现 CMD_CALIB_GYRO
+选择：IMU 页的「朝向控制」直接用已有 `/api/drive {mode:"base_turn", base:0, turn:度}`，不新增固件命令、不实现 CMD_CALIB_GYRO
+放弃：实现 CMD_CALIB_GYRO(0x05)/新增陀螺命令：固件那三个 case 明确回 ST_NOT_READY，桥的 CMD_NAMES 里也没有 gyro_cal/gyro_zero/gyro_turn（只有 mock 认），做了也是假成功
+因为：固件 `firmware/App/Svc/host_ext.c` HostExt_DriveSet 的 mode 2 已经做完这套语义：`s_base_yaw = Yaw; Motion_SetSpeed(a); Motion_SetMode(MOTION_GYRO); GyroControl_SetTargetAngle(NormalizeAngle(s_base_yaw + b))`，base=0 就是原地按角度环转到并保持该朝向；而 yaw 是 JY61P 模块自己融合的、MCU 只读，MCU 侧能动的只有 Gyro_Z 零偏
+
+## 2026-10-03 — 操控页的转向语义从「转向 mm/s 直给 turn」改成「转向角速度 °/s，前端每 100ms 积分成目标航向偏移（最多 ±540°）再下发」
+选择：操控页的转向语义从「转向 mm/s 直给 turn」改成「转向角速度 °/s，前端每 100ms 积分成目标航向偏移（最多 ±540°）再下发」
+放弃：保留 mm/s 转向（语义错）或把 turn 硬钳到 ±30°（丢功能）
+因为：固件/仿真的 `b` 单位是**度**（相对进入模式时的航向），直接给一个 mm/s 数值等于命令一个固定航向（按一下 A 变成转到 500°≈140°），不是柔和转向
+
+## 2026-10-03 — 键盘 A（左转）发**正** turn；`keys.ts` 用 `turnRateOf(left, right)` → 左 = +
+选择：键盘 A（左转）发**正** turn；`keys.ts` 用 `turnRateOf(left, right)` → 左 = +
+放弃：沿用旧符号并在桥里翻一下（会把真车/仿真两条路的口径搞岔）
+因为：固件 `gyro_control.c` 注释与 `GyroControl_TurnLeft` 都是「偏航角增大 = 向左」，仿真 `sim.py` 也是 b>0 使 yaw 增大；原先 `(right - left)` 把左转发成了负值（实际右转）
+
+## 2026-10-03 — 仿真桥 `sim.py` 补上角度环闭环（P 律 + 限幅 120°/s + 死区 0.6°），且基准航向只在**进入** base 模式时锁存
+选择：仿真桥 `sim.py` 补上角度环闭环（P 律 + 限幅 120°/s + 死区 0.6°），且基准航向只在**进入** base 模式时锁存
+放弃：把角度环留到真车再验（用户没有硬件可随时试，且仿真与固件行为会长期不一致）
+因为：原先 mode 2 只锁存 yaw_ref 不闭环，仿真里朝向指令看起来毫无作用（端到端没法验证）；每帧重锁基准会让桥 200ms 的保活帧把目标拖着跟车跑，角度环永远追不上。锁存规则与固件 `if (s_mode != HOST_DRIVE_BASE) s_base_yaw = Yaw;` 完全对齐
+
 ## 2026-10-03 — 操控页只发 `base_turn`/`off` 两种模式，且只在「指令变化」时 POST 一次 `/api/drive`
 选择：操控页只发 `base_turn`/`off` 两种模式，且只在「指令变化」时 POST 一次 `/api/drive`
 放弃：原来的三种驾驶模式（wheels 左右轮速直给 / base_turn / trace）、3×3 快捷动作按钮、预设速度档全删

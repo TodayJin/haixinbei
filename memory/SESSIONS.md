@@ -14,6 +14,24 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：IMU 页按用户 m17387/m17401 的要求换成「手写 CSS 3D 车模型 + 偏航/俯仰/横滚三张波形」，朝向滑块保留原样。验证：npx tsc --noEmit 干净；npm test 12 文件 78 passed（含新 lib/attitude3d.test.ts 10 项）；pytest 64 passed；npm run build 干净（dist/assets/index-DOmEJl8X.js 298.60 kB/gzip 102.09、index-CEiZztkN.css 35.15 kB）；SSR out/console/ssr/imu.html 含车姿态（3D）/三张波形卡/car3d-scene + 66 个 car3d-face + 4 个 rosa 刻度标签，无 NaN/undefined，旧 AttitudeGauge 已消失。变异验证：把 carTransform 的偏航符号取反 ⇒ 10 项里 3 项失败；把 stageTransform 的 el 符号取反 ⇒ 10 项里 2 项失败；还原后全绿。commit 7adbdaf。
+未完成：3D 的车长相本机无法像素自证（headless Chrome 仍然不产出 PNG），只能靠用户肉眼；目标轮仍 paused（revision 3）
+下一步：真车到手后核对三轴方向（+偏航=左转、+俯仰=抬头、+横滚=向左倾），哪个反了就改 web/src/lib/attitude3d.ts 里一行符号
+
+## 2026-10-03
+完成：IMU 页「陀螺操作」三个按钮换成「朝向控制」一个 −180°..+180° 滑块（实时下发 `{mode:"base_turn", base:0, turn:offset}`，100ms 节流 + 尾部补一帧，松手保持，「回到 0°」/「交还车上任务」）；操控页转向改成 °/s 角速度（滑块 0..180）+ 前端积分成偏移（±540°），A 的符号修正为左转；Control 页「陀螺校准」死按钮删除；`tools/console/bridge/sim.py` 补角度环闭环 + 基准只在进入时锁存；新增 `web/src/lib/heading.ts`（+13 项用例）与 `tests/test_sim.py` 的角度环用例。提交 `cdff422`（15 files, +891/-345，含 dist 重建与 docs/API.md、web/README.md）。
+未完成：真车（串口/烧过的固件）上没验过：角度环的 Kp/限幅只调了仿真常数（ANGLE_KP_RATE 1.5、RATE_MAX 120、DV_PER_RATE 13.4），真车参数要等硬件接上；用户 m17036「校准实际上是干啥的」还没答（已准备好解释：静止采角速度零偏 + 参考朝向重置；0x05 未实现）
+下一步：把「校准 = 零偏 + 参考朝向」的解释交给用户，并请他上真车试一次朝向滑块（转向打死点、松手保持、按空格交还）
+
+## 2026-10-03
+完成：vitest 11 files / 68 passed（含 SSR 预览重写 9 页、喂 82 帧遥测）；pytest 64 passed（+1 新 sim 用例）；`npm run build` 干净 → `tools/console/web/dist/assets/index-SkZbUweK.js`（295.70 kB / gzip 100.81）+ `index-DME16mg_.css`（32.70 kB）；对 8793 仿真桥端到端：base_turn base=0 turn=+30 后 yaw 从 −51.00 收敛到 −21.00（最小偏差 0.10°、末点 err −0.4），保持 2s 不漂、改成 turn=−30 收敛到 −81.00（末点 err −0.1），base=400 时边走边回正（vl 333 / vr 467），off 后 `drive = {mode:0, enabled:false}`；`mode:9` 被桥拒（驾驶模式不对）。变异验证：sim.py 的「每帧重锁基准」和「去掉角度环」两处变异都被新用例抓住，还原后哈希一致。
+下一步：无（本轮验证已闭环）
+
+## 2026-10-03
+完成：踩坑记录：用 Python 脚本改仓库文件做变异验证时，`pathlib.write_text` 在 Windows 会把 LF 写成 CRLF，`sim.py` 的 diff 会从 51 行炸成 460/411 行；改回按字节 `read_bytes`/`write_bytes` 后 diff 恢复 51/2。
+下一步：以后 `out/_mutate_*.py` 一律按字节读写
+
+## 2026-10-03
 完成：操控页改造完成并提交 8b4bc1a：新建 `tools/console/web/src/lib/keys.ts`（WASD/方向键→角色的纯函数映射 + `keyId`/`keyRoleById`/`isTypingTarget`/`rolesToDrive`），`tools/console/web/src/pages/Drive.tsx` 整体重写为键盘操控（只在指令变化时 POST `/api/drive`，失焦/切页/松键立刻交还 off），删掉三模式/快捷动作/预设档与 `settings.drivePresets`。验证：vitest 55 passed（+`keys.test.ts` 11 项）、pytest 63 passed、固件主机 通过 11/失败 0、`npm run build` 干净（index-Acbq5qec.js）；变异（翻转 A/D 转向符号）⇒ keys.test.ts 5 项立刻失败，还原后全过；对 8793 仿真桥打页面同款 POST（base_turn base=600 turn=-500）⇒ ACK OK、遥测 flags.host_drive=true、mode=2，off 后 mode=0/enabled=false。
 未完成：真实键盘手感（按住/松开的即时性、失焦兜底、点过滑块后 WASD 还能不能开车）只能由用户在有浏览器的机器上点；真车只读链路仍待硬件；目标轮仍 paused（revision 3）。
 下一步：等用户 Ctrl+F5 后在操控页按 W/A/S/D 与 W+A、A+D 核对；若要继续开发，需用户先在界面上 resume 目标轮。
@@ -1147,24 +1165,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：CubeMX 三项待用户核对；电源设计待用户完成
 下一步：等用户电源设计来复核，或出布局分区草图/走线宽度/DRV 散热估算
 
-## 2026-09-14
-完成：用户拍板主控用 **STM32G474RBT6**。已把文档改为该型号：第 0 节约束表、系统框图、BOM(含 C529413)、5.1 节重写为「主控已定 G474RBT6」并列出够用性与约 3 个富余脚。
-未完成：电源设计待用户完成；CubeMX 三项待确认
-下一步：引脚表按 G474RBT6 定稿；等用户拿电源设计来复核
-
-## 2026-09-14
-完成：补主控选型细节：查证 **STM32G474RBT6 = 128KB Flash + 128KB RAM（96KB SRAM + 32KB CCM）、LQFP64、52 I/O**（立创 C529413 参数字段为 128KB/128KB），与 G431RBT6 同封装同引脚但 RAM 是 4 倍 → 是「LQFP64 + 大 RAM」的甜点，避免了非升 LQFP100 不可的结论。注意立创该型号多为无现货可订货。已把该对比补进文档 5.1。
-未完成：主控型号未最终确认（G474RBT6 / G474RET6 / G431RBT6 / LQFP100 选项）；电源设计待用户完成
-下一步：用户确认 G474RBT6 后重排引脚表并标出富余脚（52 I/O 对约 49 用量）
-
-## 2026-09-14
-完成：回答主控够用性并补文档 5.1：G431 定时器(含 TIM4)与通信够；引脚 LQFP64 约 51 GPIO、本设计用 47~49，几乎无余量；32KB RAM 比引脚更紧。查证 **G431VBT6 = 128KB Flash / 32KB RAM（LQFP100，内存与 G431RBT6 完全相同，只多引脚）；G431 全系最大 128KB Flash**；要更多内存须 G474(512K/128K)。已在文档 5.1 加 LQFP100 选项对比行。
-未完成：主控封装未定（LQFP64 vs LQFP100）；PE0/PE1 是否在 LQFP64 引出待 CubeMX 确认；电源设计待用户完成
-下一步：用户定封装后重排引脚表并标出富余脚
-
-## 2026-09-14
-完成：核对 STM32G431RBT6 是否够用：定时器确认够（G431 共 10 个：TIM1/8 高级、TIM2 32位、TIM3/4、TIM15/16/17、TIM6/7，含 TIM4）；通信（I2C1/2、SPI2、USART3、UART4、LPUART1）够。**引脚是瓶颈**：LQFP64 约 51 GPIO，本设计用掉约 47~49，几乎无余量。关键事实：**G431RB 与 G474RE 同为 LQFP64，引脚数相同**，换 G474 不多引脚；要余量须 LQFP100。**32KB RAM 是比引脚更大的风险**。已把该结论写入文档 5.1 节。
-未完成：PE0/PE1 是否在 LQFP64 引出未最终确认（待 CubeMX）
-下一步：用户定 LQFP64(G431RBT6) 还是 LQFP100；确认后再定引脚并复核
-
-> 更早的会话条目已归档到 164 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 168 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
