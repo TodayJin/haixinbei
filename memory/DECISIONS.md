@@ -12,6 +12,26 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-03 — 遥测 TELEM[27](state_id) 与 TELEM2[51](task_id) 都用「解释器在跑」TaskRun_IsRunning() 作判据，没在跑双双 0xFF
+选择：遥测 TELEM[27](state_id) 与 TELEM2[51](task_id) 都用「解释器在跑」TaskRun_IsRunning() 作判据，没在跑双双 0xFF
+放弃：曾用 TaskRun_Loaded()（载入即算），需要在上位机里靠 0x69 状态帧的 running 字节自行消歧，仿真车没有 loaded 概念
+因为：任务跑完 END 或被 STOP 后还报旧状态号/任务号会误导上位机；而且仿真车只认 running，改固件两行就能让桥/仿真/固件同一口径
+
+## 2026-10-03 — 仿真车与假后端复刻固件的擦写守卫：解释器在跑时 T_TASK_COMMIT / DEL / RUN 回 ST_BUSY，分片 PUT 不受限
+选择：仿真车与假后端复刻固件的擦写守卫：解释器在跑时 T_TASK_COMMIT / DEL / RUN 回 ST_BUSY，分片 PUT 不受限
+放弃：仿真车原先无守卫（D2 验收 FAIL 才暴露），假后端原先还会顺手把 running 置 false
+因为：擦一页会把 CPU 按住几十毫秒、正在跑的控制环失控；仿真车若「悄悄帮你停掉再写/删」，上位机练熟的操作上车就被拒，安全规则只在真车上成立等于没测
+
+## 2026-10-03 — 删掉内置任务流程 firmware/App/Svc/renwu.c + renwu.h（32036+284 B）与解析它的 tools/renwu_states.py
+选择：删掉内置任务流程 firmware/App/Svc/renwu.c + renwu.h（32036+284 B）与解析它的 tools/renwu_states.py
+放弃：保留当参考（原注释写着「保留不删当参考」）——git 历史随时可取，且留着会持续干扰重命名/静态检查
+因为：任务改由 Flash 程序 + 解释器驱动后它是死代码；-ffunction-sections --gc-sections 早就把它丢出镜像（删了尺寸几乎不变，text 114216→114232 的 +16B 来自 ST_UNSUPPORTED 分支文本）
+
+## 2026-10-03 — HP_TASK_SPEED(0x0304, 默认 6480) 保留，改作解释器启动时的基准速度（TaskRun_Start() 里 Motion_SetSpeed(host_param_get(...))）
+选择：HP_TASK_SPEED(0x0304, 默认 6480) 保留，改作解释器启动时的基准速度（TaskRun_Start() 里 Motion_SetSpeed(host_param_get(...))）
+放弃：把参数一并删除（会让上位机参数表少一项、老存档失去意义）
+因为：参数表改一处就能整体缩放比赛流程的便利值得保留；原先只有 renwu.c 用它，删掉 renwu.c 后不接上就变成无人使用的死参数
+
 ## 2026-10-03 — COMMIT 帧（T_TASK_COMMIT 0x63）载荷冻结为 u16 id + u16 len + u16 crc + u8 flags，可选再跟 u8 name_len + name（len==6 只认前三者、len==7 只带 flags、len>=8 带名字）
 选择：COMMIT 帧（T_TASK_COMMIT 0x63）载荷冻结为 u16 id + u16 len + u16 crc + u8 flags，可选再跟 u8 name_len + name（len==6 只认前三者、len==7 只带 flags、len>=8 带名字）
 放弃：否决「flags 放在名字之后」——任务帧是本次新加的，没有已部署的旧固件要兼容，干净布局更可读；旧布局（name_len 在 p[6]）在新固件里会被当 flags 读、随后因 name_len 越界回 ST_BAD_PARAM，不会静默写错

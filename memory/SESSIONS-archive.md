@@ -1,4 +1,16 @@
 ## 2026-09-15
+完成：用 ST 官方 STM32_open_pin_data 的 STM32G474R(B-C-E)Tx.xml（LQFP64）逐项核对了全部引脚分配。**发现并修正**：① PC5 无 I2C 功能→PC4/PC5 不能做 I2C2（I2C2_SDA 仅 PF0/PA8）；② LQFP64 不存在 PE0/PE1；③ 确认 BOOT0 = PB8，且 G4 的 I2C1 与 F1/F4 不同（PB6 不是 I2C1_SCL）。据此把 I2C1 改到 PA15/PB9、编码器2 改到 PB4/PB5(TIM3)、ALERT→PB12、状态灯→PA12，并更新文档 21+ 处。其余（TIM4/TIM3/TIM8/TIM1/USART3/UART4/LPUART1/SPI2/ADC/五向键）全部核对通过。
+未完成：驱动选型未定；灰度总线未定
+下一步：驱动定案后更新第3节/BOM/接口；可出布局分区草图
+
+## 2026-09-15
+完成：用户要求 SSH 连 100.71.106.46，实测**连不上**，根因不在 SSH：该地址是 **Tailscale 节点 `cai`（MagicDNS：cai.taila1d22f.ts.net）**，`tailscale status` 显示 `offline, last seen 14h ago`，因此 ICMP 全超时、TCP 22 不通、`ssh cai@...` 报 Connection timed out。本机 Tailscale 是好的（本机 100.85.86.10 desktop-9772765，在线）。**踩点：`tailscale` CLI 不在 PATH**，直接跑 `tailscale status` 会报 CommandNotFound、容易误判成「没装 Tailscale」；实际在 `C:\Program Files\Tailscale\tailscale.exe`。目标机登录用户名与 SSH 认证方式（密码/密钥）均未知，`~/.ssh/config` 里没有它的条目。
+未完成：目标机 `cai` 离线；无法验证 SSH 登录
+下一步：等 `cai` 上线后，先 `& "C:\Program Files\Tailscale\tailscale.exe" status` 确认 online，再按用户给的用户名/密钥连（必要时加进 ~/.ssh/config）
+
+> 更早的会话条目已归档到 175 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-15
 完成：讲了 INA226 接线，并**纠正两处会画错板的错误**（已同步改进文档）：① 封装 —— 立创页把 INA226AIDGSR 标成 VSSOP-8 是错的，TI 的 DGS 实际是 **10 脚 VSSOP**；正确引脚：1=A1、2=A0、3=ALERT(开漏)、4=SDA、5=SCL、6=VS(2.7–5.5V)、7=GND、8=VBUS(0–36V)、9=IN−、10=IN+。② 分流阻值 —— 满量程 ±81.92mV，`Rs ≤ 0.08192/Imax`；整机峰值按 ~10A 估，**由 10mΩ 改为 5mΩ**。接法：高侧，12V+ →[IN+]、Rs、[IN−]→负载，VBUS 接负载侧(IN−)，VS=3V3，SCL/SDA=PB8/PB9(4.7k↑)，ALERT=PB5(10k↑)，A0/A1→GND=地址 0x40；**IN± 必须四线 Kelvin 单独取样**，不能与大电流铜皮共用。
 未完成：驱动最终选型仍待拍板
 下一步：用户继续画图时可帮着核 INA226 校准寄存器/分流取值，或出布局分区草图

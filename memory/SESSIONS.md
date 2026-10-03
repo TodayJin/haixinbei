@@ -14,6 +14,15 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：第 2 轮收口：固件遥测两字段改按「解释器在跑」判 0xFF（host_link.c:443/:472，t_hostlink 新增 17c）、CMD_START_A/B/C 回 ST_UNSUPPORTED(0x08)+文本、CMD_STOP 真停解释器、COMMIT/DEL/RUN 三处 ST_BUSY 守卫；删 renwu.c/renwu.h/build.log/tools/renwu_states.py；桥 JSON renwu→task_id、前端三个「启动任务」按钮换成任务编排链接。验证：make text 114232/data 364/bss 26944、bin 114604（余 6228）、run_tests 13/0（t_hostlink 292 项）、check_static 52 文件 4 告警 0 error、pytest 102 passed、tsc exit 0、vitest 16 文件 155 项、8793 真 HTTP 验收 out/_round2_accept.py 全绿。
+未完成：真车链路未验；0x69 状态帧的 running 与遥测两字节在真板上的表现只在仿真里对过
+下一步：上车对拍：真板 + 真 Flash 页 59..62 走一遍烧写/回读/运行（当前真车只读链路待硬件）
+
+## 2026-10-03
+完成：真 HTTP 验收抓到并修掉仿真侧缺守卫的 bug：tools/console/bridge/sim.py 的 _task_commit/_task_del/_task_run 补 ST_BUSY 早退、web/mock/server.mjs 的 commit/delete/run 补 400 busy（并删掉「删正在跑的槽就顺手 running=false」）；新增 test_sim.py::test_flash_write_refused_while_task_running 与 test_api.py::test_task_write_refused_while_running，pytest 100→102 passed，重启 8770 mock（pwsh-2726）与 8793 桥（pwsh-2727）后验收脚本 D2 从 FAIL 变全绿。
+下一步：把这类「仿真必须复刻固件安全规则」的检查当成改协议时的固定动作
+
+## 2026-10-03
 完成：任务编排模块端到端打通并交付：车上存储 firmware/App/Svc/task_store.c（页 59 目录 + 页 60..62 程序区 6144 B、最多 8 条、单条 ≤2048 B）、解释器 task_run.c、协议帧 0x60..0x69 + 能力位 bit7、桥端点 /api/tasks*（真桥 tools/console/bridge/server.py + 假后端 web/mock/server.mjs 同契约）、页面 #/tasks（含「开机自启」开关 → COMMIT flags bit0）。验证：pytest 97 passed、npx tsc exit 0、vitest 16 文件/155 passed、pwsh -File firmware/test/run_tests.ps1 通过 13/失败 0（t_hostlink 272 项）、make -B -j8 后 text 114216/data 364/bss 26944、bin 114588 B（离 118K 余 6244 B）、tools/check_static.ps1 扫 53 文件 0 error；另外用 out/_task_flags_http.py 对 8793 的真 HTTP 桥跑 9 项检查（flags=1 落目录、flags=0 复位、回读逐字节、坏 CRC 被拒、删空目录）全绿。
 未完成：还没上车对拍（真板 + 真 Flash 页 59..62）；firmware/App/Svc/renwu.c 只留作参考、尚未删除。
 下一步：上板验证：烧写一个任务 → 掉电重启看是否按 TASK_STORE_FLAG_AUTO 自启；顺带用真车确认 0x61/0x65/0x69 的回帧节奏在 115200 下不掉帧。
@@ -1153,14 +1162,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：电源设计待用户完成复核；CubeMX 两项核对（循迹 ADC 通道、编码器脚 FT）
 下一步：可出布局分区草图 / 走线宽度 / AT8236 散热过孔估算
 
-## 2026-09-15
-完成：用 ST 官方 STM32_open_pin_data 的 STM32G474R(B-C-E)Tx.xml（LQFP64）逐项核对了全部引脚分配。**发现并修正**：① PC5 无 I2C 功能→PC4/PC5 不能做 I2C2（I2C2_SDA 仅 PF0/PA8）；② LQFP64 不存在 PE0/PE1；③ 确认 BOOT0 = PB8，且 G4 的 I2C1 与 F1/F4 不同（PB6 不是 I2C1_SCL）。据此把 I2C1 改到 PA15/PB9、编码器2 改到 PB4/PB5(TIM3)、ALERT→PB12、状态灯→PA12，并更新文档 21+ 处。其余（TIM4/TIM3/TIM8/TIM1/USART3/UART4/LPUART1/SPI2/ADC/五向键）全部核对通过。
-未完成：驱动选型未定；灰度总线未定
-下一步：驱动定案后更新第3节/BOM/接口；可出布局分区草图
-
-## 2026-09-15
-完成：用户要求 SSH 连 100.71.106.46，实测**连不上**，根因不在 SSH：该地址是 **Tailscale 节点 `cai`（MagicDNS：cai.taila1d22f.ts.net）**，`tailscale status` 显示 `offline, last seen 14h ago`，因此 ICMP 全超时、TCP 22 不通、`ssh cai@...` 报 Connection timed out。本机 Tailscale 是好的（本机 100.85.86.10 desktop-9772765，在线）。**踩点：`tailscale` CLI 不在 PATH**，直接跑 `tailscale status` 会报 CommandNotFound、容易误判成「没装 Tailscale」；实际在 `C:\Program Files\Tailscale\tailscale.exe`。目标机登录用户名与 SSH 认证方式（密码/密钥）均未知，`~/.ssh/config` 里没有它的条目。
-未完成：目标机 `cai` 离线；无法验证 SSH 登录
-下一步：等 `cai` 上线后，先 `& "C:\Program Files\Tailscale\tailscale.exe" status` 确认 online，再按用户给的用户名/密钥连（必要时加进 ~/.ssh/config）
-
-> 更早的会话条目已归档到 175 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 177 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
