@@ -12,6 +12,16 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-03 — 把「回放录制」做成真正可用的功能（设置页选 data/logs/rec_*.jsonl + 倍速播放），而不是把 replay 从契约里删掉
+选择：把「回放录制」做成真正可用的功能（设置页选 data/logs/rec_*.jsonl + 倍速播放），而不是把 replay 从契约里删掉
+放弃：从契约里删掉 replay（省事但丢掉已有能力，且 SSR/mock 已经把它当既有特性）
+因为：前端 LinkMode/api.connect/router 与桥 link.py 的 ReplayLink、main.py 的 --replay、server.py 的 _make_link 都已经支持 replay，只有设置页没接；用户要看波形复现，录了不能放等于白录
+
+## 2026-10-03 — 录制文件用 JSONL（data/logs/rec_%Y%m%d_%H%M%S.jsonl，逐行 {"n":"telem","src":…,"t_host":<绝对 epoch ms>}），回放按 t_host 重放
+选择：录制文件用 JSONL（data/logs/rec_%Y%m%d_%H%M%S.jsonl，逐行 {"n":"telem","src":…,"t_host":<绝对 epoch ms>}），回放按 t_host 重放
+放弃：CSV（docs/API.md 与 store 的提示文案曾写 CSV，已一并更正）
+因为：与 ReplayLink 既有读取约定一致，也便于回放时按原时间戳/倍速；CSV 需要额外解析且丢嵌套字段
+
 ## 2026-10-03 — 真车只读串口链路记为「待硬件」，软件侧不再继续追（用户明确选择「先放着，把这条记为待硬件」）
 选择：真车只读串口链路记为「待硬件」，软件侧不再继续追（用户明确选择「先放着，把这条记为待硬件」）
 放弃：保留两条现场恢复路径（杜邦线短接排针 pin5↔pin17 跑 out\_vcomloop.py 判定；USB-TTL 直连 U12 的 4=GND/5=PC0/6=PC1），否决了「改固件或换协议绕开串口」

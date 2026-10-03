@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：回放录制闭环做完并验证：设置页新增「回放录制」卡（文件下拉/倍速 0.25–8×/刷新/播放），桥新增 GET /api/recordings 与 /api/link/connect 的 replay/speed 转发，switch() 改成先建新链再停旧链（失败保留原链路）。修掉一个真 bug：tools/console/bridge/link.py 的 ReplayLink.poll() 绕回时写 self.t0=now_ms，而录制 jsonl 的 t_host 是绝对 epoch 毫秒 ⇒ 第二遍永远不出帧（波形放完就静止）；改成 self.t0 = now_ms - rows[0].t_host/speed。验证：pytest 51 passed（新增 test_recordings_and_replay 端到端 + test_replay_link.py 绕圈）、vitest 40 passed（新增 lib/replay.test.ts）、npm run build 干净、真仿真桥手测 connect replay speed=4 ⇒ frames_seen 57→122 且可切回 sim。提交 4d3a2d2。
+未完成：真车只读串口链路待硬件（用户选定「先放着」）；像素级截图在本机拿不到（Edge headless 各种模式都不出 PNG），以 out/console/ssr/ 的 SSR HTML 快照替代。
+下一步：用户机器上打开 http://127.0.0.1:8793（仿真桥在跑）按代看清单过一遍：控制页点「开始记录」→ 设置页「回放录制」选文件 + 倍速 → 播放，看波形/仪表是否连续循环。
+
+## 2026-10-03
 完成：参数闭环修好并提交 8c36b05：tools/console/bridge/state.py 的 param_set 只改桥缓存并按「与车上值是否相同」标脏、param_push 才真下发（T_PARAM_SET + 等 T_ACK/T_PARAM_REPORT，成功后写回 car_values 清脏）、param_reload 是唯一读回全表、param_defaults 只改本机；server.py 的 /api/params/push|defaults 透传 ids/keys 且保存预设时 keys 回填；tools/console/web/src/lib/store.ts 的 setParam 补上此前从未被调用的 api.paramSet。验证：pytest 48 passed、vitest 37 passed、npm run build 绿（dist/assets/index-DhY0ZJzb.js 285.88 kB）、out\_closeloop.py 打仿真桥 8 步全绿、store.test.ts 变异验证（删掉 paramSet 调用即 2 项失败）。
 未完成：①真车只读链路待硬件（排针 pin5/17 到 U12 的 5/6 脚连线，或 USB-TTL）；②像素级无头浏览器截图仍未成功（沙箱里 Chrome/Edge headless 失败），现以 out/console/ssr 下 9 份 SSR HTML 快照替代。
 下一步：用户给出新 COM 口后：python out\_linkprobe.py <COM> 115200 3 看板子 rx 是否 +3，再 python -m bridge.main --serial <COM> 接通真车只读链路。
@@ -1162,9 +1167,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：第 10 节待拍板点；原理图网络表未做
 下一步：用户确认 LDX-218 电压/舵机数量/接法后出原理图连接表
 
-## 2026-09-14
-完成：根据用户回复更新选型文档到 v0.2：无线不板载、改为外接无线串口下载器并预留 3 路串口（USART3 主用 + UART4 + LPUART1）；IMU 定为板载 ICM-42688-P(SPI2)；电机定为 JGB37-3865-520（12V、11PPR 霍尔 AB 相、XH2.54-6P、堵转约 2.5~3.5A）。新增每电机 6P 接法二选一（过板/只取编码器）与编码器 3.3V/5V 电平处理说明。
-未完成：第 10 节剩余待拍板点；原理图网络表/立创EDA 工程未做
-下一步：确认接法/循迹路数/驱动型号/编码器供电/舵机数量/板尺寸后出原理图连接表
-
-> 更早的会话条目已归档到 158 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 159 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
