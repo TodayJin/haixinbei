@@ -12,6 +12,21 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-03 — 管道对拍构建链真 App/Svc/nvram.c（`-DHOST_PIPE_REAL_NVRAM`），并用 `--flash/--dump-flash` 交换 Flash 页 63 的 2048B 镜像来模拟掉电重启
+选择：管道对拍构建链真 App/Svc/nvram.c（`-DHOST_PIPE_REAL_NVRAM`），并用 `--flash/--dump-flash` 交换 Flash 页 63 的 2048B 镜像来模拟掉电重启
+放弃：只靠 t_nvram.c 的模块级测试、或让管道构建继续用 host_appstub.c 的假 nvram_touch
+因为：需求要证的是「上位机点固化 → 落到车上的 Flash」，只有真协议字节 + 真 nvram.c 才能发现管道里的 "固化" 其实只是假桩计数器 ++
+
+## 2026-10-03 — 管道程序 EOF 收尾只把**已排队**的固化跑完（nvram_state()==DONE 或连续两拍 IDLE 就退出），不空转到 1.5s 防抖到期
+选择：管道程序 EOF 收尾只把**已排队**的固化跑完（nvram_state()==DONE 或连续两拍 IDLE 就退出），不空转到 1.5s 防抖到期
+放弃：EOF 后固定空转 1500ms 等固化写完
+因为：否则 nvram_poll 的 1.5s 自动防抖会替「固化」把记录写掉，用例就抓不住 "点了固化但没生效" —— 第一次变异验证（拿掉 host_ext.c:226 的 nvram_touch()）正是因此漏过
+
+## 2026-10-03 — 变异验证要还原被改的文件时，先用 Copy-Item 备份再拷回，绝不用 `git checkout -- <文件>`
+选择：变异验证要还原被改的文件时，先用 Copy-Item 备份再拷回，绝不用 `git checkout -- <文件>`
+放弃：用 `git checkout --` 把变异文件恢复成 HEAD 版本
+因为：它会连该文件**未提交**的整轮改动一起抹掉 —— 这次真的把 pipe_hostlink.c 的 nvram 改造整段抹掉了，只能重建并重跑全套验证
+
 ## 2026-10-03 — 把 firmware/test/stub/host_hal.c 的假 Flash 用 VirtualAlloc 真映射到 0x08000000（失败则退回 RAM 数组，并用 host_flash_uses_real_addr() 暴露），从而能在主机上测真 nvram.c
 选择：把 firmware/test/stub/host_hal.c 的假 Flash 用 VirtualAlloc 真映射到 0x08000000（失败则退回 RAM 数组，并用 host_flash_uses_real_addr() 暴露），从而能在主机上测真 nvram.c
 放弃：改 nvram.c 的读写走 HAL/宏（动产品代码，且失去'真代码原样被测'的意义），或在测试里复制一份 nvram.c 改地址（两份代码必然漂移）

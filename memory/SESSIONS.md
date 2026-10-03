@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：协议层固化闭环落地：管道对拍构建加 `-DHOST_PIPE_REAL_NVRAM`（链真 nvram.c + trace_cal.c，host_appstub.c 的假 nvram_touch/trace_cal_level 用 `#ifndef` 让位，host_pipestub.c 补 g_cfg/app_ui_*/trace_read_channel），pipe_hostlink.c 加 `--flash/--dump-flash` 与 nvram_init/poll/service；新增 pytest test_param_save_survives_a_power_cycle（改 pivot_kd=321 → T_PARAM_SAVE → 页 63 出现记录头 "HXB1"+version 5 → 第二个进程带镜像开机 dump 出 321，不带镜像的对照组回默认）与 test_param_change_alone_does_not_touch_flash（只改不固化且够不着 1.5s 防抖 ⇒ 页 63 全 0xFF）。提交 9fbc1a9。验证：pytest tools/console/tests -q ⇒ 62 passed；firmware/test/run_tests.ps1 ⇒ 通过 11/失败 0；两次变异（拿掉 host_ext.c:226 的 nvram_touch()、不载入 Flash 镜像）都被用例抓住。
+未完成：管道构建里的 nvram 只覆盖 "参数固化"；动作表固化的协议层等价用例（T_ACTION_SAVE）还没单独断言落盘内容
+下一步：用户要先自己看效果/看代码，目标轮已暂停（goal revision 3, phase paused）；他说继续时再用 update_goal resume 接着找下一个缺口
+
+## 2026-10-03
 完成：真 nvram.c（全工程唯一擦写 Flash 的模块）有了主机测试 firmware/test/t_nvram.c（42 项检查，已提交 2deb921）：①空 Flash 不加载；②改 g_cfg/参数表/动作表 → nvram_touch → poll 得 BUSY → service 得 DONE 落盘 → 把 RAM 全清掉再 nvram_init() → nvram_loaded()==1 且 trace_speed/line_kp_x100/speed_kp_x100/轴映射档/HP_PIVOT_KD/HP_GYRO_ANG_KP/HP_GYRO_SETTLE_DEG/HP_PIVOT_KP + 三个动作角度(170,12)/(30,60)/(0,0) 全回来，app_ui_settings_loaded 被调 1 次；③值一致时 poll+service 不擦页（记录外 1900 偏移的哨兵 0x5A 还在）；④1.5s 防抖（1.4s 仍 IDLE、1.6s 才 BUSY）；⑤运动中 poll 不排队、已排队再动起来 service 撤回（1950 哨兵 0x3C 还在）、改回上次存过的值不算变化（1951 哨兵 0x5A 还在）；⑥payload 翻一位或 version=9 → loaded==0、不被坏记录盖。验证：pwsh -File firmware/test/run_tests.ps1 → 通过 11/失败 0/编译失败 0（原 10 个全绿）；C:\Python314\python.exe -m pytest tools/console/tests -q → 60 passed；变异验证：把 nvram.c:280 的 Servo_SetActionPose 回填改成 (void)0 → t_nvram 8 处失败，还原后全绿。
 未完成：host_hal.c 的擦除仿真只覆盖'PER|STRT'这一种写法；若将来有代码用 HAL_FLASHEx_Erase 或 MER1/MER2 全片擦，主机上不会生效（目前无此代码）。
 下一步：把真 nvram.c 也链进 firmware/test/pipe_hostlink.c 的字节管道（host_pipestub.c 补 g_cfg/app_ui_* 等 5 个符号、关掉 host_appstub.c 的假 nvram_touch、加 nvram_poll/service 调用与 --flash/--dump-flash 文件参数），做协议层端到端：T_PARAM_SAVE → 真落盘 → 重开进程带上 flash 镜像 → 参数 dump 出新值。
@@ -1162,9 +1167,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：电机 6P 与 DRV 之间是否加熔断、舵机接口位置、是否接 OTW
 下一步：继续辅助：引脚冲突核对、走线宽度/散热过孔估算、布局分区草图、BOM 核对、驱动移植要点（不生成原理图）
 
-## 2026-09-14
-完成：更新到 v0.5：驱动选 DRV8412（查到 TI 参数：2×3A/2×6A峰值、≤52V、HTSSOP-44，DRV8432 为 2×7A 版）；按键换五向方向键，找到立创现货 WS-4175(C53207707) 与 K1-5203UA-06(C5370424) 并给出 5 路 GPIO 接法；灰度 I2C2+UART 双接口保留；引脚表重排（PWM 改 PC6-PC9 给 DRV，PB0/PB1/PB2 给 RESET/FAULT，五向键占 PC2/PC3/PC13/14/15）。
-未完成：DRV 板载/外接未定、五向键型号未定、灰度主用总线未定
-下一步：等用户确认后继续辅助：核引脚冲突、走线宽度/散热、布局分区、BOM、驱动移植要点（不生成原理图）
-
-> 更早的会话条目已归档到 161 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 162 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
