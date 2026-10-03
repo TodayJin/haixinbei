@@ -11,6 +11,7 @@
 #include "oled_diag.h"    /* 只在 -DAPP_OLED_DIAG 的构建里被调用 */
 #include "kk_oled.h"
 #include "SEGGER_RTT.h"
+#include <stdio.h>        /* snprintf：启动横幅里回显链路波特率（见 board_dl_baud()） */
 
 /* 旧固件上层（不动）+ 新板 BSP */
 #include "bsp_board.h"
@@ -86,7 +87,15 @@ int main(void)
 
   /* --- 上位机链路（LPUART1 / 无线下载器）--- */
   host_link_init();
-  host_link_send_text("\r\n[fw] host link ready (LPUART1 921600)\r\n");
+  {
+    /* 波特率从 DL_BAUD 现取（board_dl_baud()），不再手抄 —— 手抄的那版在降档到
+     * 230400 之后还在横幅里印 921600，排故时白看一眼。 */
+    char banner[64];
+    (void)snprintf(banner, sizeof(banner),
+                   "\r\n[fw] host link ready (LPUART1 %lu 8N1)\r\n",
+                   (unsigned long)board_dl_baud());
+    host_link_send_text(banner);
+  }
   SEGGER_RTT_WriteString(0, "host link init OK\r\n");
 
   /* --- 旧固件需要的底层（新板 BSP）---

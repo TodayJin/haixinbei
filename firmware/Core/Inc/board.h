@@ -130,9 +130,13 @@ void              board_uart4_write(const uint8_t *data, uint16_t len);
 int               board_uart4_read_byte(uint8_t *b, uint32_t timeout_ms);
 
 /* LPUART1 = 无线下载器（上位机链路）：PC0=RX / PC1=TX，AF8
- * 921600 8N1；收 = DMA1_Ch2 循环搬运（主循环按 CNDTR 取），发 = DMA1_Ch3 槽位队列
- * （非阻塞，满了丢帧并计数 —— 写上位机桥的波特率必须一致：--baud 921600）。 */
+ * 8N1；收 = DMA1_Ch2 循环搬运（主循环按 CNDTR 取），发 = DMA1_Ch3 槽位队列
+ * （非阻塞，满了丢帧并计数 —— 写上位机桥的波特率必须一致：--baud 见 board_dl_baud()）。
+ * 波特率的唯一真值是 board.c 的 `#define DL_BAUD`（现 230400；原因见那里的注释），
+ * 想打印/回显这个数字一律调 board_dl_baud()，别再手抄一份（手抄的启动横幅曾经
+ * 在降档到 230400 之后还写着 921600）。 */
 HAL_StatusTypeDef board_dl_init(void);
+uint32_t          board_dl_baud(void);          /* 实际生效的链路波特率（= DL_BAUD） */
 void              board_dl_start_rx(void);
 int               board_dl_get_byte(uint8_t *b);
 HAL_StatusTypeDef board_dl_send(const uint8_t *data, uint16_t len);

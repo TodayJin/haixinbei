@@ -763,5 +763,6 @@ HAL_StatusTypeDef board_dl_send(const uint8_t *data, uint16_t len)
 }
 
 DMA_HandleTypeDef *board_dl_dma_tx(void)  { return &hdma_dl_tx; }
+uint32_t board_dl_baud(void)              { return DL_BAUD; }
 uint32_t board_dl_tx_dropped(void)        { return s_dl_tx_drop; }
 uint32_t board_dl_rx_overrun(void)        { return s_dl_rx_overrun; }
