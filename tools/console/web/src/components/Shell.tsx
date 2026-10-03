@@ -49,21 +49,30 @@ function LinkBadge() {
           : '未连接'
   return (
     <div className="flex items-center gap-3">
-      <Badge tone={tone}>
+      <Badge
+        tone={tone}
+        title="这里是当前连着的口：模拟器 / 回放 / 串口名（如 COM26） / 未连接。圆点动 = 正在从车上实时收数据"
+      >
         <StatusDot on={connected} tone={connected ? 'mint' : sse === 'open' ? 'slate' : 'rose'} pulse={connected} />
         {text}
       </Badge>
       {link && (
-        <span className="num text-[12px] text-slate-400">
-          rx {fmt(link.stats.rx, 0)} / drop {fmt(link.stats.drops, 0)} / crc {fmt(link.stats.crc, 0)}
+        <span
+          className="num text-[12px] text-slate-400"
+          title="收到 = 从车上读到多少帧；丢弃 = 半截或认不出来的帧；校验错 = 校验不过的帧。后两个正常都该是 0"
+        >
+          收到 {fmt(link.stats.rx, 0)} · 丢弃 {fmt(link.stats.drops, 0)} · 校验错 {fmt(link.stats.crc, 0)}
         </span>
       )}
-      <span className="num text-[12px] text-slate-400">
-        {telem ? `${fmt(telem.mode >= 0 ? telem.mode : 0, 0)} ${MODE_TEXT[telem.mode] ?? ''}` : ''}
+      <span className="num text-[12px] text-slate-400" title="车上当前的运动模式，以及正在跑的任务">
+        {telem ? `模式 ${fmt(telem.mode >= 0 ? telem.mode : 0, 0)} ${MODE_TEXT[telem.mode] ?? ''}` : ''}
         {telem?.task_id !== undefined && telem.task_id !== 0xff ? ` · ${taskText(telem.task_id)}` : ''}
       </span>
-      <Badge tone={sse === 'open' ? 'cyan' : sse === 'connecting' ? 'amber' : 'rose'}>
-        SSE {sse === 'open' ? '已连' : sse === 'connecting' ? '连接中' : '断开'}
+      <Badge
+        tone={sse === 'open' ? 'cyan' : sse === 'connecting' ? 'amber' : 'rose'}
+        title="网页和本地桥之间的实时推送通道（技术名 Server-Sent Events）。它断了只表示网页收不到实时数据，不代表车掉线 —— 车在不在线看左边那个口的圆点"
+      >
+        实时推送 {sse === 'open' ? '已连' : sse === 'connecting' ? '连接中' : '断开'}
       </Badge>
     </div>
   )

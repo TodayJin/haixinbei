@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：界面去英文缩写（9 个文件：ui.tsx 的 Badge/Stat 加 title、Shell.tsx 状态栏改成「收到·丢弃·校验错 / 实时推送 / 模式」、Settings/Overview/Control/Tasks/Drive/Sensors/Params 的中文标签 + 悬停解释 + Settings 新增缩写对照卡）；查清并修掉「操控不了车」的根因（桥 server.py 新增 _serial_port_ok 提前拒非法串口名、Settings.tsx 端口只在串行模式同步 + 回落列表第一个口，回归用例加进 tools/console/tests/test_api.py）。验证：npx tsc --noEmit exit 0；npx vitest run 17 文件 166 项通过；pytest tools\console\tests 103 passed；npm run build → dist/assets/index-DBynlDh_.js 341.54 kB + index-C0kvFr6m.css 37.34 kB
+未完成：带 server.py 新校验的桥尚未重启；真车链路当前是好的（COM26，rx 在涨）
+下一步：提交这批改动（含 dist 产物）；桥的改动要重启 8793 那个桥进程才会生效（改的是 bridge/server.py，进程里还跑着旧代码）
+
+## 2026-10-03
 完成：操控页（#/drive）三条报障全改完并回归：①速度滑块从「mm/s ±3000」改成固件速度刻度 0..7200（lib/heading.ts 新增 PWM_MAX=7200 / DEAD_SCALE=1000），设置里新增 driveSkipDead（默认 true）让滑块从 1000 起步；②倒车打轮翻号（heading.ts 的 stepDrive 里 yawRate = base<0 ? -turnRate : turnRate）⇒ S+D 车尾往右摆；③mock/server.mjs 的 /api/drive 夹限幅从 ±3000 放到 ±7200、turn 单独 ±540。验证：npx tsc --noEmit exit 0；npx vitest run 17 文件 / 166 项通过（新增 keys「倒车组合键 S+D/S+A」与 heading「倒车翻号」两个用例）；npm run build 出新 dist（assets/index-Bi-eADAk.js 339.39 kB、index-CfDRAvCv.css 37.16 kB，旧 asset 已删）；pytest tools\console\tests 103 passed；make -j8 text 114292 / data 364 / bss 31040（本轮固件只动了 host_ext.h 的注释）。文档同步：tools/console/docs/API.md（/api/drive 量纲 + 操控页两条约定）、tools/console/web/README.md、firmware/App/Svc/host_ext.h 的模式注释。
 未完成：真车上按 S+D 的实际方向还没实测（不敢自己给真车发驾驶指令，轮子会转）；真车桥在 8793 跑的是新 dist，浏览器刷新即生效
 下一步：请用户架起车（或手扶）按 S+D 试一下车尾摆向；本轮的代码/文档/dist 与之前那批串口脚号更正一起提交
@@ -1156,9 +1161,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：用户可能需要把旧的 pcb/主板选型与设计.md 合并或删除
 下一步：进入 PCB 布局（附录 D 已有要点）
 
-## 2026-09-15
-完成：用户澄清循迹模块的 I2C 信号是 3.3V（5V 仅供电）→ **循迹电平问题闭环**：模块走 I2C 接 H3/U14（PA15/PB9，均 FT，上拉 R4/R5→3V3），huidu1–8 数字线留备用，PA0–PA7 的 TT(3.6V) 限制不再影响使用。至此整板**无功能性遗留问题**。
-未完成：仅剩可选：VDDA/VREF+ 磁珠+1µF；I2C 地址与 OLED 0x3C/INA226 0x40 不撞
-下一步：可进入 PCB 布局（AT8236 散热/电机大电流/晶振与 ADC 隔离/地分割）
-
-> 更早的会话条目已归档到 186 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 187 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。

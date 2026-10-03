@@ -58,6 +58,7 @@ export function Stat({
   unit,
   tone = 'slate',
   hint,
+  title,
   size = 'md',
 }: {
   label: React.ReactNode
@@ -65,11 +66,13 @@ export function Stat({
   unit?: string
   tone?: Tone
   hint?: React.ReactNode
+  /** 鼠标悬停时的一句话解释（英文缩写尽量靠它讲清楚） */
+  title?: string
   size?: 'sm' | 'md' | 'lg'
 }) {
   const sizeCls = size === 'lg' ? 'text-3xl' : size === 'sm' ? 'text-base' : 'text-xl'
   return (
-    <div className="min-w-0">
+    <div className="min-w-0" title={title}>
       <div className="truncate text-[11px] uppercase tracking-wider text-slate-400">{label}</div>
       <div className={`num ${sizeCls} font-semibold leading-tight ${TONE_TEXT[tone]}`}>
         {value}
@@ -80,8 +83,21 @@ export function Stat({
   )
 }
 
-export function Badge({ tone = 'slate', children }: { tone?: Tone; children: React.ReactNode }) {
-  return <span className={`chip ${TONE_RING[tone]}`}>{children}</span>
+export function Badge({
+  tone = 'slate',
+  title,
+  children,
+}: {
+  tone?: Tone
+  /** 鼠标悬停时的一句话解释（界面上尽量少摆英文缩写，靠它讲清楚） */
+  title?: string
+  children: React.ReactNode
+}) {
+  return (
+    <span className={`chip ${TONE_RING[tone]}`} title={title}>
+      {children}
+    </span>
+  )
 }
 
 export function StatusDot({ on, tone = 'mint', pulse = false }: { on: boolean; tone?: Tone; pulse?: boolean }) {

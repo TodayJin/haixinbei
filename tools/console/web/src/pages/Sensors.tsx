@@ -64,7 +64,7 @@ export function SensorsPage() {
           <GrayArray line={line} gray={gray} height={140} hint />
           <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
             <Stat label="重心偏差" value={fmt(t?.trace.pos, 3)} hint="相对 4.5（车正中）" />
-            <Stat label="循迹 PID 输出" value={fmtInt(t?.trace.pid)} tone="amber" />
+            <Stat label="循迹 PID 输出" value={fmtInt(t?.trace.pid)} tone="amber" title="PID = 循迹控制器的修正量输出，越大说明它判断车越偏" />
             <Stat label="黑度高" value={fmt(Math.max(...gray.map(grayToInk)) * 255, 0)} />
             <Stat label="路口标志" value={t?.flags.slope ? '有' : '无'} />
           </div>
@@ -77,7 +77,7 @@ export function SensorsPage() {
               <MiniTrend channel="trace_pos" height={44} />
             </div>
             <div>
-              <div className="mb-1 text-[12px] text-slate-400">循迹 PID 输出</div>
+              <div className="mb-1 text-[12px] text-slate-400" title="PID = 循迹控制器的修正量输出，越大说明它判断车越偏">循迹 PID 输出</div>
               <MiniTrend channel="trace_pid" height={44} />
             </div>
             <div>

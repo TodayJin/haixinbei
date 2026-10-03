@@ -325,6 +325,14 @@ def test_recordings_and_replay(live):
     code, j, _ = GET(base + "/api/link")
     assert j["mode"] == "sim" and j["connected"] is True, "失败的连接不许把旧链路弄断"
 
+    # 串口名必须长得像串口号：回放之后残留的录制文件名被当成"串口"发过来时，要明确拒掉
+    # 并且旧链路照旧 —— 这就是用户报的"突然操控不了车、遥测不动"那条事故。
+    code, j, _ = POST(base + "/api/link/connect", {"mode": "serial", "port": "rec_20261003_021035.jsonl"})
+    assert code == 200 and j["ok"] is False and "串口号" in j["error"], j
+    code, j, _ = GET(base + "/api/link")
+    assert j["mode"] == "sim" and j["connected"] is True, "被拒的串口名不许把旧链路弄断"
+    assert j["port"] != "rec_20261003_021035.jsonl", "被拒的口名不许写进 link.port"
+
     try:
         code, j, _ = POST(base + "/api/link/connect",
                           {"mode": "replay", "replay": path, "speed": 4})

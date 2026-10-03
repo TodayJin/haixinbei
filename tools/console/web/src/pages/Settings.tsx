@@ -12,10 +12,18 @@ export function SettingsPage() {
   const [rec, setRec] = React.useState('')
   const [speed, setSpeed] = React.useState(1)
 
+  // 只在"真串口"这条链路上把口名同步进输入框：回放时 link.port 是录制文件名，同步进来会让
+  // 「串口」这一栏看着还像 COM26、实际点「连串口」发出去的却是那个文件名（出过一次事故，
+  // 见 bridge/server.py 里 _serial_port_ok 的注释）。
   React.useEffect(() => {
-    if (link?.port) setPort(link.port)
+    if (link?.mode === 'serial' && link.port) setPort(link.port)
     if (link?.baud) setBaud(String(link.baud))
-  }, [link?.port, link?.baud])
+  }, [link?.mode, link?.port, link?.baud])
+
+  // 下拉里没有当前这个口时回落到列表第一个：不然会拿着一个这台电脑上根本没有的口名去连
+  React.useEffect(() => {
+    if (ports.length && !ports.includes(port)) setPort(ports[0])
+  }, [ports, port])
 
   React.useEffect(() => {
     void store.listPorts()
@@ -81,13 +89,17 @@ export function SettingsPage() {
               </button>
             </div>
             <div className="grid grid-cols-2 gap-2 text-[12px] text-slate-400">
-              <div>SSE：{sse}</div>
-              <div>busy：{fmt(stats?.busy_pct, 1)}%</div>
-              <div>
-                rx/tx：<span className="num">{fmtInt(link?.stats.rx)}/{fmtInt(link?.stats.tx)}</span>
+              <div title="网页和本地桥之间的实时推送通道：已连 = 正常">
+                实时推送：{sse === 'open' ? '已连' : sse === 'connecting' ? '连接中' : '断开'}
               </div>
-              <div>
-                crc/resync：<span className="num">{fmtInt(link?.stats.crc)}/{fmtInt(link?.stats.resync)}</span>
+              <div title="车上控制器每 5 毫秒跑一拍，这里是这 5 毫秒被占掉了多少 —— 不是电脑的负载">
+                车上控制占用：{fmt(stats?.busy_pct, 1)}%
+              </div>
+              <div title="桥从车上收到的帧数 / 往车上发出的帧数">
+                收到 / 发出帧：<span className="num">{fmtInt(link?.stats.rx)}/{fmtInt(link?.stats.tx)}</span>
+              </div>
+              <div title="校验错 = 校验不过的帧数；重新同步 = 丢半截帧后重新对上帧头的次数。正常都该是 0">
+                校验错 / 重新同步：<span className="num">{fmtInt(link?.stats.crc)}/{fmtInt(link?.stats.resync)}</span>
               </div>
             </div>
             <p className="text-[12px] leading-relaxed text-slate-500">
@@ -109,8 +121,8 @@ export function SettingsPage() {
             <div className="flex flex-wrap items-end gap-2">
               <div>
                 <div className="mb-1 text-[12px] text-slate-400">录制文件</div>
-                <select className="field w-64" value={rec} onChange={(e) => setRec(e.target.value)}>
-                  {recordings.length === 0 && <option value="">（data/logs 里还没有 jsonl）</option>}
+                <select className="field w-64" value={rec} onChange={(e) => setRec(e.target.value)} title="录制文件 = 「控制」页点「开始记录」时录下来的遥测数据，存在 tools/console/data/logs/ 里">
+                  {recordings.length === 0 && <option value="">（还没有录制文件）</option>}
                   {recordings.map((r) => (
                     <option key={r.path} value={r.path}>
                       {r.name}（{bytesToHuman(r.size)}）
@@ -130,8 +142,9 @@ export function SettingsPage() {
               </button>
             </div>
             <p className="text-[12px] leading-relaxed text-slate-500">
-              回放把「控制」页点「开始记录」时录下来的遥测（<span className="num">data/logs/rec_*.jsonl</span>
-              ）按原时间戳重新喂一遍：波形、仪表、日志都照常走，只是数据来自文件、循环播放。想回到实时就点上面的「连模拟器」或「连串口」。
+              回放把「控制」页点「开始记录」时录下来的遥测数据（存在{' '}
+              <span className="num">tools/console/data/logs/</span> 里的 .jsonl 文本文件，一行一帧）
+              按原来的时间戳重新喂一遍：波形、仪表、日志都照常走，只是数据来自文件、循环播放。想回到实时就点上面的「连模拟器」或「连串口」。
             </p>
           </div>
         </Card>
@@ -187,7 +200,7 @@ export function SettingsPage() {
             <div>固件名 <span className="num text-slate-200">{link?.fw?.name ?? '--'}</span></div>
             <div>版本 <span className="num text-slate-200">{link?.fw?.version ?? '--'}</span></div>
             <div>协议 <span className="num text-slate-200">v{link?.fw?.proto ?? '--'}</span></div>
-            <div>参数指纹 <span className="num text-slate-200">0x{(link?.fw?.param_crc ?? 0).toString(16).toUpperCase()}</span></div>
+            <div title="车上那张参数表的版本号。网页算出来的和它不一致，说明两边参数不同步">参数指纹 <span className="num text-slate-200">0x{(link?.fw?.param_crc ?? 0).toString(16).toUpperCase()}</span></div>
           </div>
           <div className="mt-3 flex flex-wrap gap-1.5">
             {[['遥测2', 0], ['动作表', 1], ['舵机', 2], ['驾驶', 3], ['标定', 4], ['Flash 保存', 5], ['看门狗', 6], ['任务程序', 7]].map(([label, bit]) => {
@@ -251,6 +264,30 @@ export function SettingsPage() {
             <li>所有写操作都走后端；失败时把车的原话（error 字段）原样显示在右下角。</li>
             <li>比赛规则不允许任何形式的遥控干预，这套只用于调试、标定与赛前检查。</li>
           </ul>
+        </Card>
+
+        <Card title="页面上的缩写、数字都是什么意思">
+          <dl className="grid gap-x-3 gap-y-1.5 text-[12px] leading-relaxed sm:grid-cols-[auto_1fr]">
+            {(
+              [
+                ['实时推送（SSE）', '网页和本地桥之间的实时数据通道，技术名 Server-Sent Events。它断开只表示网页收不到实时数据，不代表车掉线 —— 车在不在线看顶栏那个口袋的圆点'],
+                ['收到 / 丢弃 / 校验错', '顶栏三个数字：收到 = 从车上读到的完整帧数；丢弃 = 半截或认不出来的帧；校验错 = 校验没过的帧。后两个平时都该是 0'],
+                ['串口号（COM26）', '当前连的是车上哪个口。模拟器 = 假车，回放 = 放录制数据，COMx = 真车的串口'],
+                ['参数指纹 0xXXXX', '车上那张参数表的版本号。网页算出来的和它不一致，说明两边参数不一样（要在「参数」页固化成一致）'],
+                ['车上控制占用 x%', '车上控制器每 5 毫秒跑一拍，这是被占掉的比例；跟电脑快慢无关'],
+                ['PWM', '给电机的占空比刻度，0~7200：越大转得越快，负数是反转。它不是转速单位'],
+                ['PID', '控制器算出来的修正量（循迹 PID 输出），越大说明它判断车越偏'],
+                ['校验和 / CRC16', '一种校验算法（CRC16/CCITT）。烧到车上再读回来，两边这个数一样，就说明字节一个没坏'],
+                ['镜长 / 槽位 #0~#7', '一份任务程序叫一份「镜像」，长度就是它占多少字节；车上 Flash 里能放 8 份，编号就是槽位'],
+                ['录制文件 .jsonl', '一行一帧的纯文本记录，存在 tools/console/data/logs/ 里，可以在上面「回放录制」里重播'],
+              ] as const
+            ).map(([term, desc]) => (
+              <React.Fragment key={term}>
+                <dt className="whitespace-nowrap text-slate-200">{term}</dt>
+                <dd className="text-slate-500">{desc}</dd>
+              </React.Fragment>
+            ))}
+          </dl>
         </Card>
       </div>
     </div>

@@ -732,7 +732,7 @@ export function TasksPage() {
         >
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Stat label="镜像长度" value={String(info.len)} unit="B" hint={`车上程序区 6 KB 里占 ${info.budgetPct}%`} />
-            <Stat label="CRC16" value={`0x${info.crc16.toString(16).toUpperCase().padStart(4, '0')}`} hint="覆盖 [12, len)，与车上回读的比" />
+            <Stat label="校验和" value={`0x${info.crc16.toString(16).toUpperCase().padStart(4, '0')}`} hint="从头 12 字节之后算起，烧完和车上回读的对比" />
             <Stat label="状态 / 块" value={`${prog.states.length} / ${blockCount(prog)}`} hint={`主页 = 状态 ${prog.main}`} />
             <Stat label="任务编号" value={`#${task.id}`} hint="车上的槽位号，0~7" />
           </div>
@@ -740,7 +740,7 @@ export function TasksPage() {
           {status && monitor && (
             <div className="mt-2 rounded-lg bg-neon-mint/10 p-2 text-[11px] text-neon-mint">
               正在跑：任务 #{status.id} · 状态 {status.state} · 第 {status.block} 块 · 已跑 {status.elapsedMs} ms
-              {status.flags ? ` · flags=0x${status.flags.toString(16)}` : ''}
+              {status.flags ? ` · 开机自启 开` : ''}
             </div>
           )}
 
@@ -871,8 +871,8 @@ export function TasksPage() {
             每个状态有「进门」序列（进入这个状态时跑一遍）和「循环体」（跑完停在最后一块等条件）。「等条件」是唯一能卡住的块，
             其它块都占一拍就走。循环体末尾必须是「跳到状态 / 结束 / 带超时改道的等条件」，否则车会保持最后一个模式一直开 —— 这就是校验里那条错误。
           </div>
-          <div className="mt-2 num text-[10px] leading-relaxed text-slate-600">
-            magic 0x4B54 · ver 1 · 头 12 B · 状态表 8 B/个 · 块 10 B/个 · CRC16/CCITT · 5 ms 一拍 · 上限 16 状态 / 64 块
+          <div className="mt-2 num text-[10px] leading-relaxed text-slate-600" title="这是车上真正认的二进制格式，写给想核对的人看">
+            文件开头固定 4B54 · 版本 1 · 文件头 12 字节 · 每个状态 8 字节 · 每个块 10 字节 · 校验方式 CRC16/CCITT · 车上 5 毫秒跑一拍 · 最多 16 个状态、每段最多 64 块
           </div>
           <div className="mt-2 text-[10px] text-slate-600">
             快捷键：拖块改顺序；◀▶ 微调；点块展开改参数；同一块再点一下收起。

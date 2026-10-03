@@ -299,7 +299,7 @@ export function DrivePage() {
         <Card title="实时反馈">
           <div className="grid grid-cols-2 gap-3">
             <Stat label="实测左 / 右" value={`${fmt(t?.vl, 0)} / ${fmt(t?.vr, 0)}`} unit="mm/s" />
-            <Stat label="PWM 左 / 右" value={`${fmtInt(t?.pwm_l)} / ${fmtInt(t?.pwm_r)}`} tone="amber" />
+            <Stat label="PWM 左 / 右" value={`${fmtInt(t?.pwm_l)} / ${fmtInt(t?.pwm_r)}`} tone="amber" title="PWM = 左右轮实际拿到的占空比刻度（0..7200，负数是反转）" />
             <Stat label="当前航向" value={fmt(t?.yaw, 1)} unit="°" tone="cyan" />
             <Stat label="角度环误差" value={fmt(t?.angle.err, 2)} unit="°" tone="violet" hint="目标 − 当前" />
           </div>

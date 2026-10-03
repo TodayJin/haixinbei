@@ -78,13 +78,13 @@ export function ControlPage() {
             <div className="text-[12px] text-slate-400">
               实测帧率 <span className="num text-slate-200">{fmt(stats?.telem_hz ?? link?.telem_hz, 1)} Hz</span>
             </div>
-            <div className="text-[12px] text-slate-400">
-              丢包 <span className="num text-slate-200">{fmt(stats?.stats.drops ?? link?.stats.drops, 0)}</span>
+            <div className="text-[12px] text-slate-400" title="半截或认不出来的帧数，正常是 0">
+              丢帧 <span className="num text-slate-200">{fmt(stats?.stats.drops ?? link?.stats.drops, 0)}</span>
             </div>
-            <div className="text-[12px] text-slate-400">
-              CRC 错 <span className="num text-slate-200">{fmt(stats?.stats.crc ?? link?.stats.crc, 0)}</span>
+            <div className="text-[12px] text-slate-400" title="校验不过的帧数，正常是 0">
+              校验错 <span className="num text-slate-200">{fmt(stats?.stats.crc ?? link?.stats.crc, 0)}</span>
             </div>
-            <div className="text-[12px] text-slate-400">
+            <div className="text-[12px] text-slate-400" title="车上参数表的版本号，两边不一致说明参数没同步">
               参数指纹 <span className="num text-slate-200">0x{(params?.param_crc ?? 0).toString(16).toUpperCase()}</span>
             </div>
           </div>

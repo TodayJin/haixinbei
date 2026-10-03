@@ -11,6 +11,7 @@ import mimetypes
 import os
 import posixpath
 import queue
+import re
 import threading
 import time
 import urllib.parse
@@ -63,6 +64,18 @@ class Bridge:
             return f"回放文件读不了：{e}"
         return f"{os.path.basename(path)} 里没有一帧 telem 记录"
 
+    # 串口名的形态：Windows 是 COM1 / COM26（也允许 `\\.\COM10` 的写法），POSIX 是 /dev/ttyXXX。
+    # 为什么要在动旧链路之前先拦：出过一次事故 —— 回放之后 `link.port` 变成录制文件名
+    # `rec_20261003_021035.jsonl`，设置页看着还像 COM26，点「连串口」就把桥切到这个"串口"名上；
+    # 而 `SerialLink` 打不开时只在 note 里记一句、**不抛异常**，于是 switch() 认为建成了，
+    # 把好的旧链路也停掉 ⇒ 表现为"操控不了车、遥测不动"。这里直接拒掉，旧链路就保得住。
+    _RE_PORT_NT = re.compile(r"^(?:\\\\\.\\)?COM\d+$", re.IGNORECASE)
+    _RE_PORT_POSIX = re.compile(r"^/dev/[A-Za-z0-9._/-]+$")
+
+    @classmethod
+    def _serial_port_ok(cls, port: str) -> bool:
+        return bool((cls._RE_PORT_NT if os.name == "nt" else cls._RE_PORT_POSIX).match(port))
+
     def _make_link(self, mode: str, port: str, baud: int):
         if mode == "sim":
             return SimLink()
@@ -74,6 +87,8 @@ class Bridge:
         port = port or find_default_port()
         if not port:
             raise SystemExit("没找到串口：用 --list-ports 看有哪些，或 --port COMxx")
+        if not self._serial_port_ok(port):
+            raise SystemExit(f"这不是串口号：{port}（Windows 上是 COM1、COM26 这种；要放录制文件请用 mode:\"replay\"）")
         return SerialLink(port, baud)
 
     def start(self):

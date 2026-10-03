@@ -61,8 +61,8 @@ export function OverviewPage() {
             <span className="text-slate-400">最后收包</span>
             <span className="num text-slate-200">{stats?.last_rx_ms !== undefined ? `${fmt(stats.last_rx_ms, 0)} ms 前` : '--'}</span>
           </div>
-          <div className="flex items-center justify-between">
-            <span className="text-slate-400">桥 busy</span>
+          <div className="flex items-center justify-between" title="车上控制器每 5 毫秒跑一拍，这里是这 5 毫秒被占掉了多少 —— 不是电脑的负载">
+            <span className="text-slate-400">车上控制占用</span>
             <span className="num text-slate-200">{fmt(stats?.busy_pct, 1)} %</span>
           </div>
           <div className="flex items-center justify-between">
@@ -95,10 +95,21 @@ export function OverviewPage() {
           <Stat label="偏航" value={fmt(t?.yaw, 1)} unit="°" tone="cyan" size="lg" />
           <Stat label="俯仰 / 横滚" value={`${fmt(t?.pitch, 1)} / ${fmt(t?.roll, 1)}`} unit="°" />
           <Stat label="左 / 右轮速" value={`${fmt(t?.vl, 0)} / ${fmt(t?.vr, 0)}`} unit="mm/s" />
-          <Stat label="电池 / 电流" value={`${fmt(t ? t.vbat_mv / 1000 : NaN, 2)}`} unit={`V · ${fmtInt(t?.ibat_ma)}mA`} tone={(t?.vbat_mv ?? 99999) < 10500 ? 'rose' : 'mint'} />
+          <Stat
+            label="电池 / 电流"
+            value={`${fmt(t ? t.vbat_mv / 1000 : NaN, 2)}`}
+            unit={`V · ${fmtInt(t?.ibat_ma)}mA`}
+            tone={(t?.vbat_mv ?? 99999) < 10500 ? 'rose' : 'mint'}
+            title="V = 伏（电池电压，12V 电池低于 10.5V 就该充了）；mA = 毫安（千分之一安，电流）"
+          />
           <Stat label="模式" value={MODE_TEXT[t?.mode ?? 0] ?? '--'} hint={taskText(t?.task_id)} />
           <Stat label="主循环" value={fmtInt(t?.loop_us)} unit="µs" tone={(t?.loop_us ?? 0) > 20000 ? 'amber' : 'slate'} />
-          <Stat label="PWM 左/右" value={`${fmtInt(t?.pwm_l)}/${fmtInt(t?.pwm_r)}`} unit={`${fmt(pwmToPct(t?.pwm_l ?? 0), 0)}%`} />
+          <Stat
+            label="PWM 左/右"
+            value={`${fmtInt(t?.pwm_l)}/${fmtInt(t?.pwm_r)}`}
+            unit={`${fmt(pwmToPct(t?.pwm_l ?? 0), 0)}%`}
+            title="PWM = 给电机的占空比刻度（0..7200，越大转得越快；负数是反转）"
+          />
           <Stat label="动作 / NVRAM" value={`${t?.action ?? '--'}`} hint={NVRAM_TEXT[t?.nvram ?? 0]} />
         </div>
         <div className="mt-4 grid gap-3 md:grid-cols-3">
@@ -122,7 +133,7 @@ export function OverviewPage() {
         <GrayArray line={t?.line ?? Array(8).fill(0)} gray={t?.gray ?? Array(8).fill(0)} hint />
         <div className="mt-3 grid grid-cols-3 gap-3">
           <Stat label="重心偏差" value={fmt(t?.trace.pos, 2)} />
-          <Stat label="循迹 PID 输出" value={fmtInt(t?.trace.pid)} tone="amber" />
+          <Stat label="循迹 PID 输出" value={fmtInt(t?.trace.pid)} tone="amber" title="PID = 循迹控制器的修正量输出，越大说明它判断车越偏" />
           <Stat label="角度环修正" value={fmtInt(t?.angle.corr)} tone="violet" />
         </div>
       </Card>

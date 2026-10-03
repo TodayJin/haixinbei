@@ -97,7 +97,7 @@ export function ParamsPage() {
         right={
           <div className="flex flex-wrap items-center gap-2">
             <Badge tone={params?.source === 'fw' ? 'mint' : 'amber'}>来源 {params?.source ?? '--'}</Badge>
-            <Badge tone="slate">指纹 0x{(params?.param_crc ?? 0).toString(16).toUpperCase()}</Badge>
+            <Badge tone="slate" title="车上参数表的版本号；网页算出来的和它不一致说明两边参数没同步">指纹 0x{(params?.param_crc ?? 0).toString(16).toUpperCase()}</Badge>
             {dirtyCount > 0 && <Badge tone="rose">{dirtyCount} 项改了没下发</Badge>}
           </div>
         }
