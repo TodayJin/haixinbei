@@ -192,15 +192,23 @@ def main(argv: list[str] | None = None) -> int:
         _report(r)
 
     usable = [r for r in results if r.usable]
-    silent = [r for r in results if not r.error and r.rx_bytes == 0]
+    opened = [r for r in results if not r.error]
+    silent = [r for r in opened if r.rx_bytes == 0]
     print("")
     if usable:
         best = max(usable, key=lambda r: r.baud)
         print("结论：最高可用波特率 = %d（把桥的 --baud 与固件的 DL_BAUD 都用它）" % best.baud)
         return 0
-    if len(silent) == len(results):
-        print("结论：所有波特率都是 0 字节 ⇒ 不是波特率的事："
-              "先查（a）探针/线在不在、（b）固件是不是在发（RTT 看 1Hz 的 HOST 行 tx 有没有涨）")
+    if not opened:
+        print("结论：所有档都**打不开端口** ⇒ 与波特率无关，先解决口本身："
+              "（a）口被桥或别的程序占着（`--list` 看还在不在）、（b）探针的 CDC 串口没枚举出来"
+              "（设备管理器里有没有 JLink CDC UART Port）、（c）线/探针被拔了或口号变了")
+        return 2
+    if len(silent) == len(opened):
+        print("结论：能打开但%s都是 0 字节 ⇒ 不是波特率的事："
+              "先查（a）板子 LPUART1 的 TX/RX 有没有接到探针（TX/RX 是不是交叉了）、"
+              "（b）固件是不是在发（RTT 看 1Hz 的 HOST 行 tx 有没有涨）"
+              % ("所有波特率" if len(opened) == len(results) else "能打开的那几档"))
         return 1
     print("结论：有字节但解不出帧 ⇒ 波特率不匹配或线材太差；"
           "按上面哪一档『有字节』去比对板子实际用的波特率")

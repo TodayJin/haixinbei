@@ -134,9 +134,17 @@ class SimCar:
         if self.pending:
             out.extend(self.pending)
             self.pending = []
-        if self.hz and now_ms >= self.next_tx:
-            self.next_tx = now_ms + max(1, int(1000 / self.hz))
-            out.append(pr.Frame(pr.T_TELEM2, 0, self._telem_bytes()))
+        if self.hz:
+            period = max(1, int(1000 / self.hz))
+            if self.next_tx + 2 * period < now_ms:
+                # 落后太多（被别的东西卡住过）：重新对齐，不补一串出来
+                self.next_tx = now_ms
+            while now_ms >= self.next_tx:
+                # 累加而不是"从当前时刻重算"：否则轮询步长（如 6ms）比周期大时，
+                # 实际帧率会被拉到轮询频率上（要 100Hz 却只出 ~77Hz）；
+                # 一拍里最多补 2 帧（上面刚重新对齐过），和真链路一次读回几帧一样
+                self.next_tx += period
+                out.append(pr.Frame(pr.T_TELEM2, 0, self._telem_bytes()))
         return out
 
     def _telem_task_fields(self) -> tuple[int, int]:

@@ -55,6 +55,30 @@ def test_telemetry_cadence_follows_hz():
     assert [f for f in car.poll(210) if f.type == pr.T_TELEM2]
 
 
+def test_telemetry_rate_is_not_quantized_to_poll_step():
+    """轮询步长（6ms）比遥测周期（10ms）小时，帧率不该被拉到轮询频率上。
+
+    曾经 `next_tx = now_ms + 周期`（每拍从"现在"重算）⇒ 步长 6ms 时会稳定退化成
+    12ms 一帧（要 100Hz 只出 ~83 帧/s）。改成累加后平均间隔 ≈10ms。
+    """
+    car = SimCar()
+    car.start(0)
+    req(car, pr.T_CMD, bytes([pr.CMD_SET_TELEM_HZ, 100]), now=0)
+    n = 0
+    for now in range(0, 1000, 6):                       # 0,6,…,996 共 167 拍
+        n += len([f for f in car.poll(now) if f.type == pr.T_TELEM2])
+    assert 94 <= n <= 102, f"1s 内只出了 {n} 帧（旧实现约 83）"
+
+
+def test_long_stall_does_not_burst_catch_up():
+    """卡了很久之后只补一帧并重新对齐，不吐一串补帧。"""
+    car = SimCar()
+    car.start(0)
+    assert [f for f in car.poll(0) if f.type == pr.T_TELEM2]
+    assert len([f for f in car.poll(1000) if f.type == pr.T_TELEM2]) == 1
+    assert len([f for f in car.poll(1010) if f.type == pr.T_TELEM2]) == 0   # 重新对齐到 1020
+
+
 def test_telemetry_payload_decodes():
     car = SimCar()
     car.start(0)

@@ -113,3 +113,44 @@ def test_result_type_histogram_counts_by_type():
     text = r.type_histogram()
     assert text == "%s×2、%s×1" % (pr.TYPE_NAMES[pr.T_TELEM], pr.TYPE_NAMES[pr.T_PARAM_GET])
     assert Result(baud=921600).type_histogram() == "—"
+
+
+# ------------------------------------------- 汇总那几行的口径（用假的 probe 结果）
+def _main_with(monkeypatch, results):
+    from bridge import probe as pb
+    it = iter(results)
+    monkeypatch.setattr(pb, "probe", lambda *a, **k: next(it))
+    return pb.main
+
+
+def test_summary_all_unopenable_says_port_not_baud(monkeypatch, capsys):
+    # 今天真实遇到过的形态：COM26 @921600 报「信号灯超时时间已到」，
+    # 后续几档直接 PermissionError —— 一个字都没读到，不能说成"波特率不匹配"
+    main = _main_with(monkeypatch, [
+        Result(baud=921600, error="Cannot configure port: OSError(22, '信号灯超时时间已到')"),
+        Result(baud=115200, error="could not open port 'COM26': PermissionError(13, ...)"),
+    ])
+    rc = main(["--port", "COM26", "--bauds", "921600,115200"])
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "打不开端口" in out
+    assert "JLink CDC UART Port" in out                 # 指向真正该查的东西
+    assert "解不出帧" not in out
+
+
+def test_summary_opens_but_silent(monkeypatch, capsys):
+    main = _main_with(monkeypatch, [Result(baud=921600), Result(baud=115200)])
+    rc = main(["--port", "COM26", "--bauds", "921600,115200"])
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "0 字节" in out
+    assert "打不开端口" not in out
+
+
+def test_summary_picks_highest_usable(monkeypatch, capsys):
+    good = Result(baud=921600, rx_bytes=100, frames=[pr.Frame(pr.T_TELEM, 1, b"\x00" * 32)])
+    main = _main_with(monkeypatch, [Result(baud=921600), good])
+    rc = main(["--port", "COM26", "--bauds", "921600,115200"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "最高可用波特率 = 921600" in out

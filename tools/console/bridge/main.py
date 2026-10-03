@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import os
 import sys
 import threading
@@ -17,6 +18,30 @@ from .server import Bridge, serve
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONSOLE_DIR = os.path.dirname(HERE)
+
+
+def raise_timer_resolution() -> bool:
+    """Windows 默认计时器精度约 15.6ms ⇒ `LinkRunner` 里那个 5ms 的 `Event.wait`
+    实际只醒 64 次/s，车上 100Hz 的遥测只能每 15.6ms 成串取一次（实测：间隔 p50
+    14.8ms、指令往返 p50 16ms）。`timeBeginPeriod(1)` 后实测链路轮询 64 → 179 次/s。
+
+    非 Windows 直接回 False（POSIX 的定时器本来就够细）。
+    """
+    if os.name != "nt":
+        return False
+    try:
+        return ctypes.windll.winmm.timeBeginPeriod(1) == 0      # 0 = TIMERR_NOERROR
+    except Exception:
+        return False
+
+
+def drop_timer_resolution() -> None:
+    if os.name != "nt":
+        return
+    try:
+        ctypes.windll.winmm.timeEndPeriod(1)
+    except Exception:
+        pass
 
 
 def parse_args(argv=None):
@@ -33,6 +58,8 @@ def parse_args(argv=None):
     ap.add_argument("--record", metavar="FILE.jsonl", help="启动即开始录制的文件")
     ap.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     ap.add_argument("--list-ports", action="store_true", help="列出串口后退出")
+    ap.add_argument("--low-res-timer", action="store_true",
+                    help="不提高 Windows 计时器精度（默认提高：链路轮询才跑得动 100Hz 遥测）")
     return ap.parse_args(argv)
 
 
@@ -50,6 +77,7 @@ def main(argv=None) -> int:
         return 0
 
     mode = "sim" if args.sim else ("replay" if args.replay else "serial")
+    hi_res = False if args.low_res_timer else raise_timer_resolution()
     b = Bridge(mode=mode, port=args.serial or "", baud=args.baud,
                replay=args.replay or "", replay_speed=args.replay_speed,
                web_root=args.web or "", console_dir=CONSOLE_DIR)
@@ -78,6 +106,8 @@ def main(argv=None) -> int:
         print("            cd tools/console/web && npm install && npm run build")
     print(f"  录制    : {'开' if b.console.recording else '关'}"
           + (f" → {b.console.rec_path}" if b.console.rec_path else ""))
+    print("  计时器  : " + ("1ms（已提高：链路轮询 ~180 次/s，100Hz 遥测不再成串到）"
+                            if hi_res else "系统默认（Windows 上约 15.6ms）"))
     print("  停止    : Ctrl+C")
     print("=" * 66)
 
@@ -95,6 +125,8 @@ def main(argv=None) -> int:
             pass
         b.stop()
         httpd.shutdown()
+        if hi_res:
+            drop_timer_resolution()
         print("已停止（链路关闭、录制收尾）。")
     return 0
 
