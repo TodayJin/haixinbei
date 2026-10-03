@@ -1043,7 +1043,8 @@ void host_link_init(void)
   for (i = 0; i < NSPEC; i++) s_param[i] = SPECS[i].def;
   memset(&s_stats, 0, sizeof(s_stats));
   /* 遥测默认 100Hz（10ms 一格）：控制环是 200Hz，取 100 既能看清又有余量；
-   * 上位机可以用 CMD_SET_TELEM_HZ 随时改（网页"设置 → 遥测频率"）。 */
+   * 上位机可以用 CMD_SET_TELEM_HZ 随时改（网页「控制 → 遥测频率」的滑块，
+   * 范围 1..200Hz，链路提速到 921600 后往上调才有余量）。 */
   s_stats.telem_hz = 100u;
   s_telem_mode = 1u;          /* 默认发 64 字节 T_TELEM2（新上位机要扩展量） */
   HostExt_Init();

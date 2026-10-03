@@ -69,6 +69,12 @@ function LogCards() {
   )
 }
 
+/** 车上固件把遥测频率钳在 1..200Hz（`firmware/App/Svc/host_link.c` 的
+ *  `CMD_SET_TELEM_HZ`：`arg<1 → 1`、`arg>200 → 200`），所以滑块上限就是 200 ——
+ *  100Hz 只是**默认值**，不是上限（链路提速到 921600 后就是留给用户往上调的）。 */
+const HZ_MIN = 1
+const HZ_MAX = 200
+
 export function ControlPage() {
   const { record, link, stats, params, telem } = useStore()
   const recording = record?.recording ?? false
@@ -76,7 +82,9 @@ export function ControlPage() {
   const [hz, setHz] = React.useState(50)
 
   React.useEffect(() => {
-    if (link?.telem_hz) setHz(Math.round(link.telem_hz))
+    if (link?.telem_hz) {
+      setHz(Math.min(HZ_MAX, Math.max(HZ_MIN, Math.round(link.telem_hz))))
+    }
   }, [link?.telem_hz])
 
   return (
@@ -113,8 +121,8 @@ export function ControlPage() {
           <div className="flex items-center gap-2">
             <input
               type="range"
-              min={1}
-              max={100}
+              min={HZ_MIN}
+              max={HZ_MAX}
               value={hz}
               onChange={(e) => setHz(Number(e.target.value))}
               className="h-1.5 w-full cursor-pointer appearance-none rounded-full bg-white/10 accent-neon-cyan"
@@ -124,6 +132,11 @@ export function ControlPage() {
           <button className="btn mt-2" onClick={() => void store.cmd('telem_hz', hz)}>
             下发频率
           </button>
+          <div className="mt-2 text-[12px] text-slate-400">
+            车上钳在 {HZ_MIN}–{HZ_MAX}Hz（默认 100）。调高后盯下面的
+            <span className="text-slate-300"> 丢帧 / 校验错 </span>
+            不为 0 就说明链路吃不消，降回来。
+          </div>
           <div className="mt-3 grid grid-cols-2 gap-3">
             <div className="text-[12px] text-slate-400">
               实测帧率 <span className="num text-slate-200">{fmt(stats?.telem_hz ?? link?.telem_hz, 1)} Hz</span>
