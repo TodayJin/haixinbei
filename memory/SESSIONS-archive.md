@@ -1,4 +1,11 @@
 ## 2026-09-15
+完成：复核用户提供的立创EDA 网表 `Netlist_Schematic1_2026-09-15.tel`（316 行，逐 net 解析 + MCU 64 脚对照）。结论：**原理图未画完**——I2C1（PA15/PB9）只有 MCU、无上拉、INA226 的 SCL/SDA/ALERT 与 OLED 的 SCL/SDA 全悬空；循迹 huidu1–8（PA0–PA7）无连接器；UART4（PC10/PC11）悬空而下载器走了 LPUART1；RGB（PC12）、INA226_ALERT（PB12）悬空。另发现 **F2 保险丝只有 2A**（电机堵转总电流 5–7A，会误跳），MCU 3.3V 去耦仅 2×100nF+10µF。已核对正确项：25MHz+2×15pF、NRST 10k+100nF、INA226 高侧接法(IN+ 源侧/IN− 负载侧/VBUS 负载侧/A0A1=GND=0x40)、两路 SP1N28 的 RT/COMP/FB/BOOT、7.4V 用 50k 电位器可调(3.4–8.3V)、反接 P-MOS+TVS、电机/编码器/舵机/按键/USART3 引脚与最终方案一致。用户器件有变：五向键用 **GT-TC006D-H060-L1**(C3019724)、3.3V LDO 用 **RT9013-33GB**(C47773) 而非 AP2112K。
+未完成：原理图待补：I2C 总线+上拉+器件、循迹排针、RGB、ALERT、UART4、保险丝改大、去耦补齐
+下一步：等用户补齐原理图后再复核；或出一份逐项 checklist 给用户改图
+
+> 更早的会话条目已归档到 179 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-15
 完成：晶振改为 **25MHz + 2×15pF**（CL=12pF），文档改 4 处（引脚表/5.2 表/BOM/6.3 说明），并注明 **固件 HSE_VALUE 要改成 25000000**、PLL = /5×68/2 = 170MHz。
 未完成：电源设计待复核；CubeMX 两项核对
 下一步：可按需出布局分区草图

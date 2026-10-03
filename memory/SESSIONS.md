@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：按用户选择去掉「跳到状态」目标里的「继续往下跑」：tools/console/web/src/lib/taskedit.ts 新增 FieldSpec.allowNoState（只给 WAIT_COND.p3）+ 纯函数 stateChoices(cur,stateCount,allowContinue)（真实状态 + 可选「继续往下跑」+ 当前值不在表里就临时补「（旧）继续往下跑」/「状态 N（不存在）」），GOTO 的 doc 补一句目标只能是真实状态；tools/console/web/src/pages/Tasks.tsx 的 kind==='state' 渲染改用 stateChoices；removeState 加了 fixRef() 只修 0..N-1 的引用。验证：npx tsc --noEmit exit 0；vitest 16 文件/157 项通过（taskedit.test.ts 新增一条用例：field 标志、stateChoices 三种取值、0xFFFF/越界兜底项、removeState 不动 0xFFFF）；npm run build 后 dist/assets/index-CKcSQ2WB.js 337.70 kB，8793 首页已在托管它。提交 753a3a0。
+未完成：下拉里的选项列表只有 stateChoices 的单元测试盯（项目没有 jsdom/puppeteer，SSR 不渲染 select 且无法截图），浏览器里的观感只有用户能看到
+下一步：等用户刷新 #/tasks 看新下拉；之后剩下的大项还是真车上车对拍（真板 + 真 Flash 页 59..62）
+
+## 2026-10-03
 完成：修掉用户报的「拖一个模块但没放下，蓝条就不消失」：根因是 tools/console/web/src/pages/Tasks.tsx 的 dropAt 只在 DropLine 的 onDragOver 置位、onDrop 清位，块丢到空白处/参数区、按 Esc 或拖出窗口时浏览器只发 dragend ⇒ 蓝条挂住。改法是在 TasksPage 加一个 window 级 dragend/drop 兜底 clear 的 useEffect（带 removeEventListener 清理）。验证：npx tsc --noEmit exit 0、vitest 16 文件/155 passed、npm run build 后 dist/assets/index-CKMdvvq8.js 336.28 kB，8793 首页已托管该文件。提交 07a10c7。
 未完成：没有自动化 UI 拖放测试；截不了图（Chrome/Edge 的 --headless=new --screenshot 在本机都不落盘，项目也没有 puppeteer/playwright），视觉只有用户自己看
 下一步：用户刷新 http://127.0.0.1:8793/#/tasks 确认观感
@@ -1157,9 +1162,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：电机准确扭矩未确认
 下一步：用户给规格书或实测堵转电流后精算；可用于选轮径/传动比校核越障能力
 
-## 2026-09-15
-完成：复核用户提供的立创EDA 网表 `Netlist_Schematic1_2026-09-15.tel`（316 行，逐 net 解析 + MCU 64 脚对照）。结论：**原理图未画完**——I2C1（PA15/PB9）只有 MCU、无上拉、INA226 的 SCL/SDA/ALERT 与 OLED 的 SCL/SDA 全悬空；循迹 huidu1–8（PA0–PA7）无连接器；UART4（PC10/PC11）悬空而下载器走了 LPUART1；RGB（PC12）、INA226_ALERT（PB12）悬空。另发现 **F2 保险丝只有 2A**（电机堵转总电流 5–7A，会误跳），MCU 3.3V 去耦仅 2×100nF+10µF。已核对正确项：25MHz+2×15pF、NRST 10k+100nF、INA226 高侧接法(IN+ 源侧/IN− 负载侧/VBUS 负载侧/A0A1=GND=0x40)、两路 SP1N28 的 RT/COMP/FB/BOOT、7.4V 用 50k 电位器可调(3.4–8.3V)、反接 P-MOS+TVS、电机/编码器/舵机/按键/USART3 引脚与最终方案一致。用户器件有变：五向键用 **GT-TC006D-H060-L1**(C3019724)、3.3V LDO 用 **RT9013-33GB**(C47773) 而非 AP2112K。
-未完成：原理图待补：I2C 总线+上拉+器件、循迹排针、RGB、ALERT、UART4、保险丝改大、去耦补齐
-下一步：等用户补齐原理图后再复核；或出一份逐项 checklist 给用户改图
-
-> 更早的会话条目已归档到 179 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 180 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
