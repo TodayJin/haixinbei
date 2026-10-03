@@ -423,6 +423,19 @@ export function TasksPage() {
     }
   }, [monitor])
 
+  /* 拖到一半放手（丢在空白处/参数区、按 Esc、拖出窗口）时蓝线必须自己消失：
+     只在 DropLine 的 onDrop 里清是不够的 —— 没落在任何蓝线上时浏览器只发 dragend，
+     于是 dropAt 一直留着，蓝条就挂在那儿不走了。 */
+  React.useEffect(() => {
+    const clear = () => setDropAt(null)
+    window.addEventListener('dragend', clear)
+    window.addEventListener('drop', clear)
+    return () => {
+      window.removeEventListener('dragend', clear)
+      window.removeEventListener('drop', clear)
+    }
+  }, [])
+
   const task: TaskDef = file.tasks[Math.min(selTask, file.tasks.length - 1)] ?? file.tasks[0]
   const prog = task.prog
   const info = compileInfo(prog)
