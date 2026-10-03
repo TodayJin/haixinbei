@@ -49,6 +49,10 @@ $deps = @{
   # 全工程唯一会擦写 Flash 的模块：真 nvram.c + 真 trace_cal 标定，
   # 其余外部依赖（g_cfg/UI 三函数/动作表/参数表）由 t_nvram.c 自己做最小替身
   't_nvram'    = @('App/Svc/nvram.c', 'App/Svc/trace_cal.c')
+  # 任务程序在 Flash 里的存储：真 task_store.c + 格式层 + 解释器（拒写判据要问
+  # TaskRun_IsRunning），控制模块仍然用 host_appstub.c 的记录式替身
+  't_taskstore' = @('App/Svc/task_store.c', 'App/Svc/task_prog.c', 'App/Svc/task_run.c',
+                    'test/stub/host_appstub.c')
 }
 $stubs = @('host_hal.c', 'host_board.c', 'host_rtt.c') | ForEach-Object { Join-Path $stub $_ }
 

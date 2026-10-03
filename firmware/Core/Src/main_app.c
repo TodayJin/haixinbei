@@ -28,6 +28,7 @@
 #include "gyro_control.h"  /* 任务流程（renwu.c）要用角度环，见主循环里的任务闸门 */
 #include "renwu.h"         /* 旧板的比赛任务流程 A/B/C（host_link 的 CMD_START_A/B/C 启动） */
 #include "task_run.h"      /* 上位机可编程任务（状态机）解释器，见主循环末尾的每拍推进 */
+#include "task_store.h"    /* 任务程序在 Flash 里的 3 个槽位（页 60/61/62）+ 开机自启 */
 #include "motor_bench.h" /* 只在 -DMOTOR_BENCH 的构建里干活，见 motor_bench.c */
 
 extern volatile uint32_t g_oled_tx_done;
@@ -139,6 +140,37 @@ int main(void)
    * host_link 参数表——而 app_ui_init() 里的 pull_pid_params() 正好是反向覆盖。 */
   nvram_init();
   SEGGER_RTT_printf(0, "nvram loaded=%u\r\n", (unsigned)nvram_loaded());
+
+  /* 上位机烧进 Flash 的任务程序（页 60/61/62，见 App/Svc/task_store.c）。放在
+   * nvram_init() 之后：两者各读自己的 Flash 页，但任务一启动就接管电机，必须等
+   * 参数表（PID 等标定量）已经从存档恢复完。 */
+  TaskStore_Init();
+  {
+    uint8_t slot;
+    for (slot = 0U; slot < TaskStore_SlotCount(); slot++) {
+      char nm[TASK_STORE_NAME_MAX + 1u];
+      uint8_t present = TaskStore_Present(slot);
+      (void)TaskStore_Name(slot, nm, sizeof nm);
+      SEGGER_RTT_printf(0, "task slot %u: %s len=%u crc=%04X flags=0x%02X%s\r\n",
+                        (unsigned)slot, present ? nm : "(empty)",
+                        (unsigned)TaskStore_Len(slot), (unsigned)TaskStore_Crc(slot),
+                        (unsigned)TaskStore_Flags(slot),
+                        ((TaskStore_Flags(slot) & TASK_STORE_FLAG_AUTO) != 0U) ? " AUTO" : "");
+    }
+
+    /* 开机自启：上位机给任务置了 flags.bit0 就上电自己跑（比赛不能遥控，车离线自主
+     * 执行）。没有任何任务带这个标记时这里什么都不做，所以台架上不会因为这个改动
+     * 自己动起来 —— 自启是上位机上**显式**勾的选项。 */
+    slot = TaskStore_AutoSlot();
+    if (slot != TASK_STORE_NO_SLOT) {
+      int e = TaskStore_Load(slot);
+      SEGGER_RTT_printf(0, "task auto: slot=%u load=%d\r\n", (unsigned)slot, e);
+      if (e == 0) {
+        e = TaskRun_Start((uint16_t)slot);
+        SEGGER_RTT_printf(0, "task auto: start=%d\r\n", e);
+      }
+    }
+  }
 
   /* 比赛任务流程的启动闸门（见主循环里那一小段）：0=没在跑任务 */
   static uint8_t s_renwu_active = 0U;
