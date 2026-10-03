@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：把 `53b5fc0` 里的 `renwu.c` 21 个可达段转成新任务格式 `tools/console/web/src/lib/tasks/renwu-lap.json`（15 状态 / 190 块 / 名字 95 B / 镜像 2127 B，名字「旧全程·12障碍」），单任务上限从 2048 提到 4096，「两轮直给」放回模式下拉；提交 `1af6824`。验证：`tools/console/web/src/lib/tasks/renwu-lap.test.ts`（7 项，含 2127 B 尺寸护栏与关键动作抽查）、`tools/console/tests/test_firmware_pipe.py::test_lap_program_is_accepted_by_the_real_firmware`（真固件 18 片 PUT → COMMIT → LIST → GET 逐字节回读）、真 HTTP 端到端 `out/_lap_http_e2e.py --leave`（8793 桥 + 假车，PUT/COMMIT/LIST/GET/RUN/STATUS/STOP 全绿，跑完故意不删，仿真车槽 0 上留着这条任务 flags=1）；三层回归 pytest 103 passed / vitest 17 文件 164 项 / run_tests 13 通过 / tsc 0 / `npm run build` / bin 114604 B / check_static 52 文件 4 告警 0 error。
+未完成：蜂鸣器/RGB 没有对应块（转换时丢弃）；角度环「左右基准速度分开」不可表达；角度环倒车不可表达（退化成两轮直给）；旧 `Load()` 是开环 PWM，新「两轮直给」走速度环闭环；旧默认循迹是两级 `motor_tracing_pid_speed`，新下拉只有三级串级。
+下一步：用户上车（真板 + 真 Flash 页 59..62）跑这条 12 障碍流程，看中途丢线判据与各段动作是否与旧车一致；若体积还要涨，先看能不能合并状态而不是再抬上限。
+
+## 2026-10-03
 完成：按用户选择去掉「跳到状态」目标里的「继续往下跑」：tools/console/web/src/lib/taskedit.ts 新增 FieldSpec.allowNoState（只给 WAIT_COND.p3）+ 纯函数 stateChoices(cur,stateCount,allowContinue)（真实状态 + 可选「继续往下跑」+ 当前值不在表里就临时补「（旧）继续往下跑」/「状态 N（不存在）」），GOTO 的 doc 补一句目标只能是真实状态；tools/console/web/src/pages/Tasks.tsx 的 kind==='state' 渲染改用 stateChoices；removeState 加了 fixRef() 只修 0..N-1 的引用。验证：npx tsc --noEmit exit 0；vitest 16 文件/157 项通过（taskedit.test.ts 新增一条用例：field 标志、stateChoices 三种取值、0xFFFF/越界兜底项、removeState 不动 0xFFFF）；npm run build 后 dist/assets/index-CKcSQ2WB.js 337.70 kB，8793 首页已在托管它。提交 753a3a0。
 未完成：下拉里的选项列表只有 stateChoices 的单元测试盯（项目没有 jsdom/puppeteer，SSR 不渲染 select 且无法截图），浏览器里的观感只有用户能看到
 下一步：等用户刷新 #/tasks 看新下拉；之后剩下的大项还是真车上车对拍（真板 + 真 Flash 页 59..62）
@@ -1157,9 +1162,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：上拉、RGB、ALERT、保险丝等未改
 下一步：用户改完再复核；或按此清单出逐条修改表
 
-## 2026-09-15
-完成：用户问电机扭矩。查了 JGB37-520（12V）系列资料：同系列空载 7–960 rpm，全系列扭矩约 **0.07–16 kg·cm**，最大功率 ~10W；已知数据点 107rpm≈4.8 kg·cm、1:131(45rpm) 堵转≈7 kg·cm。**用户这颗 45:1/150rpm 的准确扭矩没有查到官方表**，按同系列推算约 **额定 0.2–0.4 N·m（2–4 kg·cm）/ 堵转 0.5–0.8 N·m（5–8 kg·cm）**，已建议以电机标签/规格书为准（或给额定电流/堵转电流/Kt 我来精算）。
-未完成：电机准确扭矩未确认
-下一步：用户给规格书或实测堵转电流后精算；可用于选轮径/传动比校核越障能力
-
-> 更早的会话条目已归档到 180 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 181 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
