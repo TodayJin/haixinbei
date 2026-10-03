@@ -395,6 +395,7 @@ export function TasksPage() {
   const [remote, setRemote] = React.useState<{ supported: boolean; items: RemoteTaskInfo[] } | null>(null)
   const [status, setStatus] = React.useState<TaskStatus | null>(null)
   const [monitor, setMonitor] = React.useState(false)
+  const [autoRun, setAutoRun] = React.useState(false)   // 烧写时下发 flags.bit0（开机自启）
   const [busy, setBusy] = React.useState('')
   const fileRef = React.useRef<HTMLInputElement | null>(null)
 
@@ -451,7 +452,7 @@ export function TasksPage() {
       return
     }
     setBusy('烧写')
-    const r = await taskApi.burn(task.id, bytes, info.len, info.crc16, task.name)
+    const r = await taskApi.burn(task.id, bytes, info.len, info.crc16, task.name, autoRun ? 1 : 0)
     if (!r.ok) {
       setBusy('')
       store.toast('err', r.error)
@@ -464,7 +465,7 @@ export function TasksPage() {
       return
     }
     const same = back.data.length === bytes.length && back.data.every((v, i) => v === bytes[i])
-    if (same) store.toast('ok', `任务 ${task.id}「${task.name}」烧写并回读校验一致（${r.data.chunks} 片）`)
+    if (same) store.toast('ok', `任务 ${task.id}「${task.name}」烧写并回读校验一致（${r.data.chunks} 片${autoRun ? '，已设开机自启' : ''}）`)
     else store.toast('err', `回读不一致（车上 ${back.data.length} B / 本地 ${bytes.length} B）—— 别让车跑这个任务`)
     void refreshRemote()
   }
@@ -673,6 +674,7 @@ export function TasksPage() {
             <div key={it.id} className="mb-1 flex items-center gap-1.5 rounded-lg border border-white/10 px-2 py-1">
               <span className="num text-[10px] text-slate-500">#{it.id}</span>
               <span className="min-w-0 flex-1 truncate text-[12px] text-slate-300">{it.name || '（车上无名）'}</span>
+              {it.flags & 1 ? <span className="rounded bg-neon-mint/15 px-1 text-[10px] text-neon-mint">自启</span> : null}
               <span className="num text-[10px] text-slate-600">{it.len}B</span>
               <button className="text-[11px] text-slate-500 hover:text-neon-cyan" onClick={() => void pullRemote(it)} title="读回车上的程序">
                 <Download size={12} />
@@ -710,6 +712,7 @@ export function TasksPage() {
               <button className="btn-ghost !px-2 !py-0.5 text-[11px]" onClick={() => void doStop()} disabled={!!busy || !supported}>
                 <Square size={12} /> 停车
               </button>
+              <Toggle on={autoRun} onChange={setAutoRun} disabled={!supported} label={<span className="text-[11px]" title="烧写时下发 flags.bit0：车上开机自己跑这个任务，不用电脑点「开始」">开机自启</span>} />
               <Toggle on={monitor} onChange={setMonitor} label={<span className="text-[11px]">监视</span>} disabled={!supported} />
             </div>
           }
@@ -754,8 +757,8 @@ export function TasksPage() {
             <div className="mt-2 text-[11px] text-slate-500">校验通过，可以烧。{busy ? `（${busy}中…）` : ''}</div>
           )}
           <div className="mt-2 text-[10px] leading-relaxed text-slate-600">
-            车上只认二进制 —— 任务名只存在浏览器（协议里没有传名字的帧，见 docs/任务编程.md §5 的空洞）。烧写后会立刻回读比对，
-            不一致会红字报出来。
+            车上只认二进制。任务名与「开机自启」标志随 COMMIT 帧一起下发、存在车上目录页里（见 docs/任务编程.md §5）；
+            烧写后会立刻回读比对，不一致会红字报出来。
           </div>
         </Card>
 

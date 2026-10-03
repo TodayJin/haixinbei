@@ -167,9 +167,9 @@ describe('契约自检（需要 mock 或桥在 127.0.0.1:8770）', () => {
     const prog = newTaskDef(0, '契约自检').prog
     const bytes = encodeTask(prog).bytes
     const crc = crc16Ccitt(bytes.subarray(12))
-    const id = 9
+    const id = 6                       // 车上 8 个槽位：0..7
 
-    const burn = await api.burn(id, bytes, bytes.length, crc, '契约自检')
+    const burn = await api.burn(id, bytes, bytes.length, crc, '契约自检', 1)   // 1 = 开机自启
     expect(burn.ok, JSON.stringify(burn)).toBe(true)
 
     const list = await api.list()
@@ -180,6 +180,7 @@ describe('契约自检（需要 mock 或桥在 127.0.0.1:8770）', () => {
       expect(mine?.len).toBe(bytes.length)
       expect(mine?.crc).toBe(crc)
       expect(mine?.name).toBe('契约自检')
+      expect(mine?.flags).toBe(1)     // 开机自启跟着 COMMIT 落到目录记录里
     }
 
     const back = await api.get(id)
@@ -195,8 +196,9 @@ describe('契约自检（需要 mock 或桥在 127.0.0.1:8770）', () => {
     expect(st.ok).toBe(true)
     if (st.ok && st.data) {
       expect(st.data.id).toBe(id)
-      expect(st.data.running).toBe(1)
+      expect(st.data.running).toBe(true)   // 线上是 u8 1/0，taskapi 归一成布尔（页面按布尔用）
       expect(st.data.state).toBe(0)        // newTaskDef 的主页是 0
+      expect(st.data.elapsedMs).toBeGreaterThanOrEqual(0)
     }
     const stop = await api.stop()
     expect(stop.ok).toBe(true)

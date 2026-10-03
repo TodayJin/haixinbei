@@ -35,6 +35,21 @@ export interface TaskStatus {
 
 export type Result<T> = { ok: true; data: T } | { ok: false; error: string; supported: boolean }
 
+/**
+ * 车/桥两边的字段口径不完全一样：固件推的是 `elapsed_ms`（蛇形），页面统一读 `elapsedMs`。
+ * 这里把两种拼写归一，省得某一层少写一个键就在界面上显示 `undefined ms`。
+ */
+export function normalizeStatus(s: Partial<TaskStatus> & { elapsed_ms?: number }): TaskStatus {
+  return {
+    id: Number(s.id ?? 0xffff),
+    state: Number(s.state ?? 0xff),
+    running: !!s.running,
+    block: Number(s.block ?? 0),
+    elapsedMs: Number(s.elapsedMs ?? s.elapsed_ms ?? 0),
+    flags: Number(s.flags ?? 0),
+  }
+}
+
 export function bytesToHex(b: Uint8Array): string {
   let s = ''
   for (const x of b) s += x.toString(16).padStart(2, '0')
@@ -127,9 +142,10 @@ export function createTaskApi(fetchImpl: Fetcher) {
 
     put: (id: number, offset: number, hex: string) => call<unknown>('/api/tasks/put', { method: 'POST', body: { id, offset, hex } }),
 
-    /** 提交：桥上把 len/crc 与收到的字节核对一遍，不一致就拒（避免烧半个程序） */
-    commit: (id: number, len: number, crc: number, name?: string) =>
-      call<unknown>('/api/tasks/commit', { method: 'POST', body: { id, len, crc, name } }),
+    /** 提交：桥上把 len/crc 与收到的字节核对一遍，不一致就拒（避免烧半个程序）。
+     *  `flags` bit0 = 开机自启（车上自己跑这个任务，不用电脑点「开始」）。 */
+    commit: (id: number, len: number, crc: number, name?: string, flags?: number) =>
+      call<unknown>('/api/tasks/commit', { method: 'POST', body: { id, len, crc, name, flags } }),
 
     del: (id: number) => call<unknown>('/api/tasks/delete', { method: 'POST', body: { id } }),
 
@@ -138,20 +154,22 @@ export function createTaskApi(fetchImpl: Fetcher) {
     stop: () => call<unknown>('/api/tasks/stop', { method: 'POST', body: {} }),
 
     status: async (): Promise<Result<TaskStatus | null>> => {
-      const r = await call<{ status?: TaskStatus | null } & Partial<TaskStatus>>('/api/tasks/status')
+      type Raw = Partial<TaskStatus> & { elapsed_ms?: number }
+      const r = await call<{ status?: Raw } & Raw>('/api/tasks/status')
       if (!r.ok) return r
-      const s = (r.data.status ?? (typeof r.data.state === 'number' ? (r.data as TaskStatus) : null)) as TaskStatus | null
-      return { ok: true, data: s }
+      const raw = r.data.status ?? (typeof r.data.state === 'number' ? r.data : null)
+      return { ok: true, data: raw ? normalizeStatus(raw) : null }
     },
 
     /** 烧一个任务：分片 → 提交（回读校验由页面调 get 比对） */
-    async burn(id: number, bytes: Uint8Array, len: number, crc: number, name?: string): Promise<Result<{ chunks: number }>> {
+    async burn(id: number, bytes: Uint8Array, len: number, crc: number, name?: string,
+               flags?: number): Promise<Result<{ chunks: number }>> {
       const chunks = chunkImage(bytes)
       for (const c of chunks) {
         const r = await this.put(id, c.offset, c.hex)
         if (!r.ok) return r
       }
-      const c = await this.commit(id, len, crc, name)
+      const c = await this.commit(id, len, crc, name, flags)
       if (!c.ok) return c
       return { ok: true, data: { chunks: chunks.length } }
     },

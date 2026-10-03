@@ -40,6 +40,22 @@ T_HELLO = 0x40
 T_HELLO_REQ = 0x41
 T_TEXT = 0x50
 
+# 车上任务程序（0x60..0x69，契约见 ../../docs/任务编程.md §5）
+T_TASK_LIST = 0x60        # →车：请求目录（车一帧帧回 T_TASK_LIST_R）
+T_TASK_LIST_R = 0x61      # 车→：一条任务一帧；**空载荷 = 目录发完**
+T_TASK_PUT = 0x62         # →车：id u16 + off u16 + 数据（≤120 B）
+T_TASK_COMMIT = 0x63      # →车：id u16 + len u16 + crc u16 + flags u8 [+ name_len u8 + 名字]
+T_TASK_GET = 0x64         # →车：id u16（成功时不回 ACK，回一串 T_TASK_DATA）
+T_TASK_DATA = 0x65        # 车→：id u16 + off u16 + 数据；**空数据 = 读完**
+T_TASK_DEL = 0x66         # →车：id u16
+T_TASK_RUN = 0x67         # →车：id u16
+T_TASK_STOP = 0x68        # →车：—（幂等）
+T_TASK_STATUS = 0x69      # 车→：id u16 + state u8 + running u8 + block u16 + elapsed_ms u32 + flags u8
+
+TASK_PUT_MAX = MAX_PAYLOAD - 4     # 一帧 T_TASK_PUT 最多带的字节数（124；页面按 120 分片）
+TASK_DATA_CHUNK = 64               # 固件每帧 T_TASK_DATA 带 64 B
+TASK_SLOT_BYTES = 2048             # 一个槽位一页（firmware/App/Svc/task_store.c）
+
 TYPE_NAMES = {
     T_TELEM: "telem", T_TELEM2: "telem2", T_PARAM_GET: "param_get",
     T_PARAM_SET: "param_set", T_PARAM_REPORT: "param_report", T_PARAM_SAVE: "param_save",
@@ -48,6 +64,10 @@ TYPE_NAMES = {
     T_SERVO_SET: "servo_set", T_SERVO_PLAY: "servo_play", T_DRIVE: "drive",
     T_DRIVE_REPORT: "drive_report", T_SERVO_DEV: "servo_dev", T_CMD: "cmd", T_ACK: "ack", T_HELLO: "hello",
     T_HELLO_REQ: "hello_req", T_TEXT: "text",
+    T_TASK_LIST: "task_list", T_TASK_LIST_R: "task_list_r", T_TASK_PUT: "task_put",
+    T_TASK_COMMIT: "task_commit", T_TASK_GET: "task_get", T_TASK_DATA: "task_data",
+    T_TASK_DEL: "task_del", T_TASK_RUN: "task_run", T_TASK_STOP: "task_stop",
+    T_TASK_STATUS: "task_status",
 }
 
 ST_OK = 0x00
@@ -99,6 +119,7 @@ CAP_DRIVE = 1 << 3
 CAP_CAL = 1 << 4
 CAP_FLASH = 1 << 5
 CAP_WATCHDOG = 1 << 6
+CAP_TASK = 1 << 7          # HOST_CAP_TASK：置位 = 固件认 0x60..0x69（任务功能）
 
 TELEM_LEN = 32
 TELEM2_LEN = 64
@@ -380,6 +401,40 @@ def decode_text(p: bytes) -> str:
     return p.decode("utf-8", "replace").rstrip("\r\n")
 
 
+def decode_task_list_r(p: bytes) -> dict | None:
+    """T_TASK_LIST_R：`id u16 | len u16 | crc u16 | flags u8 | name_len u8 | name…`。
+
+    空载荷（0 字节）= 目录发完；空槽固件根本不发（见 docs/任务编程.md §5）。
+    """
+    if len(p) == 0:
+        return None
+    if len(p) < 8:
+        raise ValueError("任务目录条太短：%d" % len(p))
+    n = p[7]
+    return {"id": u16(p, 0), "len": u16(p, 2), "crc": u16(p, 4), "flags": p[6],
+            "name": p[8:8 + n].decode("utf-8", "replace")}
+
+
+def decode_task_data(p: bytes) -> tuple[int, int, bytes]:
+    """T_TASK_DATA：`id u16 | off u16 | 数据`；没有数据（只有 4 字节）= 读完。"""
+    if len(p) < 4:
+        raise ValueError("任务数据块太短：%d" % len(p))
+    return u16(p, 0), u16(p, 2), bytes(p[4:])
+
+
+def decode_task_status(p: bytes) -> dict:
+    """T_TASK_STATUS（11 字节）：`id u16 | state u8 | running u8 | block u16 | elapsed_ms u32 | flags u8`。
+
+    `id = 0xFFFF / state = 0xFF` = 车上没载任何程序（见 docs/任务编程.md §5）。
+    `elapsed_ms` 与 `elapsedMs` 都给：前端 `web/src/lib/taskapi.ts` 的 TaskStatus 读的是驼峰名。
+    """
+    if len(p) < 11:
+        raise ValueError("任务状态长度不对：%d" % len(p))
+    ms = u32(p, 6)
+    return {"id": u16(p, 0), "state": p[2], "running": (p[3] != 0), "running_u8": p[3],
+            "block": u16(p, 4), "elapsed_ms": ms, "elapsedMs": ms, "flags": p[10]}
+
+
 # ---------------------------------------------------------------- 组帧助手
 
 def frame_param_set(seq: int, pid: int, value: float) -> bytes:
@@ -436,6 +491,77 @@ def frame_cmd(seq: int, cmd: int, arg: int = 0) -> bytes:
 
 def frame_hello_req(seq: int) -> bytes:
     return build_frame(T_HELLO_REQ, seq, b"")
+
+
+def frame_task_list(seq: int) -> bytes:
+    return build_frame(T_TASK_LIST, seq, b"")
+
+
+def frame_task_put(seq: int, tid: int, off: int, data: bytes) -> bytes:
+    if len(data) > TASK_PUT_MAX:
+        raise ValueError("一片最多 %d 字节（收到 %d）" % (TASK_PUT_MAX, len(data)))
+    return build_frame(T_TASK_PUT, seq, pack_u16(tid) + pack_u16(off) + bytes(data))
+
+
+def frame_task_commit(seq: int, tid: int, length: int, crc: int, name: str = "",
+                      flags: int = 0) -> bytes:
+    """COMMIT：前 7 字节固定（`id u16 + len u16 + crc u16 + flags u8`），名字是可选超集。"""
+    return build_frame(T_TASK_COMMIT, seq, payload_task_commit(tid, length, crc, name, flags))
+
+
+def payload_task_commit(tid: int, length: int, crc: int, name: str = "",
+                        flags: int = 0) -> bytes:
+    """COMMIT 的载荷（桥用 `state.send_wait()` 发，所以载荷要能单独拿）。
+
+    ``flags`` bit0 = 开机自启（车上 `TASK_STORE_FLAG_AUTO`），不认的位由存储层过滤掉。
+    """
+    pl = pack_u16(tid) + pack_u16(length) + pack_u16(crc) + bytes([flags & 0xFF])
+    if name:
+        nb = name.encode("utf-8")[:30]
+        pl += bytes([len(nb)]) + nb
+    return pl
+
+
+def frame_task_get(seq: int, tid: int) -> bytes:
+    return build_frame(T_TASK_GET, seq, pack_u16(tid))
+
+
+def frame_task_del(seq: int, tid: int) -> bytes:
+    return build_frame(T_TASK_DEL, seq, pack_u16(tid))
+
+
+def frame_task_run(seq: int, tid: int) -> bytes:
+    return build_frame(T_TASK_RUN, seq, pack_u16(tid))
+
+
+def frame_task_stop(seq: int) -> bytes:
+    return build_frame(T_TASK_STOP, seq, b"")
+
+
+# ---------------------------------------------------------------- 车侧组帧（仿真/回放）
+
+def encode_task_list_r(tid: int, length: int, crc: int, flags: int, name: str = "") -> bytes:
+    nb = name.encode("utf-8")[:30]
+    return (pack_u16(tid) + pack_u16(length) + pack_u16(crc)
+            + bytes([flags & 0xFF, len(nb)]) + nb)
+
+
+def encode_task_data(tid: int, off: int, data: bytes) -> bytes:
+    return pack_u16(tid) + pack_u16(off) + bytes(data)
+
+
+def payload_task_status(st: dict) -> bytes:
+    """T_TASK_STATUS 的载荷（11 字节）—— 仿真车与组帧共用同一份编码，避免两边漂移。"""
+    return (pack_u16(int(st.get("id", 0xFFFF)) & 0xFFFF)
+            + bytes([int(st.get("state", 0xFF)) & 0xFF, 1 if st.get("running") else 0])
+            + pack_u16(int(st.get("block", 0)) & 0xFFFF)
+            + struct.pack("<I", int(st.get("elapsed_ms", st.get("elapsedMs", 0))) & 0xFFFFFFFF)
+            + bytes([int(st.get("flags", 0)) & 0xFF]))
+
+
+def frame_task_status(seq: int, st: dict) -> bytes:
+    """T_TASK_STATUS 的组帧（仿真用；`bridge/sim.py` 与回放都走这里）。"""
+    return build_frame(T_TASK_STATUS, seq, payload_task_status(st))
 
 
 def encode_telemetry2(t: dict) -> bytes:

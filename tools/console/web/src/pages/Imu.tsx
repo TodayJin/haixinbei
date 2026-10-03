@@ -224,7 +224,7 @@ export function ImuPage() {
             <Stat label="动作号" value={`${t?.action ?? '--'}`} />
           </div>
           <div className="mt-3 text-[12px] text-slate-500">
-            固件能力位 0x{fwCaps.toString(16)}（bit0 遥测2 / bit1 动作表 / bit2 舵机 / bit3 驾驶 / bit4 标定 / bit5 Flash / bit6 看门狗）
+            固件能力位 0x{fwCaps.toString(16)}（bit0 遥测2 / bit1 动作表 / bit2 舵机 / bit3 驾驶 / bit4 标定 / bit5 Flash / bit6 看门狗 / bit7 任务）
           </div>
         </Card>
       </div>

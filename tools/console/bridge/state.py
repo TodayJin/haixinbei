@@ -93,6 +93,16 @@ class Console:
         self.action_preset = self._load_action_preset()
         self._rebuild_actions()
         self.cal: dict = {}
+        # 车上任务程序（docs/任务编程.md §5）：目录只在握手后请求一次，状态由车推
+        self.tasks: list[dict] = []
+        self.task_status: dict | None = None
+        self._task_list_items: list[dict] = []
+        self._task_list_done = False
+        self._task_data_chunks: list[tuple[int, bytes]] = []
+        self._task_data_done = False
+        self._task_data_id = 0xFFFF
+        # GET 的应答状态码：读回**成功时不回 ACK**，所以只有失败才看得到它
+        self._task_get_status: int | None = None
         self.logs: deque = deque(maxlen=LOG_MAX)
         self.replies: dict[int, list[pr.Frame]] = {}
         self.subs: list[Subscriber] = []
@@ -356,12 +366,38 @@ class Console:
                     nm = self._sent_name.pop(f.seq, None)
                     ty = self._sent_type.pop(f.seq, 0)
                 req = nm or REQ_NAMES.get(ty, "cmd")
+                if req == "tasks.get":
+                    with self.cv:
+                        self._task_get_status = st   # 读回失败才有 ACK（成功走 DATA）
+                        self.cv.notify_all()
                 self.emit({"n": "ack", "src": {
                     "seq": f.seq, "req": req, "status": st, "ok": (st == pr.ST_OK),
                     "text": ST_NAMES.get(st, f"{st:#04x}"),
                     "status_name": ST_NAMES.get(st, f"{st:#04x}")}})
         elif f.type == pr.T_TEXT:
             self.log("info", "[车] " + pr.decode_text(f.payload))
+        elif f.type == pr.T_TASK_LIST_R:
+            it = pr.decode_task_list_r(f.payload)
+            with self.cv:
+                if it is None:
+                    self._task_list_done = True        # 空载荷 = 目录发完
+                else:
+                    self._task_list_items.append(it)
+                self.cv.notify_all()
+        elif f.type == pr.T_TASK_DATA:
+            tid, off, data = pr.decode_task_data(f.payload)
+            with self.cv:
+                if data:
+                    self._task_data_chunks.append((off, data))
+                else:
+                    self._task_data_done = True        # 没有数据 = 读完
+                    self._task_data_id = tid
+                self.cv.notify_all()
+        elif f.type == pr.T_TASK_STATUS:
+            st = pr.decode_task_status(f.payload)
+            with self.lock:
+                self.task_status = st
+            self.emit({"n": "task", "src": st})
         else:
             self.emit({"n": "frame", "src": {"type": f.type, "seq": f.seq,
                                              "len": len(f.payload)}})
@@ -474,6 +510,157 @@ class Console:
             items = [dict(a) for a in self.actions]
         return {"ok": True, "items": items}
 
+    # ------------------------------------------------------------------ 任务程序
+    # 帧语义见 docs/任务编程.md §5；存储/解释器在固件 App/Svc/task_store.c、task_run.c。
+    # 这一层只做四件事：能力位把关、多帧收齐（目录/数据）、单帧的 send_wait、状态镜像。
+
+    def cap_task(self) -> bool:
+        """车上固件认不认任务帧 —— 看 HELLO 的 HOST_CAP_TASK(bit7)。
+
+        还没握过手时不知道能力，先按"能"试（真发一帧就知道），别凭空把功能禁掉。
+        """
+        caps = (self.hello or {}).get("caps")
+        if caps is None:
+            return True
+        return bool(int(caps) & pr.CAP_TASK)
+
+    def unsupported(self) -> dict:
+        return {"ok": False, "supported": False,
+                "error": "车上固件不支持任务功能（HOST_CAP_TASK 未置位）—— 先升级固件再试"}
+
+    def _cap_guard(self) -> dict | None:
+        return None if self.cap_task() else self.unsupported()
+
+    def _wait_flag(self, attr: str, timeout: float) -> bool:
+        """等 on_frame 里的某个"收齐"标记（多帧回包用，不能只等一帧）。"""
+        deadline = time.time() + max(0.05, timeout)
+        with self.cv:
+            while time.time() < deadline:
+                if getattr(self, attr):
+                    return True
+                self.cv.wait(max(0.01, deadline - time.time()))
+            return bool(getattr(self, attr))
+
+    def task_list(self, timeout: float = 1.5) -> dict:
+        """`T_TASK_LIST` → 车上一条任务一帧地回 `T_TASK_LIST_R`，空载荷收尾。"""
+        g = self._cap_guard()
+        if g:
+            return g
+        with self.cv:
+            self._task_list_items = []
+            self._task_list_done = False
+        self.send(pr.T_TASK_LIST, b"", req="tasks.list")
+        done = self._wait_flag("_task_list_done", timeout)
+        with self.cv:
+            items = [dict(it) for it in self._task_list_items]
+        if not done:
+            return {"ok": False, "supported": True, "items": items,
+                    "error": "没等到目录收尾帧（车没回或帧丢）—— 再试一次"}
+        with self.lock:
+            self.tasks = items
+        self.emit({"n": "tasks", "src": {"ok": True, "items": items}})
+        return {"ok": True, "supported": True, "items": items}
+
+    def task_get(self, tid: int, timeout: float = 2.0) -> dict:
+        """`T_TASK_GET` → 一串 `T_TASK_DATA`（成功时不回 ACK），按 off 拼回整镜像。"""
+        g = self._cap_guard()
+        if g:
+            return g
+        with self.cv:
+            self._task_data_chunks = []
+            self._task_data_done = False
+            self._task_data_id = 0xFFFF
+            self._task_get_status = None
+        self.send(pr.T_TASK_GET, pr.pack_u16(tid), req="tasks.get")
+        done = self._wait_flag("_task_data_done", timeout)
+        with self.cv:
+            chunks = list(self._task_data_chunks)
+            got_id = self._task_data_id
+            ack = self._task_get_status
+        if not done:
+            if ack == pr.ST_NOT_READY:
+                return {"ok": False, "supported": True,
+                        "error": f"车上没有任务 {tid}（槽号是空的）"}
+            if ack is not None:
+                return {"ok": False, "supported": True,
+                        "error": f"车上拒绝读回任务 {tid}：{ST_NAMES.get(ack, ack)}（status={ack}）"}
+            return {"ok": False, "supported": True,
+                    "error": "没等到数据收尾帧（车没回或帧丢）—— 再试一次"}
+        buf = bytearray()
+        for off, data in sorted(chunks):
+            if off != len(buf):
+                return {"ok": False, "supported": True,
+                        "error": f"数据块不连续（off={off}，已有 {len(buf)} B）"}
+            buf += data
+        info = next((it for it in self.tasks if it["id"] == tid), None)
+        return {"ok": True, "supported": True, "id": got_id, "hex": bytes(buf).hex(),
+                "len": len(buf),
+                "crc": pr.crc16_ccitt(bytes(buf[12:])) if len(buf) >= 12 else 0,
+                "name": (info or {}).get("name", "")}
+
+    @staticmethod
+    def _task_reply(r: dict, what: str) -> dict:
+        """`send_wait()` 的结果 → 前端契约（必须带 ok/error/supported）。
+
+        `send_wait` 的 `ok` 只在"收到 ACK 且状态码 0"时为真，且没有 `error` 字段；
+        这里补上人话，否则页面只能显示 "HTTP 200"。
+        """
+        if r.get("ok"):
+            return {**r, "supported": True}
+        if not r.get("answered"):
+            return {**r, "ok": False, "supported": True,
+                    "error": f"{what}没人应答（车没连上/没上电，或固件不带任务功能）"}
+        return {**r, "ok": False, "supported": True,
+                "error": f"{what}被车拒绝：{r.get('status_name', '?')}（status={r.get('status')}）"}
+
+    def task_put(self, tid: int, off: int, data: bytes) -> dict:
+        g = self._cap_guard()
+        if g:
+            return g
+        if len(data) > pr.TASK_PUT_MAX:
+            return {"ok": False, "supported": True,
+                    "error": f"一片最多 {pr.TASK_PUT_MAX} 字节（收到 {len(data)}）"}
+        return self._task_reply(
+            self.send_wait(pr.T_TASK_PUT, pr.pack_u16(tid) + pr.pack_u16(off) + bytes(data),
+                           req="tasks.put"), "写分片")
+
+    def task_commit(self, tid: int, length: int, crc: int, name: str = "",
+                    flags: int = 0) -> dict:
+        g = self._cap_guard()
+        if g:
+            return g
+        return self._task_reply(
+            self.send_wait(pr.T_TASK_COMMIT,
+                           pr.payload_task_commit(tid, length, crc, name, flags),
+                           timeout=1.2, req="tasks.commit"), "提交任务")
+
+    def task_delete(self, tid: int) -> dict:
+        g = self._cap_guard()
+        if g:
+            return g
+        return self._task_reply(self.send_wait(pr.T_TASK_DEL, pr.pack_u16(tid), timeout=1.2,
+                                               req="tasks.delete"), "删除任务")
+
+    def task_run(self, tid: int) -> dict:
+        g = self._cap_guard()
+        if g:
+            return g
+        return self._task_reply(self.send_wait(pr.T_TASK_RUN, pr.pack_u16(tid), timeout=1.5,
+                                               req="tasks.run"), "启动任务")
+
+    def task_stop(self) -> dict:
+        g = self._cap_guard()
+        if g:
+            return g
+        return self._task_reply(self.send_wait(pr.T_TASK_STOP, b"", timeout=1.2, req="tasks.stop"),
+                                "停止任务")
+
+    def task_status_payload(self) -> dict:
+        """`/api/tasks/status`：车一有变化就推、没变 1Hz 心跳，所以这里回镜像即可。"""
+        with self.lock:
+            st = dict(self.task_status) if self.task_status else None
+        return {"ok": True, "supported": self.cap_task(), "status": st}
+
     # ------------------------------------------------------------------ 快照
     def snapshot(self) -> dict:
         with self.lock:
@@ -486,6 +673,10 @@ class Console:
                 "telem_host_ms": self.telem_host_ms,
                 "params": self.params_payload(),
                 "actions": self.actions_payload(),
+                # 车上任务目录与运行状态镜像（docs/任务编程.md §5）：让 /api/state 与
+                # SSE 首帧也能把 #/tasks 页恢复成刷新前的样子，不用再等一轮 LIST 往返。
+                "tasks": [dict(t) for t in self.tasks],
+                "task_status": dict(self.task_status) if self.task_status else None,
                 "cal": self.cal,
                 "servo": self.servo,
                 "drive": self.drive_report,

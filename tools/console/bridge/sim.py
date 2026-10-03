@@ -93,6 +93,17 @@ class SimCar:
         self.cal = None
         self._build_cal()
 
+        # 任务程序（firmware/App/Svc/task_store.c 的仿真体：8 条记录 + 6144 B 程序区）
+        self.tasks: dict[int, bytes] = {}           # 槽号 → 完整镜像（已 COMMIT）
+        self.task_names: dict[int, str] = {}
+        self.task_flags: dict[int, int] = {}        # 槽号 → 记录标志（bit0 = 开机自启）
+        self.task_stage: dict[int, bytearray] = {}  # 槽号 → 2048 B 暂存（PUT 分片落这里）
+        self.task_run = {"id": 0xFFFF, "state": 0xFF, "running": False, "block": 0,
+                         "elapsed_ms": 0, "flags": 0}
+        self.task_run_t0 = 0
+        self.task_sig = None
+        self.task_last_push = 0
+
     # ---------------------------------------------------------- 标定假数据
     def _build_cal(self):
         ch = []
@@ -118,6 +129,7 @@ class SimCar:
     def poll(self, now_ms: int) -> list[pr.Frame]:
         self.now = now_ms
         self._physics(now_ms)
+        self._task_tick(now_ms)
         out: list[pr.Frame] = []
         if self.pending:
             out.extend(self.pending)
@@ -267,7 +279,7 @@ class SimCar:
         p[6:8] = pr.pack_u16(self.hz)
         name = b"quandi-car"
         p[8:8 + len(name)] = name
-        p[20:24] = bytes([0x7F, 0, 0, 0])
+        p[20:24] = bytes([0x7F | pr.CAP_TASK, 0, 0, 0])   # bit7 = HOST_CAP_TASK
         self.pending.append(pr.Frame(pr.T_HELLO, seq, bytes(p)))
 
     def _param_items(self):
@@ -443,8 +455,147 @@ class SimCar:
                 self._text("[sim] 该命令仿真里没有实现（真车会给出真实答复）")
             else:
                 self._ack(f.seq, pr.ST_BAD_CMD)
+        elif f.type == pr.T_TASK_LIST:
+            self._task_list(f.seq)
+        elif f.type == pr.T_TASK_PUT:
+            self._task_put(f.seq, f.payload)
+        elif f.type == pr.T_TASK_COMMIT:
+            self._task_commit(f.seq, f.payload)
+        elif f.type == pr.T_TASK_GET:
+            self._task_get(f.seq, f.payload)
+        elif f.type == pr.T_TASK_DEL:
+            self._task_del(f.seq, f.payload)
+        elif f.type == pr.T_TASK_RUN:
+            self._task_run(f.seq, f.payload)
+        elif f.type == pr.T_TASK_STOP:
+            self._task_stop(f.seq)
+        elif f.type == pr.T_TASK_STATUS:
+            self.pending.append(pr.Frame(pr.T_TASK_STATUS, f.seq, self._task_status_payload()))
         else:
             self._ack(f.seq, pr.ST_UNKNOWN_TYPE)
+
+    # ---------------------------------------------------------- 任务程序（0x60..0x69）
+    # 与固件口径对齐：TASK_STORE_SLOTS 8 条记录（页 59 目录）+ 页 60..62 共 6144 B 程序区，
+    # 单条 ≤ TASK_STORE_CAP 2048 B（= pr.TASK_SLOT_BYTES，解释器 RAM 上限）。
+    TASK_SLOTS = 8
+    TASK_PROG_BYTES = 6144
+
+    def _task_status_payload(self) -> bytes:
+        return pr.payload_task_status(self.task_run)
+
+    def _task_crc(self, buf: bytes) -> int:
+        return pr.crc16_ccitt(buf[12:])
+
+    def _task_list(self, seq: int):
+        """一条任务一帧（空槽不发），最后补一帧空载荷收尾 —— 见 docs/任务编程.md §5。"""
+        for tid in sorted(self.tasks):
+            buf = self.tasks[tid]
+            self.pending.append(pr.Frame(pr.T_TASK_LIST_R, seq,
+                                         pr.encode_task_list_r(tid, len(buf), self._task_crc(buf),
+                                                               self.task_flags.get(tid, 0),
+                                                               self.task_names.get(tid, ""))))
+        self.pending.append(pr.Frame(pr.T_TASK_LIST_R, seq, b""))
+
+    def _task_put(self, seq: int, p: bytes):
+        if len(p) < 4:
+            self._ack(seq, pr.ST_BAD_PARAM)
+            return
+        tid, off, data = pr.u16(p, 0), pr.u16(p, 2), p[4:]
+        if tid >= self.TASK_SLOTS or off + len(data) > pr.TASK_SLOT_BYTES:
+            self._ack(seq, pr.ST_OUT_OF_RANGE)
+            return
+        buf = self.task_stage.setdefault(tid, bytearray([0xFF] * pr.TASK_SLOT_BYTES))
+        buf[off:off + len(data)] = data          # 分片可乱序、可重叠（和固件暂存一样）
+        self._ack(seq, pr.ST_OK)
+
+    def _task_commit(self, seq: int, p: bytes):
+        if len(p) < 6:
+            self._ack(seq, pr.ST_BAD_PARAM)
+            return
+        tid, length, crc = pr.u16(p, 0), pr.u16(p, 2), pr.u16(p, 4)
+        flags = p[6] if len(p) > 6 else 0
+        name = ""
+        if len(p) > 7:
+            n = p[7]
+            if n > 30 or 8 + n > len(p):
+                self._ack(seq, pr.ST_BAD_PARAM)   # 名字长度撒谎
+                return
+            name = p[8:8 + n].decode("utf-8", "replace")
+        buf = self.task_stage.get(tid)
+        if buf is None:
+            self._ack(seq, pr.ST_NOT_READY)
+            return
+        if length < 12 or length > pr.TASK_SLOT_BYTES:
+            self._ack(seq, pr.ST_OUT_OF_RANGE)
+            return
+        img = bytes(buf[:length])
+        if self._task_crc(img) != crc:
+            self._ack(seq, pr.ST_BAD_PARAM)      # 拒"烧了一半"的程序
+            return
+        if img[0] != 0x54 or img[1] != 0x4B or img[2] != 1 or not (1 <= img[3] <= 16):
+            self._ack(seq, pr.ST_BAD_PARAM)
+            return
+        used = sum(len(b) for k, b in self.tasks.items() if k != tid)
+        if used + length > self.TASK_PROG_BYTES:
+            self._ack(seq, pr.ST_BAD_PARAM)      # 程序区（页 60..62 = 6144 B）装不下
+            return
+        self.tasks[tid] = img
+        if name:
+            self.task_names[tid] = name
+        if flags & 0x01:                          # 与固件一样只认 bit0，其余位丢掉
+            self.task_flags[tid] = 0x01
+        else:
+            self.task_flags.pop(tid, None)
+        self._ack(seq, pr.ST_OK)
+
+    def _task_get(self, seq: int, p: bytes):
+        tid = pr.u16(p, 0) if len(p) >= 2 else 0xFFFF
+        buf = self.tasks.get(tid)
+        if buf is None:
+            self._ack(seq, pr.ST_NOT_READY)
+            return
+        off = 0
+        while off < len(buf):
+            chunk = buf[off:off + pr.TASK_DATA_CHUNK]
+            self.pending.append(pr.Frame(pr.T_TASK_DATA, seq, pr.encode_task_data(tid, off, chunk)))
+            off += len(chunk)
+        self.pending.append(pr.Frame(pr.T_TASK_DATA, seq, pr.encode_task_data(tid, off, b"")))
+
+    def _task_del(self, seq: int, p: bytes):
+        tid = pr.u16(p, 0) if len(p) >= 2 else 0xFFFF
+        self.tasks.pop(tid, None)
+        self.task_stage.pop(tid, None)
+        self.task_names.pop(tid, None)
+        self.task_flags.pop(tid, None)
+        if self.task_run["id"] == tid:
+            self.task_run.update({"running": False, "state": 0xFF, "block": 0, "elapsed_ms": 0})
+        self._ack(seq, pr.ST_OK)
+
+    def _task_run(self, seq: int, p: bytes):
+        tid = pr.u16(p, 0) if len(p) >= 2 else 0xFFFF
+        if tid not in self.tasks:
+            self._ack(seq, pr.ST_NOT_READY)
+            return
+        self.task_run = {"id": tid, "state": 1, "running": True, "block": 0,
+                         "elapsed_ms": 0, "flags": 0}
+        self.task_run_t0 = self.now
+        self._ack(seq, pr.ST_OK)
+
+    def _task_stop(self, seq: int):
+        self.task_run.update({"state": 0xFF, "running": False, "block": 0, "elapsed_ms": 0})
+        self._ack(seq, pr.ST_OK)
+
+    def _task_tick(self, now_ms: int):
+        """假任务往前走：状态/块号一变就推一帧，没变时 1Hz 心跳（和固件同口径）。"""
+        st = self.task_run
+        if st["running"]:
+            st["elapsed_ms"] = max(0, int(now_ms - self.task_run_t0))
+            st["block"] = int(st["elapsed_ms"] // 400)
+        sig = (st["id"], st["state"], 1 if st["running"] else 0, st["block"])
+        if sig != self.task_sig or now_ms - self.task_last_push >= 1000:
+            self.task_sig = sig
+            self.task_last_push = now_ms
+            self.pending.append(pr.Frame(pr.T_TASK_STATUS, 0, self._task_status_payload()))
 
     def _servo_apply(self, n: int):
         self.action = n

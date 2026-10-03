@@ -1,105 +1,107 @@
 /**
  * @file  task_store.h
- * @brief 上位机烧进 Flash 的任务程序：3 个槽位（页 60 / 61 / 62）
+ * @brief 上位机烧进车上 Flash 的任务程序：目录页 + 程序区（持久化层）
  *
- * 用户 m01443：「固件不需要有现在的任务流程，只要能识别上位机存 flash 的能执行就行」
- * 设计文档 `docs/任务编程.md`。车只是执行机构：上位机把任务拼成 task_prog.h 那段
- * 二进制、烧进这里，车离线自主执行（比赛不能遥控）。
+ * 页分配（用户已拍板口径：共 4 页 = 8KB，最多 8 个任务）：
  *
- * 布局（本板实测 2 bank × 32 页 × 2KB，页 63 被 nvram 占了）：
+ *   页 59 = 0x0801D800                     目录页（magic/ver/count + 8 条记录）
+ *   页 60..62 = 0x0801E000..0x0801F7FF     程序区 6144 B（任务镜像紧凑摆放）
+ *   页 63 = 0x0801F800                     nvram（既有，本模块绝不碰）
  *
- *     页 60 = 0x0801E000 ─┐
- *     页 61 = 0x0801E800  ├─ 一个槽位一页，槽与槽互不影响
- *     页 62 = 0x0801F000 ─┘
- *     页 63 = 0x0801F800    设置/标定（nvram.c）
+ * 链接脚本 `firmware/STM32G474RBTx_FLASH.ld` 的 FLASH 收到 **118K**（= 页 59 起点
+ * 0x1D800）：固件镜像长进任务区必须是链接错误，而不是静默把车上的任务压掉。
  *
- * 每页开头 40 字节是记录头，后面紧跟程序镜像：
+ * 目录页字节布局（小端；主机测试按这些偏移直接查页内容）：
  *
- *     magic(2) ver(1) id(1) len(2) crc16(2) flags(1) name_len(1) name(30) | 程序镜像…
+ *   记录头 8 B   0 u16 magic = 0x5453
+ *                2 u8  ver   = 2
+ *                3 u8  count (0..8)
+ *                4 u16 seq   （每次成功落盘 +1，只用于诊断）
+ *                6 u8  reserved[2] = 0xFF
+ *   第 i 条记录（40 B，i < count）
+ *                0 u16 id
+ *                2 u16 off   （程序区内偏移，**8 字节对齐**：双字编程的硬要求）
+ *                4 u16 len
+ *                6 u16 crc16 （TaskProg_Crc16，覆盖镜像 [12,len)）
+ *                8 u8  flags （bit0 = TASK_STORE_FLAG_AUTO）
+ *                9 u8  name_len (0..30)
+ *               10 char name[30]
  *
- * 为什么头不单独放一个"目录页"：目录页写坏一次三个任务就全找不着了；一槽一页时
- * 一次掉电最多毁掉正在写的那一个，而镜像自己带 CRC16 + 结构校验，坏了就是"空槽"。
- *
- * 擦写沿用 nvram.c 那套**手写 FLASH->CR**（BKER=1 + PNB=页号−32）：本板 FLASH_OPTR
- * 的 DBANK 位读出来是 0，用 HAL_FLASHEx_Erase 会用 PNB=63 越界并静默失败。
- * 判据（nvram.c:291-300）里那两行 J-Link 实测结论同样适用。
- *
- * 车在动（或任务在跑）时**绝不擦写**：擦一页会把 CPU 停住几十毫秒，正在跑的控制环
- * 会直接失控 —— 这是 nvram.c 的老铁律，这里一字不改地沿用。
+ * 写入语义（与 nvram.c 同一条铁律：**运动中绝不擦写**）：
+ *   - 写一个任务 = 擦目录页 + 擦程序区 3 页 + 整份重写（约 4 页擦 + 8KB 编程）。
+ *   - **先擦目录页**：掉电中断时车上看到的是"没有任务"，而不是"半个新程序配着旧偏移"
+ *     ——只有前者是安全的（跑错轨迹比不跑更糟）。
+ *   - 每条记录独立校验（结构 + CRC16），坏记录 = 空槽；目录 magic/ver 坏 = 整片空
+ *     （自愈：下次 Commit 会把目录整页写回去）。
  */
-#ifndef __TASK_STORE_H__
-#define __TASK_STORE_H__
+#ifndef TASK_STORE_H
+#define TASK_STORE_H
 
 #include <stdint.h>
 
-#define TASK_STORE_SLOTS       3u
+/* ---- 页分配 ---- */
 #define TASK_STORE_PAGE_SIZE   2048u
-#define TASK_STORE_HDR_LEN     40u
-#define TASK_STORE_NAME_MAX    30u
-/* 单个任务的程序镜像上限 = 页大小 − 头。上位机 task.ts 那边按 6144 画进度条只是显示，
- * 真正能被车接收的上限是这里（T_TASK_COMMIT 超出就回 ST_OUT_OF_RANGE）。 */
-#define TASK_STORE_CAP         (TASK_STORE_PAGE_SIZE - TASK_STORE_HDR_LEN)   /* 2008 */
-#define TASK_STORE_MAGIC       0x5453u    /* 小端存下来是 53 54 = 'S' 'T' */
-#define TASK_STORE_VER         1u
-#define TASK_STORE_FLAG_AUTO   0x01u      /* bit0：开机自启（离线自主跑，比赛用） */
+#define TASK_STORE_DIR_PAGE    59u
+#define TASK_STORE_PROG_PAGE0  60u
+#define TASK_STORE_PROG_PAGES  3u
+#define TASK_STORE_PROG_BYTES  6144u    /* 3 × 2048，程序区总字节 */
+
+/* ---- 容量 ---- */
+#define TASK_STORE_SLOTS       8u       /* 目录最多 8 条记录（用户口径：最多 8 个任务） */
 #define TASK_STORE_NO_SLOT     0xFFu
+#define TASK_STORE_NAME_MAX    30u
+/* 单个任务上限 = 解释器的 RAM 上限（firmware/App/Svc/task_run.c 的 TASK_RUN_MAX_PROG）：
+ * 更长的程序装了也跑不起来，所以由存储层先挡掉。程序区总共 6144 B，8 个任务要装得下
+ * 得看实际体积（典型 8 状态 × 12 块 ≈ 1.1KB）。 */
+#define TASK_STORE_CAP         2048u
 
-/* 记录头（40 B —— 必须是 8 的整数倍：按双字编程） */
-typedef struct {
-    uint16_t magic;                       /* TASK_STORE_MAGIC */
-    uint8_t  ver;                         /* TASK_STORE_VER */
-    uint8_t  id;                          /* 槽号 0..TASK_STORE_SLOTS-1 */
-    uint16_t len;                         /* 程序镜像字节数 */
-    uint16_t crc16;                       /* 程序自己的 CRC16（覆盖镜像 [12,len)） */
-    uint8_t  flags;                       /* TASK_STORE_FLAG_* */
-    uint8_t  name_len;                    /* 0..TASK_STORE_NAME_MAX */
-    uint8_t  name[TASK_STORE_NAME_MAX];   /* 定长区，用 name_len 截断；不保证 NUL */
-} task_store_hdr_t;
+/* ---- 目录页布局常量（测试直接按这些偏移查 Flash） ---- */
+#define TASK_STORE_DIR_MAGIC   0x5453u
+#define TASK_STORE_VER         2u
+#define TASK_STORE_DIR_HDR_LEN 8u
+#define TASK_STORE_ENTRY_LEN   40u
 
-/* 返回码：0 = 成功，负数为失败原因 */
+/* ---- 记录 flags ---- */
+#define TASK_STORE_FLAG_AUTO   0x01u    /* 开机自启：上电自动载入并启动这个任务 */
+
+/* ---- 返回码 ---- */
 enum {
-    TASK_STORE_OK       =  0,
-    TASK_STORE_E_PARAM  = -1,   /* 槽号/长度/名字不合法，或分片没传够 */
-    TASK_STORE_E_BUSY   = -2,   /* 车在动或任务在跑：拒绝擦写 */
-    TASK_STORE_E_CRC    = -3,   /* 提交的 CRC 与暂存镜像对不上 */
-    TASK_STORE_E_FORMAT = -4,   /* 镜像格式校验不过（TaskProg_Validate） */
-    TASK_STORE_E_FLASH  = -5,   /* 擦除或编程失败（页坏/写保护） */
-    TASK_STORE_E_EMPTY  = -6,   /* 该槽位没有合法任务 */
+    TASK_STORE_OK       = 0,
+    TASK_STORE_E_PARAM  = -1,   /* 参数/容量不对（槽号、len、分片没收全、装不下） */
+    TASK_STORE_E_BUSY   = -2,   /* 车在动 / 解释器在跑：擦写会把控制环按住几十毫秒 */
+    TASK_STORE_E_CRC    = -3,   /* 镜像 CRC 与上位机给的对不上 */
+    TASK_STORE_E_FORMAT = -4,   /* 镜像能过 CRC 但结构不合格（TaskProg_Validate） */
+    TASK_STORE_E_FLASH  = -5,   /* 擦/写/回读失败 */
+    TASK_STORE_E_EMPTY  = -6    /* 空槽（Load 时） */
 };
 
-/* 上电调一次（app 初始化、nvram_init 之后）：扫三个槽位、把有效的缓存起来 */
-void TaskStore_Init(void);
-
-/* ---- 只读查询（都是缓存值，不碰 Flash） ---- */
+/* ---- 上电扫描 / 查询（host_link 的 T_TASK_* 帧都走这几个） ---- */
+void     TaskStore_Init(void);
 uint8_t  TaskStore_SlotCount(void);
-uint8_t  TaskStore_Present(uint8_t slot);                       /* 1 = 该槽有合法任务 */
+uint8_t  TaskStore_Present(uint8_t slot);
 uint16_t TaskStore_Len(uint8_t slot);
 uint16_t TaskStore_Crc(uint8_t slot);
 uint8_t  TaskStore_Flags(uint8_t slot);
-/* 名字拷进 out（必带结尾 0），返回实际字节数；out 为 NULL 只问长度 */
+/* 返回名字真实长度（out 一定补 '\0'）；空槽返回 0 */
 uint8_t  TaskStore_Name(uint8_t slot, char *out, uint8_t cap);
-/* 程序镜像首地址：**直接指向 Flash**（XIP 读），无任务返回 NULL。
- * 只有 TaskStore_Commit/Erase 会改 Flash，两者写完都会刷新缓存并回读校验。 */
+/* 直接指 Flash 里的镜像（XIP，无拷贝）；空槽返回 NULL */
 const uint8_t *TaskStore_Image(uint8_t slot);
-/* flags 里带开机自启、且 id 最小的那个槽；没有 → TASK_STORE_NO_SLOT */
-uint8_t  TaskStore_AutoSlot(void);
-/* 把槽位里的程序载入解释器（TaskRun_Load），返回 0 或 -TASK_E_xxx / TASK_STORE_E_* */
-int      TaskStore_Load(uint8_t slot);
-
-/* ---- 烧写：先分片暂存，再一次性提交 ---- */
-/* 清暂存（T_TASK_PUT 的第一片之前调；换任务/换槽也调） */
-void     TaskStore_StageReset(void);
-/* 写一片到暂存区（off + n 必须落在 [0, TASK_STORE_CAP] 内） */
-int      TaskStore_Stage(uint16_t off, const uint8_t *d, uint16_t n);
-uint16_t TaskStore_StageLen(void);     /* 暂存区已覆盖到的长度（最高偏移+1） */
-/* 校验（CRC16 + 格式）通过才擦写 Flash；name 可以为 NULL（name_len 必须为 0） */
-int      TaskStore_Commit(uint8_t slot, uint16_t len, uint16_t crc,
-                          uint8_t flags, const char *name, uint8_t name_len);
-/* 删掉一个槽位（擦成 0xFF） */
-int      TaskStore_Erase(uint8_t slot);
-
-/* 主机测试用：槽位 → 绝对页号 / bank 内页号 */
+/* 镜像所在绝对页号 / bank 内页号（诊断用）；空槽返回 0xFF */
 uint8_t  TaskStore_Page(uint8_t slot);
 uint8_t  TaskStore_BankPage(uint8_t slot);
+/* 带开机自启标记（flags.bit0）里 id 最小的槽；没有则 TASK_STORE_NO_SLOT */
+uint8_t  TaskStore_AutoSlot(void);
+/* 校验过的镜像载入解释器（空槽回 TASK_STORE_E_EMPTY，其余透传 TaskRun_Load 的返回值） */
+int      TaskStore_Load(uint8_t slot);
 
-#endif /* __TASK_STORE_H__ */
+/* ---- 分片上传（T_TASK_PUT 只写 RAM 暂存，车在动也允许） ---- */
+void     TaskStore_StageReset(void);
+int      TaskStore_Stage(uint16_t off, const uint8_t *d, uint16_t n);
+uint16_t TaskStore_StageLen(void);
+
+/* ---- 落盘 / 删除（运动中一律 TASK_STORE_E_BUSY） ---- */
+int      TaskStore_Commit(uint8_t slot, uint16_t len, uint16_t crc, uint8_t flags,
+                          const char *name, uint8_t name_len);
+int      TaskStore_Erase(uint8_t slot);
+
+#endif /* TASK_STORE_H */

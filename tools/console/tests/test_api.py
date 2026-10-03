@@ -45,7 +45,7 @@ def test_hello(live):
     assert code == 200 and j["ok"] is True
     code, j, _ = GET(base + "/api/link")
     assert j["fw"]["proto"] == 2 and j["fw"]["name"] == "quandi-car"
-    assert j["fw"]["caps"] == 0x7F
+    assert j["fw"]["caps"] == 0x7F | pr.CAP_TASK
 
 
 def test_ports_endpoint(live):

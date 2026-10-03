@@ -167,14 +167,14 @@ def test_hello_param_actions_cal_and_drive_reports():
     struct.pack_into("<H", h, 4, 0x1234)
     struct.pack_into("<H", h, 6, 50)
     h[8:18] = b"quandi-car"
-    struct.pack_into("<I", h, 20, 0x7F)
+    struct.pack_into("<I", h, 20, 0x7F | pr.CAP_TASK)
     hi = pr.decode_hello(bytes(h))
     assert hi["fw_raw"] == 2 and hi["version"] == "0.2.0"
     assert hi["proto"] == 2 and hi["param_crc"] == 0x1234 and hi["telem_hz"] == 50
     assert hi["name"] == "quandi-car"
-    assert hi["caps"] == 0x7F
+    assert hi["caps"] == 0x7F | pr.CAP_TASK
     for bit in (pr.CAP_TELEM2, pr.CAP_ACTIONS, pr.CAP_SERVO, pr.CAP_DRIVE,
-                pr.CAP_CAL, pr.CAP_FLASH, pr.CAP_WATCHDOG):
+                pr.CAP_CAL, pr.CAP_FLASH, pr.CAP_WATCHDOG, pr.CAP_TASK):
         assert hi["caps"] & bit
 
     pid, val = pr.decode_param_report(pr.pack_u16(0x0207) + pr.pack_f32(900.0))

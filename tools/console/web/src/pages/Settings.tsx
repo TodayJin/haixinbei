@@ -190,7 +190,7 @@ export function SettingsPage() {
             <div>参数指纹 <span className="num text-slate-200">0x{(link?.fw?.param_crc ?? 0).toString(16).toUpperCase()}</span></div>
           </div>
           <div className="mt-3 flex flex-wrap gap-1.5">
-            {[['遥测2', 0], ['动作表', 1], ['舵机', 2], ['驾驶', 3], ['标定', 4], ['Flash 保存', 5], ['看门狗', 6]].map(([label, bit]) => {
+            {[['遥测2', 0], ['动作表', 1], ['舵机', 2], ['驾驶', 3], ['标定', 4], ['Flash 保存', 5], ['看门狗', 6], ['任务程序', 7]].map(([label, bit]) => {
               const on = (((link?.fw?.caps ?? 0) >> Number(bit)) & 1) === 1
               return (
                 <Badge key={String(label)} tone={on ? 'mint' : 'slate'}>

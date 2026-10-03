@@ -1,11 +1,26 @@
 /**
  * @file  task_store.c
- * @brief 上位机烧进 Flash 的任务程序（实现）
+ * @brief  任务程序的 Flash 持久层：页 59 目录 + 页 60..62 程序区（见 task_store.h）
  *
- * 见 task_store.h 的布局说明。这里只依赖 task_prog（格式校验）、task_run（拒写判据）
- * 和三个控制模块（同上），不碰别的业务。
+ * 设计要点（为什么长这样）：
+ *   1. 目录页 + 紧凑程序区，而不是"一任务一页"：用户的页预算是 4 页 8KB / 最多 8 个任务
+ *      （用户口径），一任务一页最多 3 个任务，装不下。
+ *   2. 每条记录独立校验（结构 + CRC16），坏记录不影响别的记录；目录 magic/ver 坏 =
+ *      整片空（自愈：下一次 Commit 把目录整页写回去）。
+ *   3. 程序区里的镜像**逐字节就是 task_prog 的线上格式**，回读时按 off 直接指 Flash
+ *      （XIP），没有第二份拷贝、没有第二种编码。
+ *   4. 擦写顺序：**先擦目录页** ⇒ 掉电中断时车上看到的是"没有任务"，而不是
+ *      "半个新程序配着旧偏移"。只有前者是安全的（跑错轨迹比不跑更糟）。
+ *   5. 全片重排（写 1 个任务 = 擦 4 页 + 写 8KB）：这是"程序区紧凑摆放"的必然代价。
+ *      擦一页 CPU 停几十毫秒 ⇒ 与 nvram.c 同一条铁律：**运动中绝不擦写**（判据见
+ *      store_busy()）。
+ *   6. 擦除本板会静默失败（HAL_FLASHEx_Erase / FLASH_PageErase 在此板不可用，见
+ *      nvram.c:294-296 的铁律注释），所以这里手写 FLASH->CR 序列，并且在编程前
+ *      **逐页确认真的擦回 0xFFFFFFFF**，写后再 memcmp 回读。
  */
 #include "task_store.h"
+
+#include <string.h>
 
 #include "board.h"
 #include "gyro_control.h"
@@ -14,83 +29,93 @@
 #include "task_prog.h"
 #include "task_run.h"
 
-#include <string.h>
+/* ---- Flash 物理参数（G474RB：单 bank 2KB × 64 页；bank 内页号 = 绝对页号 - 32） ---- */
+#define TS_FLASH_BASE       0x08000000UL
+#define TS_BANK_SHIFT       32UL
+#define TS_ERASE_TIMEOUT_MS 50U
 
-#define TASK_STORE_FLASH_BASE       0x08000000UL
-#define TASK_STORE_PAGE0            60UL   /* 页 60/61/62，页 63 留给 nvram */
-#define TASK_STORE_BANK_PAGE0       28UL   /* bank 内页号 = 页号 − 32（页 63 → 31） */
-#define TASK_STORE_ERASE_TIMEOUT_MS 50U    /* 一页擦除典型 <5ms，超时就不死等 */
+/* ---- 目录页记录 / 镜像（与 task_store.h 里的字节布局一一对应） ---- */
+typedef struct {
+    uint16_t id;
+    uint16_t off;
+    uint16_t len;
+    uint16_t crc16;
+    uint8_t  flags;
+    uint8_t  name_len;
+    char     name[TASK_STORE_NAME_MAX];
+} ts_ent_t;
 
-/* 编译期断言：头必须 8 的整数倍（按双字编程），否则尾部那几字节永远写不进去 */
-typedef char task_store_hdr_must_be_8x[(sizeof(task_store_hdr_t) % 8U == 0U) ? 1 : -1];
-typedef char task_store_cap_must_be_8x[(TASK_STORE_CAP % 8U == 0U) ? 1 : -1];
+typedef struct {
+    uint16_t magic;
+    uint8_t  ver;
+    uint8_t  count;
+    uint16_t seq;
+    uint8_t  rsv[2];
+    ts_ent_t ent[TASK_STORE_SLOTS];
+} ts_dir_t;
 
-/* ---- 缓存（开机扫一次；Commit/Erase 写完立刻回读刷新） ---- */
-static uint8_t  s_ok[TASK_STORE_SLOTS];
+/* 布局漂移必须是编译错误：40 B 记录 / 8 字节对齐的双字编程 / 目录页放得下 */
+typedef char ts_ent_size_ck[(sizeof(ts_ent_t) == TASK_STORE_ENTRY_LEN) ? 1 : -1];
+typedef char ts_dir_hdr_ck[((TASK_STORE_DIR_HDR_LEN + TASK_STORE_SLOTS * TASK_STORE_ENTRY_LEN) ==
+                            sizeof(ts_dir_t)) ? 1 : -1];
+typedef char ts_dir_dw_ck[((sizeof(ts_dir_t) % 8u) == 0u) ? 1 : -1];
+typedef char ts_prog_dw_ck[((TASK_STORE_PROG_BYTES % 8u) == 0u) ? 1 : -1];
+
+/* ---- 目录缓存（上电扫描一次，之后由本模块自己维护） ---- */
+static uint8_t  s_present[TASK_STORE_SLOTS];
+static uint16_t s_off[TASK_STORE_SLOTS];
 static uint16_t s_len[TASK_STORE_SLOTS];
 static uint16_t s_crc[TASK_STORE_SLOTS];
 static uint8_t  s_flags[TASK_STORE_SLOTS];
-
-/* 名字在 Flash 里是定长区、不保证 NUL，所以拷一份到 RAM 当字符串用 */
+static uint8_t  s_nlen[TASK_STORE_SLOTS];
 static char     s_name[TASK_STORE_SLOTS][TASK_STORE_NAME_MAX + 1u];
-static uint8_t  s_name_len[TASK_STORE_SLOTS];
+static uint16_t s_seq;
 
-/* ---- 上传暂存（T_TASK_PUT 的分片拼在这里，提交时才落 Flash） ---- */
-static uint8_t  s_stage[TASK_STORE_CAP];
+/* ---- 工作区 ---- */
+static uint8_t  s_stage[TASK_STORE_CAP];            /* T_TASK_PUT 的 RAM 暂存 */
 static uint16_t s_stage_hi;
+static uint8_t  s_prog[TASK_STORE_PROG_BYTES];      /* 待写的程序区镜像 */
+static ts_dir_t s_new;                              /* 待写的目录镜像 */
+static ts_dir_t s_dir;                              /* 最近一次读/写过的目录 */
 
-/* 记录头暂存：按双字写，所以借联合体拿到 5 个 uint64 */
-static union {
-    task_store_hdr_t hdr;
-    uint64_t         words[TASK_STORE_HDR_LEN / 8U];
-} s_hdr;
+/* ------------------------------------------------------------------ 地址与 Flash 原语 */
 
-uint8_t TaskStore_SlotCount(void)        { return TASK_STORE_SLOTS; }
-uint8_t TaskStore_Page(uint8_t slot)     { return (uint8_t)(TASK_STORE_PAGE0 + slot); }
-uint8_t TaskStore_BankPage(uint8_t slot) { return (uint8_t)(TASK_STORE_BANK_PAGE0 + slot); }
-
-/* 槽位基址。返回 uintptr_t 而不是 uint32_t：主机测试里指针是 64 位，直接拿
- * uint32_t 转指针会被 -Wint-to-pointer-cast 抓（nvram.c 用 0x0801F800UL 躲过这条）。 */
-static uintptr_t slot_addr(uint8_t slot)
+static uintptr_t ts_page_addr(uint32_t page)
 {
-    return (uintptr_t)(TASK_STORE_FLASH_BASE + (TASK_STORE_PAGE0 + (uint32_t)slot) * 0x800UL);
+    return (uintptr_t)(TS_FLASH_BASE + (page * TASK_STORE_PAGE_SIZE));
 }
 
-/* ---------------------------------------------------------------- 擦除 */
+static const uint8_t *ts_prog(void)
+{
+    return (const uint8_t *)ts_page_addr(TASK_STORE_PROG_PAGE0);
+}
 
-/**
- * @brief 擦掉一个槽位所在的页
- *
- * 与 nvram.c:301 的 nvram_page_erase() 同一套写法（也同一套理由）：本板 FLASH_OPTR
- * 的 DBANK 位读出来是 0，HAL_FLASHEx_Erase 会清掉 BKER 再用 PNB=63 越界擦，
- * 硬件静默忽略 ⇒ 页没擦、接着编程得到 PROGERR。所以这里手写 BKER + PNB。
- */
-static uint8_t page_erase(uint8_t slot)
+/* 擦一页：照抄 firmware/App/Svc/nvram.c 的手写 CR 序列（HAL_FLASHEx_Erase 在本板静默失败）。
+ * 返回 1 = 没看到错误标志（真正的"擦干净了"由调用方按页首字确认）。 */
+static uint8_t ts_page_erase(uint32_t page)
 {
     uint8_t  dcache = (READ_BIT(FLASH->ACR, FLASH_ACR_DCEN) != 0U) ? 1U : 0U;
-    uint32_t page   = (uint32_t)TASK_STORE_BANK_PAGE0 + (uint32_t)slot;
+    uint32_t bank_page = page - TS_BANK_SHIFT;
     uint32_t t0;
 
     if (dcache != 0U) {
         __HAL_FLASH_DATA_CACHE_DISABLE();
     }
-
     __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
-    CLEAR_BIT(FLASH->CR, FLASH_CR_PG | FLASH_CR_PER | FLASH_CR_PNB |
-                         FLASH_CR_BKER | FLASH_CR_MER1 | FLASH_CR_MER2);
-    SET_BIT(FLASH->CR, FLASH_CR_BKER);                          /* 页 60/61/62 都在 bank2 */
-    MODIFY_REG(FLASH->CR, FLASH_CR_PNB, (page << FLASH_CR_PNB_Pos));
+    CLEAR_BIT(FLASH->CR, FLASH_CR_PG | FLASH_CR_PER | FLASH_CR_PNB | FLASH_CR_BKER |
+                         FLASH_CR_MER1 | FLASH_CR_MER2);
+    SET_BIT(FLASH->CR, FLASH_CR_BKER);                                   /* 页号 ≥ 32 ⇒ BKER=1 */
+    MODIFY_REG(FLASH->CR, FLASH_CR_PNB, (bank_page << FLASH_CR_PNB_Pos));
     SET_BIT(FLASH->CR, FLASH_CR_PER);
     SET_BIT(FLASH->CR, FLASH_CR_STRT);
 
     t0 = HAL_GetTick();
     while ((FLASH->SR & FLASH_SR_BSY) != 0U) {
-        if ((uint32_t)(HAL_GetTick() - t0) > TASK_STORE_ERASE_TIMEOUT_MS) {
+        if ((uint32_t)(HAL_GetTick() - t0) > TS_ERASE_TIMEOUT_MS) {
             break;
         }
     }
     CLEAR_BIT(FLASH->CR, FLASH_CR_PER | FLASH_CR_PNB | FLASH_CR_BKER);
-
     if (dcache != 0U) {
         __HAL_FLASH_DATA_CACHE_RESET();
         __HAL_FLASH_DATA_CACHE_ENABLE();
@@ -101,152 +126,99 @@ static uint8_t page_erase(uint8_t slot)
         __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
         return 0U;
     }
+    __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
     return 1U;
 }
 
-/* 擦除静默失败只剩这一道防线：页首还是 0xFFFFFFFF 才算真擦干净 */
-static uint8_t page_erased(uint8_t slot)
+/* 按双字编程：len 必须是 8 的整数倍，addr 必须 8 字节对齐 */
+static uint8_t ts_program(uint32_t addr, const uint8_t *src, uint32_t len)
 {
-    return (uint8_t)(*(volatile uint32_t *)slot_addr(slot) == 0xFFFFFFFFUL);
-}
-
-/* ---------------------------------------------------------------- 编程 */
-
-/* 凑一个双字：不足 8 字节的尾巴用 0xFF 补（擦除态，等价于没写） */
-static uint64_t word_from(const uint8_t *src, uint32_t avail)
-{
-    uint8_t  tmp[8];
-    uint64_t w;
     uint32_t i;
 
-    for (i = 0U; i < 8U; i++) {
-        tmp[i] = (i < avail) ? src[i] : 0xFFU;
-    }
-    memcpy(&w, tmp, sizeof(w));
-    return w;
-}
+    for (i = 0U; i < len; i += 8U, addr += 8U) {
+        uint64_t w;
 
-static uint8_t program_slot(uint8_t slot, const uint8_t *img, uint16_t len)
-{
-    uint32_t addr = slot_addr(slot);
-    uint32_t i;
-
-    for (i = 0U; i < (uint32_t)(TASK_STORE_HDR_LEN / 8U); i++, addr += 8U) {
-        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, addr, s_hdr.words[i]) != HAL_OK) {
-            return 0U;
-        }
-    }
-    for (i = 0U; i < (uint32_t)len; i += 8U, addr += 8U) {
-        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, addr,
-                              word_from(img + i, (uint32_t)len - i)) != HAL_OK) {
+        memcpy(&w, &src[i], sizeof(w));
+        if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_DOUBLEWORD, addr, w) != HAL_OK) {
             return 0U;
         }
     }
     return 1U;
 }
 
-/* 擦 + 写 + 回读复查；返回 TASK_STORE_* */
-static int write_slot(uint8_t slot, const uint8_t *img, uint16_t len)
+/* ------------------------------------------------------------------ 目录缓存 */
+
+static void cache_reset(void)
 {
-    uint8_t dcache = (READ_BIT(FLASH->ACR, FLASH_ACR_DCEN) != 0U) ? 1U : 0U;
-    uint8_t ok;
-
-    if (dcache != 0U) {
-        __HAL_FLASH_DATA_CACHE_DISABLE();
-    }
-
-    if (HAL_FLASH_Unlock() != HAL_OK) {
-        if (dcache != 0U) {
-            __HAL_FLASH_DATA_CACHE_RESET();
-            __HAL_FLASH_DATA_CACHE_ENABLE();
-        }
-        return TASK_STORE_E_FLASH;
-    }
-
-    ok = page_erase(slot);
-    if (ok == 0U) {
-        /* 兜底：清一次标志再擦一遍（还没写数据，重来是安全的） */
-        __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
-        ok = page_erase(slot);
-    }
-    if (ok != 0U) {
-        ok = page_erased(slot);
-    }
-    if (ok != 0U) {
-        ok = program_slot(slot, img, len);
-    }
-
-    (void)HAL_FLASH_Lock();
-
-    if (dcache != 0U) {
-        __HAL_FLASH_DATA_CACHE_RESET();     /* 不复位的话下面的回读可能命中旧 cache */
-        __HAL_FLASH_DATA_CACHE_ENABLE();
-    }
-
-    /* 写完读回来对一遍：擦写失败（页坏了/写保护）能立刻发现，别以为存上了 */
-    if (ok != 0U) {
-        ok = (uint8_t)(memcmp((const void *)slot_addr(slot), &s_hdr, TASK_STORE_HDR_LEN) == 0);
-    }
-    if (ok != 0U) {
-        ok = (uint8_t)(memcmp((const void *)(slot_addr(slot) + TASK_STORE_HDR_LEN), img, len) == 0);
-    }
-
-    return (ok != 0U) ? TASK_STORE_OK : TASK_STORE_E_FLASH;
+    memset(s_present, 0, sizeof(s_present));
+    memset(s_off, 0, sizeof(s_off));
+    memset(s_len, 0, sizeof(s_len));
+    memset(s_crc, 0, sizeof(s_crc));
+    memset(s_flags, 0, sizeof(s_flags));
+    memset(s_nlen, 0, sizeof(s_nlen));
+    memset(s_name, 0, sizeof(s_name));
+    s_seq = 0U;
 }
 
-/* ---------------------------------------------------------------- 缓存 */
-
-/**
- * @brief 重新读一个槽位并刷新缓存
- *
- * 判据三层：记录头自洽（magic/ver/id/名字长度/长度范围）→ 镜像格式校验
- * （TaskProg_Validate：magic/ver/长度/CRC16/各序列偏移）→ 头上的 crc16 与镜像里
- * 自带的那份一致。掉电写坏、擦除态、别人的数据都过不了这三层，一律当"空槽"。
- */
-static void refresh(uint8_t slot)
+/* 目录页镜像 → 缓存。**逐条独立判定**：坏记录标成空槽（别的记录照收）。
+ * 只有记录头（magic/ver/count）坏了才是"整片空" —— 那种情况下 count 本身不可信。 */
+static void cache_load(const ts_dir_t *d)
 {
-    const task_store_hdr_t *h   = (const task_store_hdr_t *)slot_addr(slot);
-    const uint8_t          *img = (const uint8_t *)(slot_addr(slot) + TASK_STORE_HDR_LEN);
-    uint8_t ok = 0U;
-    uint8_t n;
+    uint8_t i;
 
-    s_ok[slot]       = 0U;
-    s_len[slot]      = 0U;
-    s_crc[slot]      = 0U;
-    s_flags[slot]    = 0U;
-    s_name_len[slot] = 0U;
-    s_name[slot][0]  = '\0';
-
-    if (h->magic == TASK_STORE_MAGIC && h->ver == TASK_STORE_VER && h->id == slot &&
-        h->name_len <= TASK_STORE_NAME_MAX &&
-        h->len >= TASK_HDR_LEN && h->len <= TASK_STORE_CAP) {
-        if (TaskProg_Validate(img, h->len) == TASK_OK) {
-            if (h->crc16 == TaskProg_Crc16(img + TASK_HDR_LEN,
-                                           (uint32_t)h->len - TASK_HDR_LEN)) {
-                ok = 1U;
-            }
-        }
+    cache_reset();
+    if (d->magic != TASK_STORE_DIR_MAGIC || d->ver != TASK_STORE_VER) {
+        return;
     }
+    if (d->count > TASK_STORE_SLOTS) {
+        return;
+    }
+    s_seq = d->seq;
 
-    if (ok != 0U) {
-        n = h->name_len;
-        memcpy(s_name[slot], h->name, n);
-        s_name[slot][n] = '\0';
+    for (i = 0U; i < d->count; i++) {
+        const ts_ent_t *e = &d->ent[i];
+        const uint8_t  *img;
+        uint8_t         nl;
 
-        s_ok[slot]       = 1U;
-        s_len[slot]      = h->len;
-        s_crc[slot]      = h->crc16;
-        s_flags[slot]    = h->flags;
-        s_name_len[slot] = n;
+        if (e->id >= TASK_STORE_SLOTS || s_present[e->id] != 0U) {
+            continue;                                   /* 槽号越界 / 目录里有重复 id */
+        }
+        if (e->len < TASK_HDR_LEN || e->len > TASK_STORE_CAP) {
+            continue;
+        }
+        if ((e->off & 7U) != 0U) {                      /* 双字编程的硬要求 */
+            continue;
+        }
+        if (((uint32_t)e->off + (uint32_t)e->len) > TASK_STORE_PROG_BYTES) {
+            continue;
+        }
+        if (e->name_len > TASK_STORE_NAME_MAX) {
+            continue;                                   /* 名字长度越界 = 结构不合格 */
+        }
+        nl = e->name_len;
+        img = ts_prog() + e->off;
+        if (TaskProg_Validate(img, e->len) != TASK_OK) {
+            continue;
+        }
+        if (e->crc16 != TaskProg_Crc16(&img[TASK_HDR_LEN], (uint32_t)e->len - TASK_HDR_LEN)) {
+            continue;
+        }
+
+        s_present[e->id] = 1U;
+        s_off[e->id]     = e->off;
+        s_len[e->id]     = e->len;
+        s_crc[e->id]     = e->crc16;
+        s_flags[e->id]   = (uint8_t)(e->flags & TASK_STORE_FLAG_AUTO);
+        s_nlen[e->id]    = nl;
+        if (nl != 0U) {
+            memcpy(s_name[e->id], e->name, nl);
+        }
+        s_name[e->id][nl] = '\0';
     }
 }
 
-/**
- * @brief 车在动 / 任务在跑 ⇒ 不许碰 Flash
- *
- * 擦一页会把 CPU 停住几十毫秒（G4 擦写期间取指停摆），正在跑的控制环或任务会直接
- * 失控。判据与 nvram.c:449 的 nvram_motion_active() 一致，另加解释器在跑。
- */
+/* 车在动 / 解释器在跑 ⇒ 绝不允许擦写（擦一页 CPU 停几十毫秒，控制环会失控）。
+ * 判据与 nvram.c:449 的 nvram_motion_active 同源，外加解释器自己在跑这一条。 */
 static uint8_t store_busy(void)
 {
     if (Motion_GetMode() != MOTION_IDLE) {
@@ -264,23 +236,152 @@ static uint8_t store_busy(void)
     return 0U;
 }
 
-/* ------------------------------------------------------------ 对外接口 */
+/* ------------------------------------------------------------------ 重排 + 落盘 */
+
+/**
+ * 按当前缓存把"目录 + 程序区"重排一遍：
+ *   target 槽：adding=1 用入参里的新镜像；adding=0 表示删掉它；
+ *   其余在场任务从 Flash 里原样搬过来（保持目录顺序、紧凑摆放、8 字节对齐）。
+ * 结果写进 s_new / s_prog。返回 TASK_STORE_OK 或 TASK_STORE_E_PARAM（程序区装不下）。
+ */
+static int store_build(uint8_t target, const uint8_t *img, uint16_t len, uint16_t crc,
+                       uint8_t flags, const char *name, uint8_t name_len, uint8_t adding)
+{
+    uint32_t used = 0U;
+    uint8_t  i;
+    uint8_t  n = 0U;
+
+    memset(s_prog, 0xFF, sizeof(s_prog));
+    memset(&s_new, 0xFF, sizeof(s_new));
+    s_new.magic = TASK_STORE_DIR_MAGIC;
+    s_new.ver   = TASK_STORE_VER;
+    s_new.seq   = (uint16_t)(s_seq + 1U);
+    s_new.count = 0U;
+
+    for (i = 0U; i < TASK_STORE_SLOTS; i++) {
+        const uint8_t *src;
+        const char    *nm;
+        uint16_t       l;
+        uint8_t        fl;
+        uint8_t        nl;
+        uint32_t       off;
+        ts_ent_t      *e;
+
+        if (i == target) {
+            if (adding == 0U) {
+                continue;
+            }
+            src = img;
+            l   = len;
+            fl  = (uint8_t)(flags & TASK_STORE_FLAG_AUTO);
+            nm  = name;
+            nl  = name_len;
+        } else if (s_present[i] != 0U) {
+            src = ts_prog() + s_off[i];
+            l   = s_len[i];
+            fl  = (uint8_t)(s_flags[i] & TASK_STORE_FLAG_AUTO);
+            nm  = s_name[i];
+            nl  = s_nlen[i];
+        } else {
+            continue;
+        }
+
+        if (nl > TASK_STORE_NAME_MAX) {
+            nl = TASK_STORE_NAME_MAX;
+        }
+        if (nm == NULL) {
+            nl = 0U;
+        }
+        off = (used + 7U) & ~7U;                        /* 8 字节对齐 */
+        if ((off + (uint32_t)l) > TASK_STORE_PROG_BYTES) {
+            return TASK_STORE_E_PARAM;                  /* 程序区装不下，一个字节都不动 Flash */
+        }
+        if (l != 0U && src != NULL) {
+            memcpy(&s_prog[off], src, l);
+        }
+        e            = &s_new.ent[n];
+        e->id        = i;
+        e->off       = (uint16_t)off;
+        e->len       = l;
+        e->crc16     = (i == target) ? crc : s_crc[i];
+        e->flags     = fl;
+        e->name_len  = nl;
+        if (nl != 0U) {
+            memcpy(e->name, nm, nl);
+        }
+        used = off + (uint32_t)l;
+        n++;
+    }
+
+    s_new.count = n;
+    return TASK_STORE_OK;
+}
+
+/* 把 s_new / s_prog 写进 Flash（先擦目录页 → 再擦程序区 → 编程 → 回读复查） */
+static int store_flash_write(void)
+{
+    uint32_t prog_addr = (uint32_t)ts_page_addr(TASK_STORE_PROG_PAGE0);
+    uint32_t dir_addr  = (uint32_t)ts_page_addr(TASK_STORE_DIR_PAGE);
+    uint32_t i;
+
+    /* 先擦目录页：中断在这里 = 车上"没有任务"（安全） */
+    if (ts_page_erase(TASK_STORE_DIR_PAGE) == 0U) {
+        return TASK_STORE_E_FLASH;
+    }
+    for (i = 0U; i < TASK_STORE_PROG_PAGES; i++) {
+        if (ts_page_erase(TASK_STORE_PROG_PAGE0 + i) == 0U) {
+            return TASK_STORE_E_FLASH;
+        }
+    }
+
+    /* 擦除静默失败（本板 PNB 越界时不置错误标志）只剩这一道防线：
+     * 每页首字必须真的回到 0xFFFFFFFF，否则宁可不写。 */
+    if (*(volatile uint32_t *)ts_page_addr(TASK_STORE_DIR_PAGE) != 0xFFFFFFFFUL) {
+        return TASK_STORE_E_FLASH;
+    }
+    for (i = 0U; i < TASK_STORE_PROG_PAGES; i++) {
+        if (*(volatile uint32_t *)ts_page_addr(TASK_STORE_PROG_PAGE0 + i) != 0xFFFFFFFFUL) {
+            return TASK_STORE_E_FLASH;
+        }
+    }
+
+    if (ts_program(prog_addr, s_prog, TASK_STORE_PROG_BYTES) == 0U) {
+        return TASK_STORE_E_FLASH;
+    }
+    if (ts_program(dir_addr, (const uint8_t *)&s_new, (uint32_t)sizeof(s_new)) == 0U) {
+        return TASK_STORE_E_FLASH;
+    }
+
+    /* 回读复查（擦除里已复位 data cache） */
+    if (memcmp((const void *)(uintptr_t)prog_addr, s_prog, TASK_STORE_PROG_BYTES) != 0) {
+        return TASK_STORE_E_FLASH;
+    }
+    if (memcmp((const void *)(uintptr_t)dir_addr, &s_new, sizeof(s_new)) != 0) {
+        return TASK_STORE_E_FLASH;
+    }
+
+    s_dir = s_new;
+    cache_load(&s_dir);
+    return TASK_STORE_OK;
+}
+
+/* ------------------------------------------------------------------ 公共 API */
 
 void TaskStore_Init(void)
 {
-    uint8_t slot;
+    memcpy(&s_dir, (const void *)ts_page_addr(TASK_STORE_DIR_PAGE), sizeof(s_dir));
+    cache_load(&s_dir);
+    TaskStore_StageReset();
+}
 
-    s_stage_hi = 0U;
-    memset(s_stage, 0xFF, sizeof(s_stage));
-
-    for (slot = 0U; slot < TASK_STORE_SLOTS; slot++) {
-        refresh(slot);
-    }
+uint8_t TaskStore_SlotCount(void)
+{
+    return TASK_STORE_SLOTS;
 }
 
 uint8_t TaskStore_Present(uint8_t slot)
 {
-    return (slot < TASK_STORE_SLOTS) ? s_ok[slot] : 0U;
+    return (slot < TASK_STORE_SLOTS) ? s_present[slot] : 0U;
 }
 
 uint16_t TaskStore_Len(uint8_t slot)
@@ -298,41 +399,58 @@ uint8_t TaskStore_Flags(uint8_t slot)
     return (slot < TASK_STORE_SLOTS) ? s_flags[slot] : 0U;
 }
 
+uint8_t TaskStore_Page(uint8_t slot)
+{
+    if (slot >= TASK_STORE_SLOTS || s_present[slot] == 0U) {
+        return TASK_STORE_NO_SLOT;
+    }
+    return (uint8_t)(TASK_STORE_PROG_PAGE0 + (s_off[slot] / TASK_STORE_PAGE_SIZE));
+}
+
+uint8_t TaskStore_BankPage(uint8_t slot)
+{
+    uint8_t page = TaskStore_Page(slot);
+
+    return (page == TASK_STORE_NO_SLOT) ? TASK_STORE_NO_SLOT : (uint8_t)(page - TS_BANK_SHIFT);
+}
+
 uint8_t TaskStore_Name(uint8_t slot, char *out, uint8_t cap)
 {
     uint8_t n;
+    uint8_t k;
 
-    if (slot >= TASK_STORE_SLOTS) {
+    if (slot >= TASK_STORE_SLOTS || s_present[slot] == 0U) {
+        if (out != NULL && cap != 0U) {
+            out[0] = '\0';
+        }
         return 0U;
     }
-    n = s_name_len[slot];
-    if (out != NULL && cap > 0U) {
-        uint8_t i;
-        uint8_t m = (uint8_t)((n < (uint8_t)(cap - 1u)) ? n : (uint8_t)(cap - 1u));
-        for (i = 0U; i < m; i++) {
-            out[i] = s_name[slot][i];
+    n = s_nlen[slot];
+    if (out != NULL && cap != 0U) {
+        k = (uint8_t)(((uint8_t)(cap - 1U) < n) ? (uint8_t)(cap - 1U) : n);
+        if (k != 0U) {
+            memcpy(out, s_name[slot], k);
         }
-        out[m] = '\0';
+        out[k] = '\0';
     }
     return n;
 }
 
 const uint8_t *TaskStore_Image(uint8_t slot)
 {
-    if (slot >= TASK_STORE_SLOTS || s_ok[slot] == 0U) {
+    if (slot >= TASK_STORE_SLOTS || s_present[slot] == 0U) {
         return NULL;
     }
-    return (const uint8_t *)(slot_addr(slot) + TASK_STORE_HDR_LEN);
+    return ts_prog() + s_off[slot];
 }
 
 uint8_t TaskStore_AutoSlot(void)
 {
-    uint8_t slot;
+    uint8_t i;
 
-    /* 从 0 开始扫 ⇒ 多个任务都置了自启位时跑 id 最小的那个 */
-    for (slot = 0U; slot < TASK_STORE_SLOTS; slot++) {
-        if (s_ok[slot] != 0U && (s_flags[slot] & TASK_STORE_FLAG_AUTO) != 0U) {
-            return slot;
+    for (i = 0U; i < TASK_STORE_SLOTS; i++) {
+        if (s_present[i] != 0U && (s_flags[i] & TASK_STORE_FLAG_AUTO) != 0U) {
+            return i;
         }
     }
     return TASK_STORE_NO_SLOT;
@@ -343,39 +461,15 @@ int TaskStore_Load(uint8_t slot)
     if (slot >= TASK_STORE_SLOTS) {
         return TASK_STORE_E_PARAM;
     }
-    if (s_ok[slot] == 0U) {
-        refresh(slot);                     /* 别人（调试器）可能刚改过 Flash */
-        if (s_ok[slot] == 0U) {
-            return TASK_STORE_E_EMPTY;
-        }
+    if (s_present[slot] == 0U) {
+        return TASK_STORE_E_EMPTY;
     }
-    return TaskRun_Load(TaskStore_Image(slot), s_len[slot]);
+    return TaskRun_Load(TaskStore_Image(slot), (uint32_t)s_len[slot]);
 }
 
 void TaskStore_StageReset(void)
 {
     s_stage_hi = 0U;
-    memset(s_stage, 0xFF, sizeof(s_stage));
-}
-
-int TaskStore_Stage(uint16_t off, const uint8_t *d, uint16_t n)
-{
-    if (d == NULL || n == 0U) {
-        return TASK_STORE_E_PARAM;
-    }
-    if ((uint32_t)off + (uint32_t)n > (uint32_t)TASK_STORE_CAP) {
-        return TASK_STORE_E_PARAM;
-    }
-    if (off == 0U) {
-        /* 偏移 0 = 新的一轮上传开始（分片都带绝对偏移）⇒ 顺手清掉上一轮的残留 */
-        s_stage_hi = 0U;
-    }
-
-    memcpy(&s_stage[off], d, n);
-    if ((uint32_t)off + (uint32_t)n > (uint32_t)s_stage_hi) {
-        s_stage_hi = (uint16_t)((uint32_t)off + (uint32_t)n);
-    }
-    return TASK_STORE_OK;
 }
 
 uint16_t TaskStore_StageLen(void)
@@ -383,11 +477,28 @@ uint16_t TaskStore_StageLen(void)
     return s_stage_hi;
 }
 
-int TaskStore_Commit(uint8_t slot, uint16_t len, uint16_t crc,
-                     uint8_t flags, const char *name, uint8_t name_len)
+int TaskStore_Stage(uint16_t off, const uint8_t *d, uint16_t n)
 {
-    uint8_t n;
-    int     e;
+    if (d == NULL || n == 0U) {
+        return TASK_STORE_E_PARAM;
+    }
+    if (((uint32_t)off + (uint32_t)n) > TASK_STORE_CAP) {
+        return TASK_STORE_E_PARAM;
+    }
+    if (off == 0U) {
+        s_stage_hi = 0U;                                /* 新一轮上传：清掉上一轮的残留 */
+    }
+    memcpy(&s_stage[off], d, n);
+    if ((uint16_t)(off + n) > s_stage_hi) {
+        s_stage_hi = (uint16_t)(off + n);
+    }
+    return TASK_STORE_OK;
+}
+
+int TaskStore_Commit(uint8_t slot, uint16_t len, uint16_t crc, uint8_t flags,
+                     const char *name, uint8_t name_len)
+{
+    int rc;
 
     if (slot >= TASK_STORE_SLOTS) {
         return TASK_STORE_E_PARAM;
@@ -396,19 +507,14 @@ int TaskStore_Commit(uint8_t slot, uint16_t len, uint16_t crc,
         return TASK_STORE_E_PARAM;
     }
     if (s_stage_hi < len) {
-        return TASK_STORE_E_PARAM;                  /* 分片没传够 */
+        return TASK_STORE_E_PARAM;                      /* 分片没收全 */
     }
-    if (name == NULL) {
-        name_len = 0U;
+    if (name_len != 0U && name == NULL) {
+        return TASK_STORE_E_PARAM;
     }
-    if (name_len > TASK_STORE_NAME_MAX) {
-        name_len = TASK_STORE_NAME_MAX;             /* 超长就截断，不报错 */
-    }
-
     if (store_busy() != 0U) {
         return TASK_STORE_E_BUSY;
     }
-    /* 先按 CRC 对一遍暂存：分片丢片/错位/上一轮残留都在这里现形 */
     if (TaskProg_Crc16(&s_stage[TASK_HDR_LEN], (uint32_t)len - TASK_HDR_LEN) != crc) {
         return TASK_STORE_E_CRC;
     }
@@ -416,72 +522,34 @@ int TaskStore_Commit(uint8_t slot, uint16_t len, uint16_t crc,
         return TASK_STORE_E_FORMAT;
     }
 
-    memset(&s_hdr, 0xFF, sizeof(s_hdr));
-    s_hdr.hdr.magic    = TASK_STORE_MAGIC;
-    s_hdr.hdr.ver      = TASK_STORE_VER;
-    s_hdr.hdr.id       = slot;
-    s_hdr.hdr.len      = len;
-    s_hdr.hdr.crc16    = crc;
-    s_hdr.hdr.flags    = (uint8_t)(flags & TASK_STORE_FLAG_AUTO);
-    s_hdr.hdr.name_len = name_len;
-    for (n = 0U; n < name_len; n++) {
-        s_hdr.hdr.name[n] = (uint8_t)name[n];
+    rc = store_build(slot, s_stage, len, crc, flags, name, name_len, 1U);
+    if (rc != TASK_STORE_OK) {
+        return rc;
     }
-
-    e = write_slot(slot, s_stage, len);
-    refresh(slot);                                  /* 只信回读的结果 */
-    if (e == TASK_STORE_OK && s_ok[slot] == 0U) {
-        e = TASK_STORE_E_FLASH;                     /* 回读没过三层校验 ⇒ 当写失败 */
+    rc = store_flash_write();
+    if (rc == TASK_STORE_OK) {
+        TaskStore_StageReset();
     }
-    if (e == TASK_STORE_OK) {
-        TaskStore_StageReset();                     /* 落盘成功：暂存不留旧数据 */
-    }
-    return e;
+    return rc;
 }
 
 int TaskStore_Erase(uint8_t slot)
 {
-    uint8_t dcache;
-    uint8_t ok;
-    int     e;
+    int rc;
 
     if (slot >= TASK_STORE_SLOTS) {
         return TASK_STORE_E_PARAM;
+    }
+    if (s_present[slot] == 0U) {
+        return TASK_STORE_OK;                           /* 幂等：空槽不碰 Flash */
     }
     if (store_busy() != 0U) {
         return TASK_STORE_E_BUSY;
     }
 
-    dcache = (READ_BIT(FLASH->ACR, FLASH_ACR_DCEN) != 0U) ? 1U : 0U;
-    if (dcache != 0U) {
-        __HAL_FLASH_DATA_CACHE_DISABLE();
+    rc = store_build(slot, NULL, 0U, 0U, 0U, NULL, 0U, 0U);
+    if (rc != TASK_STORE_OK) {
+        return rc;
     }
-
-    if (HAL_FLASH_Unlock() != HAL_OK) {
-        if (dcache != 0U) {
-            __HAL_FLASH_DATA_CACHE_RESET();
-            __HAL_FLASH_DATA_CACHE_ENABLE();
-        }
-        return TASK_STORE_E_FLASH;
-    }
-
-    ok = page_erase(slot);
-    if (ok == 0U) {
-        __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS);
-        ok = page_erase(slot);
-    }
-    if (ok != 0U) {
-        ok = page_erased(slot);
-    }
-    (void)HAL_FLASH_Lock();
-
-    if (dcache != 0U) {
-        __HAL_FLASH_DATA_CACHE_RESET();
-        __HAL_FLASH_DATA_CACHE_ENABLE();
-    }
-
-    refresh(slot);
-    /* 擦完的槽位必然"不在"；只要擦除本身没报错，这次删除就算成功 */
-    e = (ok != 0U) ? TASK_STORE_OK : TASK_STORE_E_FLASH;
-    return e;
+    return store_flash_write();
 }

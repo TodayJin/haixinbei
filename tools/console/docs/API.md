@@ -73,7 +73,7 @@
   }
 }
 ```
-`caps` 位（与固件一致）：bit0 TELEM2、bit1 动作表、bit2 舵机、bit3 驾驶、bit4 标定、bit5 Flash 保存、bit6 看门狗。
+`caps` 位（与固件一致）：bit0 TELEM2、bit1 动作表、bit2 舵机、bit3 驾驶、bit4 标定、bit5 Flash 保存、bit6 看门狗、**bit7 任务程序**（`HOST_CAP_TASK`）。
 
 ### 3.2 `/api/params`
 ```json
@@ -109,28 +109,29 @@
 ```
 `kind`：`actions` | `params` | `servo` | `mixed`。文件落在 `tools\console/data/presets/*.json`。
 
-### 3.6 任务（`#/tasks` 页用；**契约已冻结，桥待实现**）
+### 3.6 任务（`#/tasks` 页用）
 格式与语义的真值来源是仓根 `docs/任务编程.md`（二进制 v1、帧 `0x60`–`0x69`、能力位 `HOST_CAP_TASK=bit7`）。
-前端 `web/src/lib/taskapi.ts` 已按下面的端点写好，桥只要照做就能接上（现在桥没有这些端点 ⇒ 页面顶部显示琥珀色
-「桥上还没有任务端点」而不是报错）：
+前端 `web/src/lib/taskapi.ts`、Python 桥（`bridge/server.py` 的 `_route_get`/`_route_post`）与假后端都按下面的端点实现。
+桥在**能力位缺失**时不回 404/501，而是回 `200 + {"ok":false,"supported":false,"error":"…"}`，前端据此切成「等固件支持」态：
 
 | 方法 | 路径 | 请求体 | 回 |
 |---|---|---|---|
 | GET | `/api/tasks` | — | `{"ok":true,"items":[{"id","name","len","crc","flags"}]}` |
 | GET | `/api/tasks/get?id=N` | — | `{"ok":true,"hex":"…"}`（整镜像，前端自己切分块） |
-| POST | `/api/tasks/put` | `{"id","offset","hex"}` | `{"ok":true}`（一帧 `T_TASK_PUT`，**hex 长度 ≤ 240 个字符 = 120 B**） |
-| POST | `/api/tasks/commit` | `{"id","len","crc","name"}` | `{"ok":true}`（`T_TASK_COMMIT`，车上擦写 Flash） |
+| POST | `/api/tasks/put` | `{"id","offset","hex"}` | `{"ok":true}`（一帧 `T_TASK_PUT`；**协议上限 124 B = `MAX_PAYLOAD-4`，页面按 120 B 分片**） |
+| POST | `/api/tasks/commit` | `{"id","len","crc","name","flags"}` | `{"ok":true}`（`T_TASK_COMMIT`，车上擦写 Flash；`flags` bit0 = 开机自启） |
 | POST | `/api/tasks/delete` | `{"id"}` | `{"ok":true}` |
 | POST | `/api/tasks/run` | `{"id"}` | `{"ok":true}` |
 | POST | `/api/tasks/stop` | `{}` | `{"ok":true}` |
 | GET | `/api/tasks/status` | — | `{"ok":true,"status":{"id","state","running","block","elapsed_ms","flags"}}` |
 
-- 失败体一律 `{"ok":false,"error":"…"}`；**桥上根本没有这些端点时回 404/501**，前端会切成「等固件/桥支持」的提示态。
-- `crc` 是 `T_TASK_COMMIT` 里那个 CRC16-CCITT（覆盖镜像 `[12,len)`），前端算好一起发；车上回读后前端会再比一次字节。
-- `status` 允许平铺（`{"ok":true,"id":…}`）也允许嵌在 `status` 里，两种都认。
+- 失败体一律 `{"ok":false,"error":"…"}`；**语义性失败（车拒收/没人应答）也是 HTTP 200 + `ok:false`**，只有参数不合法才回 400。
+- `crc` 是 `T_TASK_COMMIT` 里那个 CRC16-CCITT（覆盖镜像 `[12,len)`），前端算好一起发；车上回读后前端会再比一次字节（这一层在页面里，桥只发一次 COMMIT）。
+- `status` 允许平铺（`{"ok":true,"id":…}`）也允许嵌在 `status` 里，两种都认；`running` 线上是 `u8` 1/0，前端 `taskapi.normalizeStatus()` 归一成布尔，`elapsed_ms` 与 `elapsedMs` 两种拼写都接受。
 - **假后端 `web/mock/server.mjs` 已经按本表实现了一遍**（内存里的假 Flash：`put` 收分片、`commit` 查 magic/版本/状态数/**CRC 必须对**、`get` 回整镜像、
   `run`/`stop`/`status` 让监视画面真的动起来），所以 `#/tasks` 页不用等固件就能整条演示。
-  `web/src/lib/contract.test.ts` 里有一条用例专门走这条真 HTTP 闭环（烧写 → 目录 → 回读逐字节 → 运行 → 状态 → 错 CRC 必须被拦 → 删掉）。
+  `web/src/lib/contract.test.ts` 里有一条用例专门走这条真 HTTP 闭环（烧写 → 目录 → 回读逐字节 → 运行 → 状态 → 错 CRC 必须被拦 → 删掉）；
+  Python 侧对应用例在 `tools/console/tests/test_task.py`（帧层 / 仿真车 / 桥端点三层，跑真 HTTP）。
 
 ## 4. SSE 事件（`GET /api/stream`）
 

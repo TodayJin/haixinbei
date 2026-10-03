@@ -302,6 +302,19 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": True, **con.snapshot()})
         elif path == "/api/stream":
             self._stream()
+        elif path == "/api/tasks":
+            self._json(con.task_list())
+        elif path == "/api/tasks/get":
+            try:
+                tid = int(self._query().get("id", "-1"))
+            except ValueError:
+                tid = -1
+            if tid < 0:
+                self._json({"ok": False, "error": "要给 id"}, 400)
+                return
+            self._json(con.task_get(tid))
+        elif path == "/api/tasks/status":
+            self._json(con.task_status_payload())
         elif path.startswith("/api/"):
             self._json({"ok": False, "error": f"没有这个端点：{path}"}, 404)
         else:
@@ -396,6 +409,44 @@ class Handler(BaseHTTPRequestHandler):
             with con.lock:
                 con.logs.clear()
             self._json({"ok": True})
+        # ---- 车上任务程序（docs/任务编程.md §5）。语义性失败（空槽位、超时）一律
+        #      200 + {ok:false,error}；只有"固件没这个能力"才 501 —— 前端把 404/501
+        #      当成"桥/固件还没支持"，会把面板切成提示态。
+        elif path == "/api/tasks/put":
+            try:
+                tid = int(body["id"])
+                off = int(body.get("offset", 0))
+                data = bytes.fromhex(str(body.get("hex", "")))
+            except (KeyError, TypeError, ValueError):
+                self._json({"ok": False, "error": "要给 id / offset / 偶数长度的 hex"}, 400)
+                return
+            self._json(con.task_put(tid, off, data))
+        elif path == "/api/tasks/commit":
+            try:
+                tid = int(body["id"])
+                length = int(body["len"])
+                crc = int(body["crc"])
+                flags = int(body.get("flags", 0) or 0)
+            except (KeyError, TypeError, ValueError):
+                self._json({"ok": False, "error": "要给 id、len、crc"}, 400)
+                return
+            self._json(con.task_commit(tid, length, crc, str(body.get("name", "")), flags))
+        elif path == "/api/tasks/delete":
+            try:
+                tid = int(body["id"])
+            except (KeyError, TypeError, ValueError):
+                self._json({"ok": False, "error": "要给 id"}, 400)
+                return
+            self._json(con.task_delete(tid))
+        elif path == "/api/tasks/run":
+            try:
+                tid = int(body["id"])
+            except (KeyError, TypeError, ValueError):
+                self._json({"ok": False, "error": "要给 id"}, 400)
+                return
+            self._json(con.task_run(tid))
+        elif path == "/api/tasks/stop":
+            self._json(con.task_stop())
         else:
             self._json({"ok": False, "error": f"没有这个端点：{path}"}, 404)
 

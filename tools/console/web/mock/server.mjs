@@ -350,14 +350,14 @@ const staging = new Map()    // id -> Buffer（put 上来还没 commit 的）
 let taskRun = { id: 0, running: false, state: 0, block: 0, nStates: 1, nBody: 1, t0: 0, flags: 0 }
 
 function taskStatus() {
-  if (!taskRun.running) return { id: taskRun.id, state: 0, running: 0, block: 0, elapsed_ms: 0, flags: 0 }
+  if (!taskRun.running) return { id: taskRun.id, state: 0, running: 0, block: 0, elapsed_ms: 0, elapsedMs: 0, flags: 0 }
   const elapsed = Date.now() - taskRun.t0
   // 让监视画面动起来：每 400ms 走一块，走到序列尾就换下一个状态
   const step = Math.floor(elapsed / 400)
   const state = (taskRun.state + Math.floor(step / Math.max(1, taskRun.nBody))) % Math.max(1, taskRun.nStates)
   return {
     id: taskRun.id, state, running: 1, block: step % Math.max(1, taskRun.nBody),
-    elapsed_ms: elapsed, flags: 0,
+    elapsed_ms: elapsed, elapsedMs: elapsed, flags: 0,
   }
 }
 
@@ -650,11 +650,11 @@ const server = http.createServer(async (req, res) => {
       })
     }
 
-    // ---- 任务页（真桥还没实现，假后端先按契约演一遍）----
+    // ---- 任务页（与真桥的 /api/tasks* 同一份契约；真桥见 tools/console/bridge/server.py）----
     if (path === '/api/tasks' && req.method === 'GET') {
       const items = [...tasks.entries()]
         .sort((a, b) => a[0] - b[0])
-        .map(([id, t]) => ({ id, name: t.name, len: t.buf.length, crc: crc16(t.buf.subarray(12)), flags: 0 }))
+        .map(([id, t]) => ({ id, name: t.name, len: t.buf.length, crc: crc16(t.buf.subarray(12)), flags: t.flags }))
       return json(res, 200, { ok: true, supported: true, items })
     }
 
@@ -670,14 +670,14 @@ const server = http.createServer(async (req, res) => {
       const id = Number(body.id)
       const off = Number(body.offset)
       const hex = String(body.hex ?? '')
-      if (!Number.isInteger(id) || id < 0 || id > 15) return fail(res, 400, 'id 必须是 0..15', 'bad_param')
+      if (!Number.isInteger(id) || id < 0 || id > 7) return fail(res, 400, 'id 必须是 0..7', 'bad_param')
       if (!Number.isInteger(off) || off < 0) return fail(res, 400, 'offset 必须是非负整数', 'bad_param')
       if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) return fail(res, 400, 'hex 必须是偶数长度的十六进制', 'bad_param')
       if (hex.length > 240) return fail(res, 400, `一帧最多 120 字节（现在 ${hex.length / 2}）`, 'out_of_range')
       const data = Buffer.from(hex, 'hex')
       const cur = staging.get(id) ?? Buffer.alloc(0)
       const need = off + data.length
-      if (need > 6144) return fail(res, 400, `超出程序区（最多 6144 字节，写到 ${need}）`, 'out_of_range')
+      if (need > 2048) return fail(res, 400, `单个任务最多 2048 字节（解释器 RAM 上限，写到 ${need}）`, 'out_of_range')
       const next = Buffer.alloc(Math.max(cur.length, need), 0xff)
       cur.copy(next)
       data.copy(next, off)
@@ -698,7 +698,12 @@ const server = http.createServer(async (req, res) => {
       }
       if (buf[2] !== 1) return fail(res, 400, `版本不支持：${buf[2]}`, 'bad_param')
       if (buf[3] === 0 || buf[3] > 16) return fail(res, 400, `状态数越界：${buf[3]}`, 'bad_param')
-      tasks.set(id, { name: String(body.name ?? ''), buf: Buffer.from(buf.subarray(0, len)) })
+      const used = [...tasks.entries()].filter(([k]) => k !== id).reduce((s, [, t]) => s + t.buf.length, 0)
+      if (used + len > 6144) {
+        return fail(res, 400, `程序区（最多 6144 字节）装不下：已用 ${used}，这次 ${len}`, 'out_of_range')
+      }
+      tasks.set(id, { name: String(body.name ?? ''), buf: Buffer.from(buf.subarray(0, len)),
+                      flags: (Number(body.flags) || 0) & 1 })
       staging.delete(id)
       log('info', `任务 ${id} 已写入假 Flash（${len} 字节）`)
       ack('tasks/commit')

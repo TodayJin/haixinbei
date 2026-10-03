@@ -917,6 +917,7 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
 
   case T_TASK_COMMIT: {
     uint16_t id, tlen, tcrc;
+    uint8_t  flags = 0u;
     uint8_t  name_len = 0u;
     const char *name = NULL;
     int rc;
@@ -926,22 +927,24 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
     tcrc = rd_u16(&p[4]);
     if (id >= TASK_STORE_SLOTS) { send_ack(seq, ST_OUT_OF_RANGE); break; }
     if (len > 6u) {
-      /* §5 只写了前 6 字节；名字（u8 name_len + name）是超集，桥只发 6 字节也认 */
-      name_len = p[6];
-      if (name_len > TASK_STORE_NAME_MAX || (uint16_t)(7u + (uint16_t)name_len) > (uint16_t)len) {
+      /* §5：p[6] = flags（bit0 = 开机自启；不认的位由存储层过滤掉，不会写进 Flash） */
+      flags = p[6];
+    }
+    if (len > 7u) {
+      /* 超集：p[7] = u8 name_len，其后是名字（UTF-8，不补 '\0'）。桥只发 6/7 字节也认。 */
+      name_len = p[7];
+      if (name_len > TASK_STORE_NAME_MAX || (uint16_t)(8u + (uint16_t)name_len) > (uint16_t)len) {
         send_ack(seq, ST_BAD_PARAM);
         break;
       }
-      name = (const char *)&p[7];
+      name = (const char *)&p[8];
     }
     if (renwu_flag != 0u) {
       /* 旧 renwu 流程在跑：擦一页会把 CPU 按住几十毫秒，正在跑的控制环直接失控 */
       send_ack(seq, ST_BUSY);
       break;
     }
-    /* flags 只能给 0：上位机契约（API.md §3.6）里没有这个字节 ⇒ TASK_STORE_FLAG_AUTO
-     * （开机自启）目前没有下发通路，要做的话得先给 COMMIT 加一个 flags 字节（两边一起改） */
-    rc = TaskStore_Commit((uint8_t)id, tlen, tcrc, 0u, name, name_len);
+    rc = TaskStore_Commit((uint8_t)id, tlen, tcrc, flags, name, name_len);
     if (rc == TASK_STORE_OK) {
       send_ack(seq, ST_OK);
     } else {

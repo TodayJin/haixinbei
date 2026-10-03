@@ -141,8 +141,8 @@ int main(void)
   nvram_init();
   SEGGER_RTT_printf(0, "nvram loaded=%u\r\n", (unsigned)nvram_loaded());
 
-  /* 上位机烧进 Flash 的任务程序（页 60/61/62，见 App/Svc/task_store.c）。放在
-   * nvram_init() 之后：两者各读自己的 Flash 页，但任务一启动就接管电机，必须等
+  /* 上位机烧进 Flash 的任务程序（页 59 目录 + 页 60..62 程序区，见 App/Svc/task_store.c）。
+   * 放在 nvram_init() 之后：两者各读自己的 Flash 页，但任务一启动就接管电机，必须等
    * 参数表（PID 等标定量）已经从存档恢复完。 */
   TaskStore_Init();
   {
@@ -172,7 +172,7 @@ int main(void)
     }
   }
 
-  /* 比赛任务流程的启动闸门（见主循环里那一小段）：0=没在跑任务 */
+  /* 旧比赛任务流程的收尾标志（见主循环里那一小段）：1=旧 renwu 流程曾被启动过 */
   static uint8_t s_renwu_active = 0U;
 
   while (1) {
@@ -270,45 +270,27 @@ int main(void)
      * （擦+写约 30ms，期间取指停摆；内部自己避开 OLED 传输）。 */
     nvram_poll();
 
-    /* ---- 比赛任务流程（旧板 renwu.c 原样搬来的 A/B/C）------------------------------
-     * 上位机的 CMD_START_A/B/C（host_link.c 里只置 renwu_flag=1/2/3）以前没人调用
-     * renwu()，整个 renwu.c 是死代码；这里按旧板的方式在主循环里跑它。
-     *   进入任务：先关掉 UI 那边的运动模式、角度环和速度环，让流程里的 Load() 直接
-     *             决定 PWM（旧板语义）；流程内部再用 Toggle_Gyro_Control() 开关角度环。
-     *   退出任务：renwu_stop() 关角度环 + Load(0,0) 断电机。
-     * 注意 A() 用 HAL_Delay 分段（旧板写法）⇒ 跑任务期间屏幕刷新/遥测会停顿，
-     * 但 TIM6 的 5ms 运动环照常进中断（角度环/速度环在中断里）。 */
+    /* ---- 旧比赛任务流程（renwu.c 的 A/B/C）已从主循环摘掉 -------------------------
+     * 任务编排已由上位机可编程任务取代（App/Svc/task_prog.c + task_run.c，见下）。
+     * renwu.c **保留不删**（当旧流程的参考），但不再从主循环里跑：它与解释器都会
+     * 接管电机，同时跑必然互相踩。
+     * 只留"收尾清 flag"这一段：上位机的旧 CMD_START_A/B/C 仍会把 renwu_flag 置起来，
+     * 而 host_link 把 renwu_flag != 0 当"车在动"（任务存储区拒绝擦写的判据之一）
+     * ⇒ 不清掉它，一次老式 START 会让任务存储区**永远 BUSY**。 */
     if (renwu_flag != 0U) {
-      if (!s_renwu_active) {
-        s_renwu_active = 1U;
-        Motion_Stop();          /* 关 UI 运动模式（含角度环 + 速度环 + Load(0,0)） */
-        GyroControl_Stop();
-        SpeedControl_Stop();
-        Motion_ClearFault();    /* 上一次（UI 那边）留下的旧故障不能把新任务一次就掐掉 */
-      }
-      renwu();
-
-      /* 任务流程里的转弯靠 Yaw 闭环：陀螺仪一死，转弯永远到不了目标，而脚本只会
-       * 按 HAL_Delay 往下走 ⇒ 车会带着错误航向继续跑。看门狗已经停了车，这里再
-       * 把任务也退掉（renwu_flag 归零），故障位留在 RTT 里给人看。 */
-      if (Motion_GetFault() != MOTION_FAULT_NONE) {
-        s_renwu_active = 0U;
-        renwu_flag = 0U;
-        renwu_stop();
-      }
-    } else if (s_renwu_active) {
+      renwu_flag = 0U;
+    }
+    if (s_renwu_active != 0U) {
       s_renwu_active = 0U;
-      renwu_stop();
+      renwu_stop();           /* 关角度环 + Load(0,0) 断电机（防御性保留） */
     }
 
     /* ---- 上位机可编程任务（App/Svc/task_run.c + task_prog.c）----------------------
      * 状态机解释器，全非阻塞、5ms 一拍；没有"载入 + 启动"过程序时是空操作（什么都不做）。
-     * 与旧 renwu 流程**互斥**：两者都会接管电机，所以在 renwu 跑的时候不推进解释器。
-     * 程序由上位机拼好（拖动组合）、烧进 Flash，车离线自主执行 —— 比赛不能遥控，
-     * 所以运行期解释器不受链路看门狗约束；只有显式的停止命令/END 块/故障才停车。 */
-    if (renwu_flag == 0U) {
-      TaskRun_Tick(HAL_GetTick());
-    }
+     * 程序由上位机拼好（拖动组合）、烧进 Flash（App/Svc/task_store.c），车离线自主执行
+     * —— 比赛不能遥控，所以运行期解释器不受链路看门狗约束；只有显式的停止命令/END
+     * 块/故障才停车。 */
+    TaskRun_Tick(HAL_GetTick());
 
     HAL_Delay(2);
   }

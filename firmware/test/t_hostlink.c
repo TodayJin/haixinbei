@@ -851,13 +851,14 @@ int main(void)
         }
         put16(&pb[0], 0);
 
-        /* 26) COMMIT：len/crc 原样搬运，flags 只能为 0（契约里没这个字节），名字随帧带过去 */
+        /* 26) COMMIT：len/crc/flags 原样搬运，名字随帧带过去
+         *     载荷 = id/len/crc/u8 flags/[u8 name_len + name] */
         put16(&pb[2], 80);
         put16(&pb[4], 0x1234);
-        pb[6] = 3; pb[7] = 'a'; pb[8] = 'b'; pb[9] = 'c';
+        pb[6] = 1; pb[7] = 3; pb[8] = 'a'; pb[9] = 'b'; pb[10] = 'c';
         host_dl_tx_clear();
-        build(f, 0x63, 122, pb, 10);
-        feed_and_poll(f, 17);
+        build(f, 0x63, 122, pb, 11);
+        feed_and_poll(f, 18);
         {
             uint8_t l = 0;
             const uint8_t *a = find_frame(0x21, 122, &l);
@@ -866,15 +867,15 @@ int main(void)
             CHECK_EQ_I(stubt_commits, 1);
             CHECK_EQ_I(stubt_last_len, 80);
             CHECK_EQ_I(stubt_last_crc, 0x1234);
-            CHECK_EQ_I(stubt_last_flags, 0);
+            CHECK_EQ_I(stubt_last_flags, TASK_STORE_FLAG_AUTO);  /* bit0 = 开机自启，原样送存储层 */
             CHECK_EQ_I(stubt_last_namelen, 3);
             CHECK_EQ_I(memcmp(stubt_last_name, "abc", 3), 0);
         }
         /* 名字长度撒谎（name_len=30 但帧里只有 1 个名字字节）⇒ ST_BAD_PARAM，且不写 */
-        pb[6] = 30; pb[7] = 'a';
+        pb[7] = 30; pb[8] = 'a';
         host_dl_tx_clear();
-        build(f, 0x63, 124, pb, 8);
-        feed_and_poll(f, 15);
+        build(f, 0x63, 124, pb, 9);
+        feed_and_poll(f, 16);
         {
             uint8_t l = 0;
             const uint8_t *a = find_frame(0x21, 124, &l);
@@ -882,7 +883,8 @@ int main(void)
             if (a) CHECK_EQ_I(a[6], 0x03);
             CHECK_EQ_I(stubt_commits, 1);
         }
-        /* 车上说忙（车在动/任务在跑）⇒ ST_BUSY（0x07），且不写 */
+        /* 车上说忙（车在动/任务在跑）⇒ ST_BUSY（0x07），且不写。
+         * pb[6]=0 且帧长 7 ⇒ 只有 flags 字节、没有名字，也要认 */
         pb[6] = 0;
         stubt_commit_rc = TASK_STORE_E_BUSY;
         host_dl_tx_clear();
@@ -924,7 +926,7 @@ int main(void)
                 CHECK_EQ_I(r[5] | (r[6] << 8), 0);          /* id = 槽号 */
                 CHECK_EQ_I(r[7] | (r[8] << 8), 80);         /* len */
                 CHECK_EQ_I(r[9] | (r[10] << 8), 0x1234);    /* crc */
-                CHECK_EQ_I(r[11], 0);                       /* flags */
+                CHECK_EQ_I(r[11], 1);                       /* flags：COMMIT 带来的 bit0=自启 */
                 CHECK_EQ_I(r[12], 3);                       /* name_len */
                 CHECK_EQ_I(memcmp(&r[13], "abc", 3), 0);
             }

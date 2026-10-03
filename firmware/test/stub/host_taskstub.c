@@ -26,7 +26,7 @@ int      stubt_starts;
 int      stubt_stops;
 uint16_t stubt_last_len;         /* COMMIT 收到的 len */
 uint16_t stubt_last_crc;         /* COMMIT 收到的 crc（协议有没有原样搬运） */
-uint8_t  stubt_last_flags;       /* COMMIT 收到的 flags（当前约定只能是 0） */
+uint8_t  stubt_last_flags;       /* COMMIT 收到的 flags（bit0 = 开机自启，其余位车上过滤） */
 uint8_t  stubt_last_namelen;
 char     stubt_last_name[TASK_STORE_NAME_MAX + 1];
 uint16_t stubt_last_stage_off;   /* 最近一片 PUT 的偏移 */
