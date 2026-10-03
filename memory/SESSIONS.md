@@ -14,6 +14,16 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：修掉用户报的「拖一个模块但没放下，蓝条就不消失」：根因是 tools/console/web/src/pages/Tasks.tsx 的 dropAt 只在 DropLine 的 onDragOver 置位、onDrop 清位，块丢到空白处/参数区、按 Esc 或拖出窗口时浏览器只发 dragend ⇒ 蓝条挂住。改法是在 TasksPage 加一个 window 级 dragend/drop 兜底 clear 的 useEffect（带 removeEventListener 清理）。验证：npx tsc --noEmit exit 0、vitest 16 文件/155 passed、npm run build 后 dist/assets/index-CKMdvvq8.js 336.28 kB，8793 首页已托管该文件。提交 07a10c7。
+未完成：没有自动化 UI 拖放测试；截不了图（Chrome/Edge 的 --headless=new --screenshot 在本机都不落盘，项目也没有 puppeteer/playwright），视觉只有用户自己看
+下一步：用户刷新 http://127.0.0.1:8793/#/tasks 确认观感
+
+## 2026-10-03
+完成：按用户选择改完 #/tasks 两处观感：①tools/console/web/src/lib/taskedit.ts 的 MODE_OPTIONS 由 5 项砍到 3 项（停车/角度环/循迹），新增 MODE_LEGACY + modeLabel()/modeChoices() 让老文件的旧值仍能显示，defaultsFor(SET_MODE) 与内置「常态循迹」范例都改用 TRACE_GYRO；②tools/console/web/src/pages/Tasks.tsx 状态机卡改成状态标签条（主页排第一带徽标、显示块数、在跑打绿点、可点击也可当拖放落点）+ 只渲染一个 StateCard，「加状态」后自动跳到新状态；③docs/任务编程.md:47 的 p0 语义按固件改齐并注明上位机只暴露 0/1/3。验证：tsc --noEmit exit 0；vitest 16 文件/156 passed（taskedit.test.ts 的 5 项断言改 3 项 + 新增 modeChoices/modeLabel/defaultsFor 用例）；npm run build 后 dist/assets/index-Bgo4TFb0.js 337.45 kB + index-GuJrE8M8.css 37.12 kB，8793 返回的正是新 bundle；SSR 预览 out/console/ssr/tasks.html（62035 B）里「进门（可空）」「循环体（末尾要能跳走）」各只出现 1 次 ⇒ 确实一屏一个状态。提交 9a9d626。
+未完成：用户还没看过新版界面；模式下拉里「循迹」现在指三层串级，而三层串级在赛道上从没验过（PROJECT.md 记着它是死代码），上车时这一点要单独确认
+下一步：等用户刷新 #/tasks 的反馈；之后剩下的唯一大项是真车上车对拍（真板 + 真 Flash 页 59..62）
+
+## 2026-10-03
 完成：第 2 轮收口：固件遥测两字段改按「解释器在跑」判 0xFF（host_link.c:443/:472，t_hostlink 新增 17c）、CMD_START_A/B/C 回 ST_UNSUPPORTED(0x08)+文本、CMD_STOP 真停解释器、COMMIT/DEL/RUN 三处 ST_BUSY 守卫；删 renwu.c/renwu.h/build.log/tools/renwu_states.py；桥 JSON renwu→task_id、前端三个「启动任务」按钮换成任务编排链接。验证：make text 114232/data 364/bss 26944、bin 114604（余 6228）、run_tests 13/0（t_hostlink 292 项）、check_static 52 文件 4 告警 0 error、pytest 102 passed、tsc exit 0、vitest 16 文件 155 项、8793 真 HTTP 验收 out/_round2_accept.py 全绿。
 未完成：真车链路未验；0x69 状态帧的 running 与遥测两字节在真板上的表现只在仿真里对过
 下一步：上车对拍：真板 + 真 Flash 页 59..62 走一遍烧写/回读/运行（当前真车只读链路待硬件）
@@ -1152,14 +1162,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：原理图待补：I2C 总线+上拉+器件、循迹排针、RGB、ALERT、UART4、保险丝改大、去耦补齐
 下一步：等用户补齐原理图后再复核；或出一份逐项 checklist 给用户改图
 
-## 2026-09-15
-完成：晶振改为 **25MHz + 2×15pF**（CL=12pF），文档改 4 处（引脚表/5.2 表/BOM/6.3 说明），并注明 **固件 HSE_VALUE 要改成 25000000**、PLL = /5×68/2 = 170MHz。
-未完成：电源设计待复核；CubeMX 两项核对
-下一步：可按需出布局分区草图
-
-## 2026-09-15
-完成：驱动最终拍板 **2× AT8236**，并全面替换文档里的 DRV8412（共 29 处：标题/约束表/框图/电源表/第3节/BOM/U2 网络/上拉表/布局建议/CubeMX 待办）。文档升到 **v0.8**。要点：每电机一颗单路 H 桥，PC6/PC7 与 PC8/PC9 做 IN1/IN2，PWM 直接打输入；ISEN/VREF→GND；EPAD 铺铜散热；**省下 PB0/PB1/PB2**。
-未完成：电源设计待用户完成复核；CubeMX 两项核对（循迹 ADC 通道、编码器脚 FT）
-下一步：可出布局分区草图 / 走线宽度 / AT8236 散热过孔估算
-
-> 更早的会话条目已归档到 177 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 179 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
