@@ -12,6 +12,31 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-03 — 操控页速度改用固件速度刻度 0..7200（不是 mm/s），并加「跳过静摩擦死区」开关（默认开，滑块从 1000 起步，存 settings.driveSkipDead）
+选择：操控页速度改用固件速度刻度 0..7200（不是 mm/s），并加「跳过静摩擦死区」开关（默认开，滑块从 1000 起步，存 settings.driveSkipDead）
+放弃：保留 ±3000 上限（就是 bug 本身）；或只把上限放到 7200 而不处理死区（滑块 0..1000 那一段车根本不动，用户明确要求「把死区那部分去掉」）
+因为：固件 SpeedControl_SetTarget()/Motion_SetSpeed()/GyroControl_SetBaseSpeed() 吃的就是 PWM 目标刻度；旧前端把它当 mm/s 夹在 ±3000 只有 42% 满量程 —— 用户 m20267 报「满速太低」的根因
+
+## 2026-10-03 — 倒车时在 stepDrive 里把角速度取反（const yawRate = intent.base < 0 ? -intent.turnRate : intent.turnRate）
+选择：倒车时在 stepDrive 里把角速度取反（const yawRate = intent.base < 0 ? -intent.turnRate : intent.turnRate）
+放弃：改固件 gyro_control.c 的符号（会把前进/循迹/角度环全带翻）；或在 keys.ts 的按键映射里翻（那里拿不到「当前是否倒车」之外的信息也不是问题点，但语义上方向翻号属于「意图→航向」这一层，和积分放一起才自洽）
+因为：turn 是目标航向偏移（正 = 左），而倒车时行进方向 = 航向 + 180°，不取反按 S+D 会让车尾往左摆 —— 用户 m20267 报的方向反了
+
+## 2026-10-03 — 真车链路走 **J-Link 的 CDC 串口 COM26**（`JLink CDC UART Port`，VID:PID 1366:0105）——用户把 U12 的那两根串口线「反过来」接之后就通了
+选择：真车链路走 **J-Link 的 CDC 串口 COM26**（`JLink CDC UART Port`，VID:PID 1366:0105）——用户把 U12 的那两根串口线「反过来」接之后就通了
+放弃：放弃「J-Link 20 脚排线里没有 UART 线、COM26 与 U12 无电气通路」这个早先结论（memory/SESSIONS.md:147/155/158 那几条）：线其实在，只是 TX/RX 接反了，先前按「探针 TXD → 板侧网名 LPUART1_RX(U12.5)」这种按网名对号入座的方式接就是反的，正确的是探针 TX → U12 脚 6（PC0=车收）
+因为：这块板原理图两处网名与芯片功能相反（`LPUART1_TX`=PC0、`LPUART1_RX`=PC1；网表 pcb/Netlist_Schematic1_2026-09-29.tel:430-431），按网名接线必然接反；反过来后 PC 侧静听 0.5s 收到 1684 字节遥测、发 3 帧 HELLO_REQ 收到车回的 type=0x40 hello 帧
+
+## 2026-10-03 — 烧录失败时先判定「探针还在不在 USB 上」，而不是改 tools/flash.ps1：JLink.exe 卡在 `JLINK_OpenEx(...)` 就是 USB/探针层的问题，脚本此前多轮都烧成功过。
+选择：烧录失败时先判定「探针还在不在 USB 上」，而不是改 tools/flash.ps1：JLink.exe 卡在 `JLINK_OpenEx(...)` 就是 USB/探针层的问题，脚本此前多轮都烧成功过。
+放弃：改 flash.ps1（加超时/换 CubeProgrammer）、或反复重跑脚本 —— 都不解决探针本身掉线，只会重复卡死。
+因为：本次卡死根因是一个 2026-10-03 09:07 启动、跑了 11.5 小时满 CPU 的孤儿 JLink 会话（`-CommanderScript C:\Users\Today\AppData\Local\Temp\_jl_banner.jlink`，RTT banner 检查）长期占着探针，杀掉它之后探针 USB 直接不再枚举。
+
+## 2026-10-03 — 探针掉线后尝试软件恢复：`pnputil /restart-device` 重启该 USB 设备、以及它挂载的 Realtek 集线器（`USB\VID_0BDA&PID_5411\7&22af457e&0&4`）。
+选择：探针掉线后尝试软件恢复：`pnputil /restart-device` 重启该 USB 设备、以及它挂载的 Realtek 集线器（`USB\VID_0BDA&PID_5411\7&22af457e&0&4`）。
+放弃：直接让用户物理拔插 —— 软件重启能证实并部分复位 USB 栈，但探针仍未重新枚举，最终仍需物理拔插。
+因为：`Restart-PnpDevice` 在这台机器上不存在；pnputil 是唯一可用的软件重启手段，能把「JLINK_OpenEx 永久卡死」变成 37 秒后干净返回 `Cannot connect to J-Link.`。
+
 ## 2026-10-03 — 删掉固件屏上「任务A / 任务B」两个残留自定义页与「任务」二级菜单（k_task_items），首页「任务」直进 PAGE_CUSTOM_TASK，页上显示解释器真状态（TaskRun_IsRunning/Id/Block，空闲显示车上 N 个）；自定义页下标顺移（CUSTOM_COUNT 9→8）、PAGE_COUNT 17→15（舵机页 15）；删掉 app_live_t.task_state 字段
 选择：删掉固件屏上「任务A / 任务B」两个残留自定义页与「任务」二级菜单（k_task_items），首页「任务」直进 PAGE_CUSTOM_TASK，页上显示解释器真状态（TaskRun_IsRunning/Id/Block，空闲显示车上 N 个）；自定义页下标顺移（CUSTOM_COUNT 9→8）、PAGE_COUNT 17→15（舵机页 15）；删掉 app_live_t.task_state 字段
 放弃：保留那两页（用户已把它当成「车上有两条任务」的假象）；也否决让中键启动任务——误按一下车就按流程跑起来太危险，启动只走上位机 0x67 RUN 或开机自启
@@ -307,8 +332,11 @@
 放弃：否决了「set 后自动下发」与「push 就是读回」这两种旧实现（前者让脏标记永远不出现、后者等于把 reload 当 push）。
 因为：契约 `tools/console/docs/API.md:32-36` 和假后端 `tools/console/web/mock/server.mjs` 都是这么定义的；前端「全部下发（N）」按钮的 N 就是脏项数，set 若自作主张下发，界面上「改了没下发」的状态就不存在了。
 
-## 2026-10-03 — 上位机连真车走**无线下载器插 U12 后出现的虚拟串口**（板侧 = U12 脚 5 = LPUART1_RX/PC0、脚 6 = LPUART1_TX/PC1、脚 4 = GND），或临时用 USB-TTL 交叉接同样三根线
-选择：上位机连真车走**无线下载器插 U12 后出现的虚拟串口**（板侧 = U12 脚 5 = LPUART1_RX/PC0、脚 6 = LPUART1_TX/PC1、脚 4 = GND），或临时用 USB-TTL 交叉接同样三根线
+## 2026-10-03 — 上位机连真车走**无线下载器插 U12 后出现的虚拟串口**（板侧 = U12 脚 5 = 网名 LPUART1_RX 但实为 **PC1（车发）**、脚 6 = 网名 LPUART1_TX 但实为 **PC0（车收）**、脚 4 = GND），或临时用 USB-TTL 交叉接同样三根线
+选择：上位机连真车走**无线下载器插 U12 后出现的虚拟串口**（板侧 = U12 脚 5 = 网名 LPUART1_RX 但实为 **PC1（车发）**、脚 6 = 网名 LPUART1_TX 但实为 **PC0（车收）**、脚 4 = GND），或临时用 USB-TTL 交叉接同样三根线（适配器 TX → 脚 6、RX → 脚 5）
+更正（2026-10-03 晚，用户 m20177 问「PC0不应该是KX吗」时核对网表）：旧写法把网名当成芯片功能，写成「脚 5 = LPUART1_RX/PC0、脚 6 = LPUART1_TX/PC1」，**脚↔芯片对应是反的**。网表 `pcb/Netlist_Schematic1_2026-09-29.tel:430-431` = `'LPUART1_RX' ; U2.9 U12.5`、`'LPUART1_TX' ; U2.8 U12.6`，U2.8 = PC0、U2.9 = PC1。
+放弃：把 J-Link 自带的 "JLink CDC UART Port"(COM26) 当串口用 —— 被否决：实际测到 PC 侧发 3 帧、PC 收到 0 字节、车侧 rx/crc/resync 全 0，J-Link VCOM 的 UART 引脚根本不在去 U12 的那条排线上
+因为：板子没有任何板载 USB 串口桥（连接器只有 U12 一处引出 LPUART1），PC 与 PC0/PC1 之间必须有物理线
 放弃：把 J-Link 自带的 "JLink CDC UART Port"(COM26) 当串口用 —— 被否决：实际测到 PC 侧发 3 帧、PC 收到 0 字节、车侧 rx/crc/resync 全 0，J-Link VCOM 的 UART 引脚根本不在去 U12 的那条排线上
 因为：板子没有任何板载 USB 串口桥（连接器只有 U12 一处引出 LPUART1），PC 与 PC0/PC1 之间必须有物理线
 

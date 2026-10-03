@@ -7,12 +7,12 @@
  *   - A+D 同时按 = 左右抵消 ⇒ 转向为 0（两个方向谁也不欠谁）；
  *   - 所有方向键都松开 / 按了空格 = 停机（把驾驶交还车上的任务流程，不是"0 速度继续接管"）。
  *
- * 注意这里给的是**意图**（基准速度 mm/s + 转向速度 °/s），不是最终帧：转向是速度，
- * 要由 `lib/heading.ts` 的 stepDrive 按节拍积分成目标航向偏移再下发。
+ * 注意这里给的是**意图**（基准速度刻度 0..7200 + 转向速度 °/s），不是最终帧：转向是速度，
+ * 要由 `lib/heading.ts` 的 stepDrive 按节拍积分成目标航向偏移再下发（倒车时会自动翻打轮方向）。
  *
  * 这里刻意是纯函数（不碰 DOM、不碰 store），方便单测把"按哪些键得到什么意图"钉死。
  */
-import { TURN_RATE_LIMIT, clamp, turnRateOf, type DriveIntent } from './heading'
+import { PWM_MAX, TURN_RATE_LIMIT, clamp, turnRateOf, type DriveIntent } from './heading'
 
 export type KeyRole = 'fwd' | 'back' | 'left' | 'right' | 'stop'
 
@@ -88,9 +88,9 @@ export function isTypingTarget(t: EventTarget | null | undefined): boolean {
 }
 
 export interface KeyDriveOptions {
-  /** 前进/后退的基准速度 mm/s */
+  /** 前进/后退的基准速度刻度（0..7200 = 固件速度环的目标刻度，不是 mm/s） */
   speed: number
-  /** 转向速度上限 °/s（正 = 左转，与固件 `T_DRIVE` 的 b 同号） */
+  /** 转向速度上限 °/s（正 = 左打轮，与固件 `T_DRIVE` 的 b 同号） */
   turn: number
 }
 
@@ -107,16 +107,17 @@ export interface KeyDriveInput extends DriveIntent {
 
 const ROLE_ORDER: KeyRole[] = ['fwd', 'back', 'left', 'right', 'stop']
 
-function clampMmps(v: number): number {
+/** 速度刻度夹取：±PWM_MAX（固件速度环的目标刻度 0..7200，不是 mm/s）；NaN 当 0。 */
+function clampScale(v: number): number {
   const n = Math.round(Number.isFinite(v) ? v : 0)
-  return Math.max(-3000, Math.min(3000, n))
+  return Math.max(-PWM_MAX, Math.min(PWM_MAX, n))
 }
 
 /** 把"当前按住的角色集合"算成一个驾驶意图。 */
 export function rolesToIntent(roles: Iterable<KeyRole>, opts: KeyDriveOptions): KeyDriveInput {
   const set = new Set(roles)
   const held = ROLE_ORDER.filter((r) => set.has(r))
-  const speed = clampMmps(opts.speed)
+  const speed = clampScale(opts.speed)
   const turnMax = Math.abs(opts.turn)
 
   const idle = (label: string, stop = false): KeyDriveInput => ({ base: 0, turnRate: 0, stop, roles: held, label })
@@ -129,7 +130,7 @@ export function rolesToIntent(roles: Iterable<KeyRole>, opts: KeyDriveOptions): 
   const left = set.has('left') ? 1 : 0
   const right = set.has('right') ? 1 : 0
 
-  const base = clampMmps((fwd - back) * Math.abs(speed))
+  const base = clampScale((fwd - back) * Math.abs(speed))
   // 左转 = 偏航角增大 = 正；A+D 同时按 ⇒ 0（谁也不欠谁）
   const turnRate = clamp(turnRateOf(!!left, !!right, turnMax), -TURN_RATE_LIMIT, TURN_RATE_LIMIT)
 
@@ -145,8 +146,9 @@ export function rolesToIntent(roles: Iterable<KeyRole>, opts: KeyDriveOptions): 
   const parts: string[] = []
   if (base > 0) parts.push('前进')
   if (base < 0) parts.push('后退')
-  if (turnRate > 0) parts.push(base !== 0 ? '边左转' : '原地左转')
-  if (turnRate < 0) parts.push(base !== 0 ? '边右转' : '原地右转')
+  // 倒车时"左/右"说的是**打轮方向**（车尾往哪边摆由 stepDrive 翻号），用"打轮"讲清楚
+  if (turnRate > 0) parts.push(base > 0 ? '边左转' : base < 0 ? '左打轮' : '原地左转')
+  if (turnRate < 0) parts.push(base > 0 ? '边右转' : base < 0 ? '右打轮' : '原地右转')
 
   return { base, turnRate, stop: false, roles: held, label: parts.join(' + ') }
 }

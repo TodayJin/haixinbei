@@ -180,4 +180,32 @@ describe('操控页状态机 stepDrive', () => {
     ])
     expect(sent.map((f) => (f as { turn?: number }).turn)).toEqual([0, 90, 0])
   })
+
+  it('倒车时打轮翻号：S+D 车尾往右摆（turn 走正）、S+A 往左摆（turn 走负）', () => {
+    // S+D：base 负 + turnRate 负（D）⇒ 取反后偏移往正走 = 目标航向往左拧 = 车尾往右
+    const sd = run([
+      { intent: { base: -600, turnRate: -90 }, dtMs: 0 },
+      { intent: { base: -600, turnRate: -90 }, dtMs: 100 },
+    ])
+    expect(sd.sent).toEqual([
+      { mode: 'base_turn', base: -600, turn: 0 },
+      { mode: 'base_turn', base: -600, turn: 9 },
+    ])
+
+    // S+A：base 负 + turnRate 正（A）⇒ 取反后偏移往负走
+    const sa = run([{ intent: { base: -600, turnRate: 90 }, dtMs: 100 }])
+    expect(sa.sent).toEqual([{ mode: 'base_turn', base: -600, turn: -9 }])
+
+    // 前进不翻：W+D 仍然是 turn 负（车头往右）
+    const wd = run([{ intent: { base: 600, turnRate: -90 }, dtMs: 100 }])
+    expect(wd.sent).toEqual([{ mode: 'base_turn', base: 600, turn: -9 }])
+
+    // 原地转（base 0）不翻：A 仍然是车头往左
+    const pivot = run([{ intent: { turnRate: 90 }, dtMs: 100 }])
+    expect(pivot.sent).toEqual([{ mode: 'base_turn', base: 0, turn: 9 }])
+
+    // 一直按着 S+D：偏移累积到 HOLD_LIMIT 就饱和（方向不会穿过 0 跑反）
+    const long = run(Array.from({ length: 8 }, () => ({ intent: { base: -600, turnRate: -90 }, dtMs: 1000 })))
+    expect(long.rt.offset).toBe(HOLD_LIMIT)
+  })
 })

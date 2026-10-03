@@ -48,8 +48,10 @@ export interface Settings {
   paused: boolean
   /** 波形勾选的通道 key */
   scopeChannels: string[]
-  /** 操控页滑块的步进（mm/s） */
+  /** 操控页滑块的步进（速度刻度） */
   driveStep: number
+  /** 操控页速度滑块跳过静摩擦死区（刻度低于 DEAD_SCALE 的行程不要） */
+  driveSkipDead: boolean
   /** 是否显示"真车模式"安全提示 */
   safetyBanner: boolean
 }
@@ -61,6 +63,7 @@ const DEFAULT_SETTINGS: Settings = {
   paused: false,
   scopeChannels: ['yaw', 'pitch', 'roll', 'pwm_l', 'pwm_r'],
   driveStep: 100,
+  driveSkipDead: true,
   safetyBanner: true,
 }
 

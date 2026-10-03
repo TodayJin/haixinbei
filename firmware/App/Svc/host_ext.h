@@ -30,9 +30,9 @@ extern "C" {
 
 /* 驾驶模式（与 tools/console/docs/API.md 的 /api/drive 一致） */
 #define HOST_DRIVE_OFF    0u   /* 关（停车） */
-#define HOST_DRIVE_WHEELS 1u   /* a = 左轮 mm/s，b = 右轮 mm/s（负 = 反转） */
-#define HOST_DRIVE_BASE   2u   /* a = 基准速度 mm/s，b = 目标转向角 °（相对进入本模式时的航向） */
-#define HOST_DRIVE_TRACE  3u   /* a = 基准速度 mm/s（三级串级循迹）；b 忽略 */
+#define HOST_DRIVE_WHEELS 1u   /* a = 左轮速度刻度，b = 右轮速度刻度（0..7200 的 PWM 目标刻度，负 = 反转） */
+#define HOST_DRIVE_BASE   2u   /* a = 基准速度刻度（0..7200，负 = 倒车），b = 目标转向角 °（相对进入本模式时的航向） */
+#define HOST_DRIVE_TRACE  3u   /* a = 基准速度刻度（0..7200，三级串级循迹）；b 忽略 */
 
 /* 这么久没有收到任何合法帧 ⇒ 判定上位机/链路断了，立刻停车 */
 #define HOST_DRIVE_TIMEOUT_MS 500U

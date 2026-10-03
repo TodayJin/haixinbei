@@ -41,7 +41,7 @@
 | POST | `/api/servo` | `{ch:1\|2, angle:0..180}` 直接摆一路舵机 |
 | POST | `/api/servo/center` | 两路回 0°（收回位） |
 | POST | `/api/servo/deviation` | `{ch, dev_us}` 中位偏差微调（±100µs） |
-| POST | `/api/drive` | `{mode:"off"\|"wheels"\|"base_turn", vl?,vr?,base?,turn?}`：`wheels` 左右轮直接给 mm/s；`base_turn` 的 **`base` = 基准速度 mm/s、`turn` = 目标航向偏移（度，正 = 左转 = 偏航角增大）**，基准航向在**进入**该模式时锁存（= 固件 `s_base_yaw`），之后重复帧只改目标；`base=0` 即"原地用车上的角度环转到并保持这个朝向" |
+| POST | `/api/drive` | `{mode:"off"\|"wheels"\|"base_turn", vl?,vr?,base?,turn?}`：`wheels` 的 `vl`/`vr` = 左右轮**速度刻度**（−7200..+7200，负 = 反转）；`base_turn` 的 **`base` = 基准速度刻度（−7200..+7200，负 = 倒车）、`turn` = 目标航向偏移（度，正 = 左转 = 偏航角增大，±540）**，基准航向在**进入**该模式时锁存（= 固件 `s_base_yaw`），之后重复帧只改目标；`base=0` 即"原地用车上的角度环转到并保持这个朝向"。**注意：这里的速度是固件速度环的目标刻度、不是 mm/s**（mm/s 只有遥测的 `vl/vr` 用；刻度 1000 以下落在静摩擦死区） |
 | POST | `/api/cmd` | `{cmd, arg?}`：`stop/clear_fault/reset/telem_hz`（`start_a/start_b/start_c` 仍收，但车回 **`0x08` 不支持** ⇒ 桥回 `200 + ok:false`；车上内置任务流程已删除，任务走 §3.6） |
 | GET | `/api/stream` | **SSE**：实时数据流（见 §4） |
 | GET | `/api/log?limit=200` | 最近的文本日志 |
@@ -183,7 +183,8 @@
 - 设计：深色优先（`#0b1020` 级背景）、玻璃拟态卡片（`bg-white/5 + backdrop-blur + ring-1 ring-white/10`）、圆角 16px、青/紫霓虹强调色、切换 150ms 过渡、状态点脉冲动效；桌面三栏自适应，窄屏折叠侧栏。
 - 页面：**总览 / 操控 / IMU / 传感器 / 舵机与动作 / 调参 / 任务 / 波形 / 控制与日志 / 设置**（10 个）。
 - 操控页：键盘 **W/S = 前进/后退、A/D = 左/右转**（方向键同义），可组合（W+A = 边走边左转），A+D 或 W+S 相互抵消；空格的优先级最高 = 急停交还车上任务流程。所有键松开 ⇒ `{mode:"off"}`。前端只在指令变化时 POST 一次 `/api/drive`，之后靠桥的 200 ms 驾驶保活喂车上的 500 ms 看门狗。
-- 键盘给的转向是**角速度**（°/s，滑块 0..`TURN_RATE_LIMIT`=180），前端每 100 ms 把角速度积分成**目标航向偏移**（累计最多 `HOLD_LIMIT`=540°）再下发；松键 = 保持当前朝向（不发 off），A/D 的符号与固件一致：**按 A（左转）发正 `turn`**。
+- 操控页的速度滑块给的是**速度刻度 0..`PWM_MAX`(7200)**（不是 mm/s —— 固件 `SpeedControl_SetTarget()` 吃的就是这个刻度；7200 = 满量程 ≈ 516 mm/s）。刻度 `DEAD_SCALE`(1000) 以下轮上 PWM 不到 3000，实测是静摩擦死区（速度环靠积分顶要好几秒），所以设置里默认开「跳过静摩擦死区」（滑块从 1000 起步，`driveSkipDead`）。
+- 键盘给的转向是**角速度**（°/s，滑块 0..`TURN_RATE_LIMIT`=180），前端每 100 ms 把角速度积分成**目标航向偏移**（累计最多 `HOLD_LIMIT`=540°）再下发；松键 = 保持当前朝向（不发 off），A/D 的符号与固件一致：**按 A（左转）发正 `turn`**。**倒车（`base < 0`）时积分前先把角速度取反**：`turn` 是目标航向，而行进方向 = 航向 + 180°，取反后按 D 才是"车尾往右摆"（用户 m20267 报的方向反了就是漏了这一步）。
 - IMU 页「朝向控制」：一个 −180°..+180° 滑块（左侧 = 右转、右侧 = 左转），拖动即接管角度环（`{mode:"base_turn", base:0, turn:offset}`，节流 100 ms + 尾部补一帧），松手保持；「回到 0°」归零，「交还车上任务」发 `{mode:"off"}`。读数：基准朝向 / 目标朝向 / 当前朝向 / 角度环误差。
 - IMU 页 3D 车模型：**纯 CSS 3D**（`preserve-3d` 叠长方体，不引 three.js，仓库里也没有模型文件），符号约定 **+偏航 = 左转 = `rotateY(+)`、+俯仰 = 抬头 = `rotateX(+)`、+横滚 = 向左倾 = `rotateZ(+)`**（车的左侧 = 模型 +x，车头朝 +z），相机是 `rotateY(az) rotateX(-el)`（默认 az 26° / el 30°，拖动改视角、双击复位）。模型和读数都吃**遥测原始帧**，**不要**在这里再套一遍固件 `app_ui.c` 给 OLED 用的 M1..M8 轴序交换（那套是按 OLED 视角经验挑的）；真车上哪个方向反了，就是 `web/src/lib/attitude3d.ts` 里一行符号。三张波形 = 偏航/俯仰/横滚各一张（20 s 窗口，纵轴以 0 为中心，用 `Sparkline` 的 `zeroScale`）。
 - 不要用 `gyro_cal` / `gyro_zero` / `gyro_turn` 这三个命令名：桥的 `CMD_NAMES` 里没有（只有 `calib_gyro`），固件 `CMD_CALIB_GYRO 0x05` 也没实现（明确回 `ST_NOT_READY`）；只有开发用 mock 认这三个名字。朝向控制的正确做法就是上面的 `/api/drive` `base_turn`。

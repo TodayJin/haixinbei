@@ -548,13 +548,16 @@ const server = http.createServer(async (req, res) => {
     if (path === '/api/drive' && req.method === 'POST') {
       const body = (await readBody(req)) || {}
       if (!['off', 'wheels', 'base_turn'].includes(body.mode)) return fail(res, 400, 'mode 必须是 off/wheels/base_turn', 'bad_param')
-      const lim = (v) => Math.max(-3000, Math.min(3000, Number(v) || 0))
+      // `base` / `vl` / `vr` 是固件速度环的速度刻度 0..7200（不是 mm/s，见 lib/heading.ts 的 PWM_MAX）；
+      // `turn` 是目标航向偏移（度），单独按 ±540 夹（HOLD_LIMIT）。
+      const lim = (v) => Math.max(-7200, Math.min(7200, Number(v) || 0))
+      const limTurn = (v) => Math.max(-540, Math.min(540, Number(v) || 0))
       drive = {
         mode: body.mode,
         vl: lim(body.vl),
         vr: lim(body.vr),
         base: lim(body.base),
-        turn: lim(body.turn),
+        turn: limTurn(body.turn),
       }
       if (body.mode === 'off') log('warn', '驾驶关闭：停车，交还控制权')
       else log('info', `驾驶：${body.mode} ${JSON.stringify({ vl: drive.vl, vr: drive.vr, base: drive.base, turn: drive.turn })}`)

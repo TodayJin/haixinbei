@@ -49,6 +49,13 @@ describe('键盘 → 驾驶意图', () => {
     expect(c.label).toContain('边左转')
   })
 
+  it('倒车组合键：S+D = 右打轮（车尾往右摆）、S+A = 左打轮（翻号在 heading.stepDrive 里做）', () => {
+    expect(cmd(['back', 'right'])).toMatchObject({ base: -600, turnRate: -90 })
+    expect(cmd(['back', 'right']).label).toContain('右打轮')
+    expect(cmd(['back', 'left'])).toMatchObject({ base: -600, turnRate: 90 })
+    expect(cmd(['back', 'left']).label).toContain('左打轮')
+  })
+
   it('A+D 左右抵消 ⇒ 不转；W 还按着就是直行', () => {
     expect(cmd(['left', 'right'])).toMatchObject({ base: 0, turnRate: 0, stop: false })
     expect(cmd(['left', 'right']).label).toContain('左右抵消')
@@ -70,9 +77,12 @@ describe('键盘 → 驾驶意图', () => {
     expect(cmd(['stop']).label).toContain('急停')
   })
 
-  it('速度取绝对值并夹在 ±3000 mm/s；转向速度夹在 ±180 °/s', () => {
+  it('速度取绝对值并夹在 ±7200 速度刻度；转向速度夹在 ±180 °/s', () => {
     expect(rolesToIntent(['fwd'], { speed: -600, turn: 90 }).base).toBe(600)
-    expect(rolesToIntent(['fwd'], { speed: 99999, turn: 0 }).base).toBe(3000)
+    expect(rolesToIntent(['fwd'], { speed: 99999, turn: 0 }).base).toBe(7200)
+    expect(rolesToIntent(['fwd'], { speed: -99999, turn: 0 }).base).toBe(7200)
+    // 3000 不是上限：旧代码按 mm/s 夹 ±3000，只有 42% 满量程（用户 m20267 报"满速太低"）
+    expect(rolesToIntent(['fwd'], { speed: 5000, turn: 0 }).base).toBe(5000)
     expect(rolesToIntent(['right'], { speed: 0, turn: -99999 }).turnRate).toBe(-180)
     expect(rolesToIntent(['left'], { speed: 0, turn: 99999 }).turnRate).toBe(180)
     expect(rolesToIntent(['fwd'], { speed: Number.NaN, turn: 0 }).base).toBe(0)

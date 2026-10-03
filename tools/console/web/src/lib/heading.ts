@@ -5,7 +5,7 @@
  * （`firmware/App/Svc/host_ext.c` HostExt_DriveSet）：
  *
  *     s_base_yaw = Yaw;                                  // 进入本模式时的航向
- *     Motion_SetSpeed(a);                                // a = 基准速度 mm/s
+ *     Motion_SetSpeed(a);                                // a = 基准速度刻度（0..7200，见 PWM_MAX）
  *     Motion_SetMode(MOTION_GYRO);
  *     GyroControl_SetTargetAngle(NormalizeAngle(s_base_yaw + b));   // b = 目标转角 °
  *
@@ -23,6 +23,23 @@ export const HOLD_LIMIT = 540
 export const TURN_RATE_LIMIT = 180
 /** 操控页把转向速度积分成目标角度的节拍（ms）。 */
 export const TURN_TICK_MS = 100
+
+/**
+ * 速度刻度的满量程。固件 `SpeedControl_SetTarget()` / `GyroControl_SetBaseSpeed()` 吃的就是
+ * 这个刻度（0..7200），**不是 mm/s**：7200 对应速度环目标 25 计数/5ms ≈ 516 mm/s
+ * （1980 计数/转、轮径 65mm）。`base_turn` 的 `base`、`wheels` 的左右轮目标都按它算。
+ *
+ * 用户 m20267 报"满速太低"就是因为早先这里只给到 3000（= 42% 满量程）。
+ */
+export const PWM_MAX = 7200
+
+/**
+ * 静摩擦死区上沿（速度刻度）。速度环前馈是 `PWM ≈ 2327 + 0.662 × 刻度`
+ * （`HP_SPEED_FF_FRIC` / `HP_SPEED_FF_SLOPE`），刻度 1000 ⇒ 轮上约 3000 PWM —— 正好是实测的
+ * 起步死区（开路试验：左轮 3000 PWM 才起转，右轮要 3500）。刻度比它低时速度环只能靠积分一点点
+ * 把 PWM 顶上去，实测要好几秒才动，所以操控页把这一段当"死区"（可一键跳过）。
+ */
+export const DEAD_SCALE = 1000
 
 /** 夹取；NaN 当 0（宁可不动，也不要听一个坏数），±Infinity 自然被夹到端点上。 */
 export function clamp(v: number, lo: number, hi: number): number {
@@ -74,9 +91,9 @@ export function offsetLabel(offset: number): string {
 // ------------------------------------------------------------------ 操控页状态机
 
 export interface DriveIntent {
-  /** 基准速度 mm/s（前进为正、后退为负、前后抵消为 0）。 */
+  /** 基准速度刻度（−PWM_MAX..+PWM_MAX，前进为正、后退为负、前后抵消为 0）。 */
   base: number
-  /** 期望转向速度 °/s（正 = 左转）。 */
+  /** 期望转向速度 °/s（正 = 左打轮：前进时车头左偏、倒车时车尾左摆）。 */
   turnRate: number
   /** 急停（空格 / Esc）：立刻停车并把偏移清零。 */
   stop: boolean
@@ -106,7 +123,7 @@ function same(a: DriveRequest | null, b: DriveRequest): boolean {
  *
  * 规则：
  *   * 急停 ⇒ 发一帧 off，偏移清零；
- *   * 按着转向键 ⇒ 按 turnRate 积分偏移，然后发 base_turn（基准速度 + 目标偏移）；
+ *   * 按着转向键 ⇒ 按 turnRate 积分偏移（**倒车时取反**），然后发 base_turn（基准速度 + 目标偏移）；
  *   * 松开全部键（基准 0 且不转）⇒ 发一帧 off（交还车上任务流程），偏移清零；
  *     这样"松手再按"就等于重新对零，不会攒着一个越滚越大的目标航向。
  */
@@ -122,7 +139,13 @@ export function stepDrive(rt: DriveRuntime, intent: DriveIntent, dtMs: number): 
     return { rt: initDriveRuntime(), send: rt.armed ? [{ mode: 'off' }] : [] }
   }
 
-  const offset = turning ? offsetAfter(rt.offset, intent.turnRate, dtMs) : rt.offset
+  // 倒车时打轮方向要翻过来（用户 m20267：按住 S+D 应该往右后方走，原来却是左后方）。
+  // 发出去的 `turn` 是**目标航向偏移**（正 = 偏航角增大 = 左），而车倒着走时它的行进方向是
+  // (航向 + 180°)：航向转了 θ，走的其实是 (航向 + 180° + θ)。所以想让车尾往右摆，车头得往左拧
+  // （θ 增大）；前进时不用翻（车头往右就是车往右）。原地转（base == 0）也不翻：A 始终是"车头往左"。
+  const yawRate = intent.base < 0 ? -intent.turnRate : intent.turnRate
+
+  const offset = turning ? offsetAfter(rt.offset, yawRate, dtMs) : rt.offset
   const cmd: DriveRequest = { mode: 'base_turn', base: Math.round(intent.base), turn: Math.round(offset) }
   const send = same(rt.last, cmd) ? [] : [cmd]
   return { rt: { offset, armed: true, last: cmd }, send }

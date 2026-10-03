@@ -236,9 +236,13 @@ export type DriveMode = 'off' | 'wheels' | 'base_turn'
 
 export interface DriveRequest {
   mode: DriveMode
+  /** `wheels`：左轮速度刻度（0..7200，负 = 反转）；其他模式忽略 */
   vl?: number
+  /** `wheels`：右轮速度刻度（0..7200） */
   vr?: number
+  /** `base_turn`：基准速度刻度（0..7200，负 = 倒车）；其他模式忽略 */
   base?: number
+  /** `base_turn`：目标航向偏移（度，正 = 左转），相对**进入本模式时**的航向；其他模式忽略 */
   turn?: number
 }
 

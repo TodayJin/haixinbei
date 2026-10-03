@@ -13,6 +13,25 @@
 >
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
+## 2026-10-03
+完成：操控页（#/drive）三条报障全改完并回归：①速度滑块从「mm/s ±3000」改成固件速度刻度 0..7200（lib/heading.ts 新增 PWM_MAX=7200 / DEAD_SCALE=1000），设置里新增 driveSkipDead（默认 true）让滑块从 1000 起步；②倒车打轮翻号（heading.ts 的 stepDrive 里 yawRate = base<0 ? -turnRate : turnRate）⇒ S+D 车尾往右摆；③mock/server.mjs 的 /api/drive 夹限幅从 ±3000 放到 ±7200、turn 单独 ±540。验证：npx tsc --noEmit exit 0；npx vitest run 17 文件 / 166 项通过（新增 keys「倒车组合键 S+D/S+A」与 heading「倒车翻号」两个用例）；npm run build 出新 dist（assets/index-Bi-eADAk.js 339.39 kB、index-CfDRAvCv.css 37.16 kB，旧 asset 已删）；pytest tools\console\tests 103 passed；make -j8 text 114292 / data 364 / bss 31040（本轮固件只动了 host_ext.h 的注释）。文档同步：tools/console/docs/API.md（/api/drive 量纲 + 操控页两条约定）、tools/console/web/README.md、firmware/App/Svc/host_ext.h 的模式注释。
+未完成：真车上按 S+D 的实际方向还没实测（不敢自己给真车发驾驶指令，轮子会转）；真车桥在 8793 跑的是新 dist，浏览器刷新即生效
+下一步：请用户架起车（或手扶）按 S+D 试一下车尾摆向；本轮的代码/文档/dist 与之前那批串口脚号更正一起提交
+
+## 2026-10-03
+完成：**真车串口链路打通**（用户在 U12 上把两根线反过来之后）：`C:\Python314\python.exe out\_linkprobe.py COM26 115200 3` → 静听 0.5 s 收 1684 B 遥测（`A5 5A 03 00 40 …` = type 0x03 TELEM2 len 0x40）、发 3 帧 HELLO_REQ 后收 3677 B / 53 个同步帧，含车回的 `type=0x40 (hello)` ⇒ 双向通。随后起真车桥（后台作业 pwsh-2869，workdir `tools/console`）：`python -m bridge.main --serial COM26 --no-browser --port 8793`；`GET /api/health` = `sim:false, mode:serial, link_open:true, frames_seen:312`；`GET /api/state` = COM26@115200 connected、`rx 313 / tx 2 / crc 0 / resync 0`、`telem_hz 50`、`rtt_ms 23.3`、握手 `quandi-car v0.2.0 proto 2 caps 0xFF`、实时遥测 `vbat_mv 11213 / ibat_ma 117 / yaw 158.9 / pitch 6.6 / roll 8.6 / gray=[0,0,0,132,250,226,91,0] / task_id 255 / mode 0 / gyro_ok true / fault false`，参数表 48 项回读（`param_crc 577`），`tasks: []`（真车目录为空）。桥同时把 `tools/console/web/dist` 挂在 8793，用户可直接开 http://127.0.0.1:8793 用真车。
+未完成：真板实跑旧长流程任务（m19448）；sim 桥（pwsh-2807）已被杀掉换成真车桥，要回仿真得停 pwsh-2869 再起 `--sim`。
+下一步：让用户开 http://127.0.0.1:8793 确认页面在真车上读数正常（电压/灰度/陀螺仪），然后决定是否把 `tools/console/web/src/lib/tasks/renwu-lap.json`（旧全程·12障碍，2127 B）传到真车跑真板验证（m19448 剩下的那步）。
+
+## 2026-10-03
+完成：用户**物理拔插 J-Link USB** 后探针回来（重新枚举为 `USB\VID_1366&PID_0105\000602711039`，带 CDC 口 COM26），`tools/flash.ps1` **一次烧成功**：CubeProgrammer 步 `Download verified successfully`，J-Link 步 `Bank 0 @ 0x08000000: Skipped. Contents already match`，回读 114664 字节 `firstDiff=none`，脚本结尾「烧录完成：回读一致（DEMCR 已清、程序已 go）」exit 0。随后 RTT 抓 12 s（`--elf firmware\build-app\haixin-app.elf`，日志 `out\_rtt_app_r5.log`）看到 telemetry 周期性输出、`fault=0 / over=0 / ISR max 12us`、`oled tx_done=16 err=0` ⇒ 新固件（含删掉任务A/B 残留页的 `7c628479`）在真板上跑起来了。
+下一步：请用户按一下板上首页「任务」确认显示「待机 / 车上 N 个 / 左键返回」（目录未上传过应为 0 个）；若要跑旧全程长任务，用上位机 0x67 RUN 或先 COMMIT flags=1 开机自启。
+
+## 2026-10-03
+完成：确认这版**没烧进去**：`tools/flash.ps1` 两次都卡死（本次 bin `firmware/build-app/haixin-app.bin` 114664 B）。诊断链：①CubeProgrammer 步返回 1 且随后 J-Link 步无输出卡住（600s 后进后台 pwsh-2836）；②查到孤儿 JLink.exe PID 38108（2026-10-03 09:07:42 启动，`-CommanderScript ...\_jl_banner.jlink`，CPU 41293s / 墙钟 41448s ≈ 满 CPU 11.5 小时）占着探针，杀掉；③重跑（pwsh-2840）后 `STM32_Programmer_CLI`（PID 38880，`-c port=JLINK -d …haixin-app.bin 0x08000000 -v`）311s 只耗 0.77s CPU 再次阻塞，杀掉并手动清掉残留 `JLink.exe`；④最小探针脚本（`device STM32G474RE / si SWD / speed 4000 / connect / mem32 0x08000000,4 / qc`，加 `-Log`）日志停在 `JLINK_OpenEx(...)` 不返回 ⇒ 卡在打开 USB 设备；⑤`pnputil /restart-device` 重启 J-Link 设备 + 其父 Realtek 集线器后，JLink 37 秒干净返回 `Cannot connect to J-Link.`，但 `pnputil /enum-devices /connected` 里**再无任何 VID_1366 设备**。
+未完成：烧录未完成；`firmware`/`web` 的其它验证都已在提交 7c628479 前后跑绿，不依赖探针。
+下一步：等用户**物理拔插 J-Link USB**（必要时连板子/集线器电源一起断）后，重跑 `& .\tools\flash.ps1`（bin 114664）并确认 savebin 回读一致；在此之前车上仍是旧固件（屏上还有 任务A/任务B）。
+
 ## 2026-10-03 · KK_UI 界面
 完成：修掉用户 m19865 报的「固件上还有 A B 两个任务」：真因是固件菜单残留（k_task_items 的「任务A/任务B」两页，中键只翻 g_live.task_state 这个没人再读的标志位）。firmware/App/Inc/app_ui.h 删 PAGE_CUSTOM_TASK_A/B + PAGE_MENU_TASK、新增 PAGE_CUSTOM_TASK 5、PAGE_COUNT 17→15、CUSTOM_COUNT 9→8、删 app_live_t.task_state；firmware/App/Src/app_ui.c 删 k_task_items 与 k_menu_pages 的「任务」行、k_routes 顺移（PID 1/速度环 2/角度环 3/循迹环 4）、首页「任务」= PAGE_CUSTOM_TASK、draw_task_page(void) 画 TaskRun_IsRunning()/TaskRun_Id()/TaskRun_Block()（空闲数 TaskStore_Present() 报「车上 N 个」）、中键只调 TaskRun_Stop()。验证：make -B -j8 text 114292 / data 364 / bss 31040、bin 114664（118K 余 6168）、run_tests.ps1 通过 13 失败 0、check_static.ps1 52 文件 4 告警 0 error、check_warnings.ps1 待处理 0 条、check_charset 对 60 个候选字只缺「状 U+72B6 / 启 U+542F」（所以文案避开它们，没重生成字模）。
 未完成：屏上观感只有用户能看到（没接板、没烧这版）
@@ -135,7 +154,7 @@
 
 ## 2026-10-03
 完成：修好“浏览器里改参数永远到不了车”：①`tools/console/bridge/state.py` 的 `param_set` 改成只改桥缓存 + 按与车上值是否相同标脏，`param_push(ids/keys)` 才逐条下发并清脏，`param_reload` 才是读回全表，`param_defaults` 只改本机；`preset_apply` 先改缓存再一次性下发（应用预设才真的到车）。②`bridge/server.py` 的 push/defaults 透传 ids/keys，保存预设时 keys 按实际抓到的类别回填（原来不带 targets 存出来是空数组）。③`tools/console/web/src/lib/store.ts` 的 `setParam` 除本地乐观更新外会调 `api.paramSet()` —— 此前该函数从未被任何页面调用，「全部下发」是空转。验证：pytest 48 passed；vitest 37 passed；`out/_closeloop.py` 对仿真桥 8 步全绿（改→脏→下发→不脏→存预设→恢复默认→应用预设→从车读回 2811→固化→动作改/固化/播放/还原→删预设）；`out/_static_check.py` 证桥能把 `web/dist` 托起来（/index.html 200、js 290478 B、健康检查 web_built=True）。已提交 `8c36b05`（工作树干净）。
-下一步：真车只读链路仍卡在硬件：J-Link 的 20 脚排线里没有 UART 线（SEGGER 官方文档：SWD 模式 pin 17=NC、pin 19=5V，偶数脚全 GND），所以 COM26 与板子 U12 的 PC0/PC1 无电气通路。需要用户把无线下载器插回 U12（或 USB-TTL 交叉接 U12 的 4=GND/5=PC0/6=PC1），之后 `python out\_linkprobe.py <新COM口> 115200 3` 复验。
+下一步：真车只读链路仍卡在硬件：J-Link 的 20 脚排线里没有 UART 线（SEGGER 官方文档：SWD 模式 pin 17=NC、pin 19=5V，偶数脚全 GND），所以 COM26 与板子 U12 的 PC0/PC1 无电气通路。需要用户把无线下载器插回 U12（或 USB-TTL 交叉接 U12 的 4=GND/6=PC0/5=PC1——**脚号按网表更正过，早先写的「5=PC0/6=PC1」是反的**），之后 `python out\_linkprobe.py <新COM口> 115200 3` 复验。
 
 ## 2026-10-03
 完成：删掉旧 Qt 上位机并整仓清理：`tools/host/`（git 跟踪 28 文件、约 8256 行）已从 git 与磁盘删除（从提交 `5051a4d` 可取回），连只服务于它的草稿脚本 `tools/_patch3.py`、`tools/_render_field.py` 一起删；`.gitignore` 补 `firmware/test/build/`（run_tests.ps1 生成的 .exe）与 `.pytest_cache/`，并把已跟踪的 10 个 .exe 从索引移除。三个新提交：`dbda415` 固件 v2 扩展、`cf237eb` 新上位机 tools/console（67 文件）、`daef5ca` 清理；工作树干净。文档指向已改对（`docs/上位机通信协议.md`、`docs/全地形机器人比赛规则与场地.md:137`、`固件接口规格.md:422`）。回归：`pwsh -File firmware/test/run_tests.ps1` → 通过 10 / 失败 0 / 编译失败 0。
@@ -143,11 +162,11 @@
 
 ## 2026-10-03
 完成：把「真车串口收不到数据」定性到底：**J-Link 的标准 20 脚排线里根本没有 UART 线**，所以 `COM26 = JLink CDC UART Port` 与板子 U12 的 5/6 脚（LPUART1_RX=PC0 / LPUART1_TX=PC1）之间不存在电气通路 —— 依据是 SEGGER 官方接口文档（SWD 模式 pin 17 = Not used/NC、pin 19 = 5V-Supply、偶数脚全 GND；https://www.segger.com/products/debug-probes/j-link/technology/interface-description/）。固件侧无病：SWD 读到 `s_stats @0x20000CBC` rx=0/tx 以~50Hz 增长/crc=resync=0、LPUART1 CR1=0x2D（UE/RE/TE/RXNEIE）、BRR=0x5C3B2（=170MHz/115200）、PC0/PC1 = AF8+上拉、PC1 的 IDR 在翻转；清掉 ISR(ICR=0x1F) 后静置 1.5s、再让 PC 从 COM26 发 3 帧 HELLO_REQ，IDLE 不再回来且 rx/crc/resync 恒 0 ⇒ PC0 从未收到过字节。本机 J-Link 是 PLUS V9.70 / FW V9（S/N 602711039、VTref=3.309V，SWD 确实通）。
-下一步：接真车串口只有两条路：把无线下载器插回 U12（它同时带 SWD+虚拟串口），或用 USB-TTL 交叉接 U12 的 4=GND / 5=PC0 / 6=PC1（适配器 TX→PC0、RX→PC1）。插好后 `python out/_linkprobe.py <新COM口> 115200 3` 复验（车侧 rx_frames 应 +3），再 `python -m bridge.main --serial <新COM口>`。
+下一步：接真车串口只有两条路：把无线下载器插回 U12（它同时带 SWD+虚拟串口），或用 USB-TTL 交叉接 U12 的 4=GND / 6=PC0（车收，接适配器 TX）/ 5=PC1（车发，接适配器 RX）——**脚号按网表更正过**。插好后 `python out/_linkprobe.py <新COM口> 115200 3` 复验（车侧 rx_frames 应 +3），再 `python -m bridge.main --serial <新COM口>`。
 
 ## 2026-10-03
 完成：查清「上位机串口收不到数据」的原因，并证明固件侧无辜。SWD 读寄存器：LPUART1 CR1=0x0000002D（UE/RE/TE/RXNEIE 全 1）、BRR=0x0005C3B2（=170MHz/115200，误差 6e-7）、GPIOC PC0/PC1 MODER=AF、PUPDR=上拉、AFRL=0x88（AF8）、s_stats 的 tx_frames 以 ~50Hz 增长且 PC1 的 IDR 在 0/1 间跳（真的在发）；反向证据：清掉 LPUART1 ISR(ICR=0x1F) 后静置 1.5s、再让 PC 从 COM26 发 3 帧 HELLO_REQ，IDLE 位不再回来且 rx_frames/crc_errors/resyncs 恒为 0 ⇒ PC0 上从来没有过一个字节。PC 侧 COM26 = JLink CDC UART Port（VID:PID 1366:0105），写出去的帧自己也收不到。工具（可复用）：out/_linkstats.ps1（-Mode read|probe|idle，靠 arm-none-eabi-nm 解析 s_stats 地址后 mem32 读数）与 out/_linkprobe.py（用 tools/console 的 bridge.protocol.frame_hello_req 发帧、先静听 0.5s 再发再收 1s）。
-下一步：把无线下载器插到 U12（或 USB-TTL 接脚 5/6/4）后，用 out/_linkprobe.py <新COM口> 115200 3 复验（车侧 rx_frames 应 +N），再 python -m bridge.main --serial <新COM口> 跑真机。
+下一步：把无线下载器插到 U12（或 USB-TTL：U12 脚 6 = PC0 车收 ← 适配器 TX、脚 5 = PC1 车发 → 适配器 RX、脚 4 = GND）后，用 out/_linkprobe.py <新COM口> 115200 3 复验（车侧 rx_frames 应 +N），再 python -m bridge.main --serial <新COM口> 跑真机。
 
 ## 2026-10-03
 完成：第十一轮（用户点名）：模块测试里加「舵机测试」页（PAGE_CUSTOM_SERVO 17）——两路角度可调（1°/长按 2/5/10/20）、「收回」=0/0、14 号「动作预设」占两行（下行动作名）、返回保持角度；顺带揪出真 bug：bsp_servo_init()（firmware/App/Bsp/bsp_board.c:227）全工程无调用者 ⇒ htim1.Instance=NULL ⇒ Servo_Init() 的 HAL_TIM_PWM_Start 返回错误、__HAL_TIM_SetCompare 写空指针，舵机一直没动过（renwu.c 20+ 处 Servo_Move 也是空动作）；修法=servo.c 的 Servo_Init() 开头调 bsp_servo_init() + include bsp_board.h。验证：SWD 读 TIM1（0x40012C00=1 CEN、0x40012C20=0x1111 四路 CCxE、0x40012C2C=0x4E1F ARR=19999、0x40012C34/38=0x1F4 CCR=500µs、0x40012C44=0x8000 MOE）；make -C firmware 无新告警（text 111012/data 368/bss 15264）；check_warnings.ps1 待处理 0；run_tests.ps1 通过 9/失败 0；flash.ps1 回读一致 111388 字节；字模补字校验缺字 0（舵 74→75、作/预 75→77、动作名一起提交 79 字形）；out/servo_page_mock.py→out/servo_page_mock.png 用同一套坐标假渲染 6 种选中状态，断言“选中项完整可见、无行越界”。
@@ -1142,24 +1161,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：仅剩可选：VDDA/VREF+ 磁珠+1µF；I2C 地址与 OLED 0x3C/INA226 0x40 不撞
 下一步：可进入 PCB 布局（AT8236 散热/电机大电流/晶振与 ADC 隔离/地分割）
 
-## 2026-09-15
-完成：复核第四版 netlist（sha dd7a0261，35579B，116 元件）。**去耦已补**：VCC3V3 上加了 C32/C33/C34/C36/C37/C38 共 6×100nF，现为 1×10µF + 7×100nF。**仍未改（唯一重要遗留）：循迹/灰度座 H1.1、U13.1 仍是 VCC5V**，且 huidu1–8 直连 U2.12/13/14/17/18/19/20/21（PA0–PA7）无串阻无分压 → 而 **PA0/1/3/4/5/6/7 是 TT_a(3.6V)**，若模块 5V 输出会超额定。其余核过：I2C 上拉 R4/R5→3V3、F1=5A、编码器 FT 直连 5V、无悬空网络。命名仍是 I2C2(实为 I2C1)、LPUART1_TX/RX 与 PC0/PC1 对调。
-未完成：循迹供电 5V→3.3V（或加分压/电平转换）待用户改；VDDA/VREF+ 的 1µF+磁珠可选补
-下一步：循迹电平问题确认后可进 PCB 布局
-
-## 2026-09-15
-完成：**用 ST 官方手册核实了引脚 5V 容忍性**（下载 DS12288 Rev 6 stm32g474re.pdf，用 PyMuPDF 提取 Table 12 'I/O structure' 列；图例 FT=5V 容忍、TT=3.6V 容忍）。结论：**编码器 PB4=FT_c / PB5=FT_f / PB6=FT_c / PB7=FT_f → 全 5V 容忍，5V 编码器直连 OK**。**但循迹 PA0–PA7 里只有 PA2=FT_a，其余 7 个（PA0/1/3/4/5/6/7）=TT_a（3.6V）→ 若循迹模块 5V 供电输出 5V 会超额定、有风险**；建议循迹模块改 3.3V 供电（或加分压/电平转换）。其余：I2C PA15/PB9=FT_f、UART4 PC10=FT/PC11=FT_f、电机 PC6–PC9=FT_f、舵机 PA8–PA11 全 FT、JY61P PB10/PB11=TT_a 但 3V3 供电 OK、LPUART1 PC1=TT_a 但 U12 供 3V3。手册已存 D:\Today\haixinbei\stm32g474re.pdf，提取脚本 D:\Today\haixinbei\extract_pins.py。
-未完成：循迹模块供电（5V→3.3V）待用户改；原理图其余小项（去耦、D5、BOOT0 跳线）未改
-下一步：用户改完循迹供电后可进 PCB 布局
-
-## 2026-09-15
-完成：复核第三版 netlist（sha a5b6ba01，34146B，110 元件）。**关键修复全部到位**：① I2C 上拉 R4/R5=4.7k→VCC3V3；② 保险丝 F1 改为 **SMD2920-500-24 = 5A**（原 2A）；③ 驱动输入 100Ω(R6/R9/R10/R11) + 100k 下拉(R12/R13/R14/R19) 到 GND；④ 编码器 100Ω(R29/R31/R32/R33)+100nF 对地(C24-C26/C31)+10k 上拉(R34-R37)；⑤ 蜂鸣器续流 D3=1N4148W（阳极 Q1 集电极、阴极 +5V）；⑥ 复位按键 SW1=TS665WS 接 NRST-GND；⑦ 单节点网络归零。**仍待处理**：编码器上拉/输出是 **5V**（编码器 VCC5V 供电）→ 必须确认 **PB4-PB7 是 FT(5V 容忍)**；MCU 去耦仍只有 C8(10µF)+C18/C23(100nF)，需每个 VDD 加 100nF + VDDA/VREF+ 磁珠；D5 SS54 仍串在 5V 输出；BOOT0 无跳线；I2C2/LPUART1 命名待正；ALERT(U5.3)/PB12/PC12 按决定留 NC。
-未完成：确认 PB4-PB7 的 5V 容忍性；补 MCU 去耦
-下一步：用户确认 FT 并补去耦后可进入 PCB 布局
-
-## 2026-09-15
-完成：回答用户 6 个问题：I2C 上拉只在 MCU 端加一组 4.7k→3.3V；RGB 暂不做；ALERT 非必须（不接不影响测量，用 I2C 轮询即可，要中断再接 PB12+10k）；驱动输入加 100Ω 串阻 + 100k 下拉（防上电/复位时电机误转）；编码器加 100Ω+100nF（+开漏输出需 10k 上拉）；蜂鸣器并 1N4148 续流管（阳极接 Q1 集电极、阴极接 +5V）；复位按键：NRST 加轻触开关到 GND（已有 10k↑+100nF），建议 BOOT0 加跳线。
-未完成：原理图待按此修改
-下一步：等第三版 netlist 复核
-
-> 更早的会话条目已归档到 182 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 186 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。

@@ -6,6 +6,8 @@ import { MiniTrend } from '../components/Trend'
 import { fmt, fmtInt } from '../lib/format'
 import { isTypingTarget, keyId, keyRoleById, rolesToIntent, type KeyRole } from '../lib/keys'
 import {
+  DEAD_SCALE,
+  PWM_MAX,
   TURN_RATE_LIMIT,
   TURN_TICK_MS,
   initDriveRuntime,
@@ -36,11 +38,20 @@ export function DrivePage() {
   const t = telem
   const driving = !!t?.flags.host_drive
 
-  // 速度：前进/后退的基准 mm/s；转向：按住 A/D 时航向每秒变多少度（车上是角度环在追）。
-  const [speed, setSpeed] = React.useState(600)
+  // 速度：前进/后退的基准**速度刻度**（0..7200 = 固件速度环的目标刻度，不是 mm/s）；
+  // 转向：按住 A/D 时航向每秒变多少度（车上是角度环在追）。
+  // 默认 3000：刻度 1000 以下是静摩擦死区（见 lib/heading.ts 的 DEAD_SCALE），一上手先给个能跑起来的值。
+  const [speed, setSpeed] = React.useState(3000)
   const [turnRate, setTurnRate] = React.useState(90)
   const [heldKeys, setHeldKeys] = React.useState<string[]>([])
   const step = settings.driveStep
+  // 「跳过死区」打开时滑块从 DEAD_SCALE 起步；关掉就是完整的 0..7200（"0 到 7200 都能设置"）。
+  const speedMin = settings.driveSkipDead ? DEAD_SCALE : 0
+
+  React.useEffect(() => {
+    // 打开「跳过死区」时如果当前值还在死区里，直接抬到可动区起点
+    if (speed < speedMin) setSpeed(speedMin)
+  }, [speed, speedMin])
 
   const roles = React.useMemo(() => {
     const out: KeyRole[] = []
@@ -165,7 +176,7 @@ export function DrivePage() {
                 <span className="text-[13px] font-semibold text-neon-cyan">{input.label}</span>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                <Stat label="基准速度（前进量）" value={fmtInt(input.base)} unit="mm/s" tone={input.base ? 'mint' : undefined} />
+                <Stat label="基准速度（前进量）" value={fmtInt(input.base)} unit={`/${PWM_MAX}`} tone={input.base ? 'mint' : undefined} />
                 <Stat
                   label="转向速度"
                   value={fmtInt(input.turnRate)}
@@ -188,10 +199,24 @@ export function DrivePage() {
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <div>
               <div className="mb-1 flex items-center justify-between text-[13px]">
-                <span className="text-slate-300">前进 / 后退速度</span>
-                <span className="num text-slate-400">{speed} mm/s</span>
+                <span className="text-slate-300">前进 / 后退速度刻度</span>
+                <span className="num text-slate-400">
+                  {speed} / {PWM_MAX}
+                  {speed < DEAD_SCALE && <span className="ml-2 text-amber-400/80">死区内，车可能要等几秒才动</span>}
+                </span>
               </div>
-              <Slider value={speed} min={0} max={3000} step={step} onChange={setSpeed} />
+              <Slider value={speed} min={speedMin} max={PWM_MAX} step={step} onChange={setSpeed} />
+              <div className="mt-1 text-[11px] leading-snug text-slate-500">
+                0..{PWM_MAX} 是固件速度环的目标刻度（不是 mm/s；{PWM_MAX} = 满量程 ≈ 516 mm/s）。刻度 {DEAD_SCALE} 以下时轮上
+                PWM 还不到 3000，实测是静摩擦死区（前馈 PWM ≈ 2327 + 0.662 × 刻度）。
+              </div>
+              <div className="mt-2">
+                <Toggle
+                  on={settings.driveSkipDead}
+                  onChange={(v) => store.patchSettings({ driveSkipDead: v })}
+                  label={`跳过静摩擦死区（滑块直接从 ${DEAD_SCALE} 起步）`}
+                />
+              </div>
             </div>
             <div>
               <div className="mb-1 flex items-center justify-between text-[13px]">
@@ -224,7 +249,9 @@ export function DrivePage() {
             </div>
             <div className="rounded-lg bg-ink-900/50 px-3 py-2">
               <span className="num font-semibold text-slate-200">A</span>
-              <span className="ml-2 text-slate-400">按住就以设定角速度左转，松开保持当前朝向（最多累计 540°）</span>
+              <span className="ml-2 text-slate-400">
+                按住就以设定角速度左打轮，松开保持当前朝向（最多累计 540°）：前进时车头往左，倒车时车尾往左
+              </span>
             </div>
             <div className="rounded-lg bg-ink-900/50 px-3 py-2">
               <span className="num font-semibold text-slate-200">D</span>
@@ -237,6 +264,18 @@ export function DrivePage() {
             <div className="rounded-lg bg-ink-900/50 px-3 py-2">
               <span className="num font-semibold text-slate-200">W + D</span>
               <span className="ml-2 text-slate-400">一边前进一边右转</span>
+            </div>
+            <div className="rounded-lg bg-ink-900/50 px-3 py-2">
+              <span className="num font-semibold text-slate-200">S + D</span>
+              <span className="ml-2 text-slate-400">
+                一边后退一边右打轮 = <span className="text-slate-300">车尾往右摆</span>（往右后方走）
+              </span>
+            </div>
+            <div className="rounded-lg bg-ink-900/50 px-3 py-2">
+              <span className="num font-semibold text-slate-200">S + A</span>
+              <span className="ml-2 text-slate-400">
+                一边后退一边左打轮 = <span className="text-slate-300">车尾往左摆</span>（往左后方走）
+              </span>
             </div>
             <div className="rounded-lg bg-ink-900/50 px-3 py-2">
               <span className="num font-semibold text-slate-200">A + D</span>
@@ -282,6 +321,16 @@ export function DrivePage() {
               （`base_turn` 模式）。原地转就是基准速度给 0。
             </li>
             <li>转向不是"左右轮差速 mm/s"，而是目标航向角（度，正 = 左转）：角度环把车头拧到那个朝向并保持。</li>
+            <li>
+              前进/后退速度是<span className="text-slate-200">速度刻度 0..{PWM_MAX}</span>（固件速度环的目标刻度，不是 mm/s）：
+              {PWM_MAX} = 满量程。刻度 {DEAD_SCALE} 以下（轮上 PWM 不到 3000）实测是静摩擦死区，速度环要顶好几秒才动 ——
+              开上面的「跳过死区」滑块就从可动区起步。
+            </li>
+            <li>
+              倒车打轮会自动翻过来：按住 <span className="num text-slate-200">S+D</span> 是
+              <span className="text-slate-200">车尾往右摆</span>（往右后方走），<span className="num text-slate-200">S+A</span>
+              是车尾往左摆 —— 不翻的话车会往反方向跑。
+            </li>
             <li>只要这个页面开着并且按着键，桥每 200ms 会喂一次驾驶保活；真车模式下 0.5s 收不到会自动停车（防失联跑飞）。</li>
             <li>切走页面 / 窗口失焦 / 松开所有键 ⇒ 立刻交还车上任务流程，不会自己接着跑。</li>
             <li>比赛规则不允许遥控干预，这套只用于调试与标定。</li>
