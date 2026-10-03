@@ -12,6 +12,41 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-04 — 录制/回放按用户拍板的 A+B+C 删除（A 上位机 JSONL 录制+回放、B 车上黑匣子界面、C 波形页 CSV 导出），但**保留仿真模式**
+选择：录制/回放按用户拍板的 A+B+C 删除（A 上位机 JSONL 录制+回放、B 车上黑匣子界面、C 波形页 CSV 导出），但**保留仿真模式**
+放弃：全删（连 --sim 一起去掉）或只删网页入口留着桥侧代码
+因为：用户 m22973 明确「把录制和回放等功能都删了」并选定范围 A+B+C；仿真链路是这一整套上位机唯一不接硬件就能端到端验证的路（pytest/vitest 都靠它）
+
+## 2026-10-04 — 卡顿的修法：`SeriesRing.view()` 一趟同时算抽稀线+整窗 min/max/last（相位锚在绝对下标、`decimationStep()` 带死区）+ 页面壳改 `useMeta()` + 读数改 `useHotSelect()` 窄订阅 + uPlot 泳道上限 800 点
+选择：卡顿的修法：`SeriesRing.view()` 一趟同时算抽稀线+整窗 min/max/last（相位锚在绝对下标、`decimationStep()` 带死区）+ 页面壳改 `useMeta()` + 读数改 `useHotSelect()` 窄订阅 + uPlot 泳道上限 800 点
+放弃：继续调大热通知节流周期、或删页面上的卡片/读数
+因为：量测把根因定成「每热 tick 4~7 个组件整页重渲染 + 每 tick 拷 4000~12000 个数 + 每条泳道整窗重建 uPlot 数据」——节流只减少次数、不改单帧成本；修完每 tick 拷贝点降到 236~1023（账本 `web/src/lib/hotpath.test.tsx`）
+
+## 2026-10-04 — IMU 迷你波形纵轴改峰值包络+滞回（`nextRange()`：放大即时、收缩每 tick 2%、掉到 55% 以下才贴合），抽稀相位锚在绝对下标
+选择：IMU 迷你波形纵轴改峰值包络+滞回（`nextRange()`：放大即时、收缩每 tick 2%、掉到 55% 以下才贴合），抽稀相位锚在绝对下标
+放弃：每个热 tick 按当前窗口重新量程（原行为）
+因为：量程随窗口内极值跳、抽稀起点随窗口边界漂移 ⇒ 曲线看起来「一直在闪」；`sparkline.test.ts` 里有对照（旧实现相邻两帧点重叠 <20%）
+
+## 2026-10-04 — 波特率默认值全线统一 **230400**（桥 `link.py`/`main.py --baud`/`state.py`/`bench.py`、网页 `api.ts`/`Settings.tsx`/`Overview.tsx`、`docs/API.md`），`probe.py` 的 `DEFAULT_BAUDS=(921600,460800,230400,115200)` 梯子与 `serial_safety.py` 的历史保持不动
+选择：波特率默认值全线统一 **230400**（桥 `link.py`/`main.py --baud`/`state.py`/`bench.py`、网页 `api.ts`/`Settings.tsx`/`Overview.tsx`、`docs/API.md`），`probe.py` 的 `DEFAULT_BAUDS=(921600,460800,230400,115200)` 梯子与 `serial_safety.py` 的历史保持不动
+放弃：代码默认留 921600、实机靠命令行 `--baud 230400` 传
+因为：板上 `board.c:561` 的 `DL_BAUD` 与车上 J-Link VCOM 上限都是 230400；默认值与板上不一致就是下一次「收 0 帧」的坑
+
+## 2026-10-04 — 命令名唯一真值 = `bridge/state.py:CMD_NAMES`，删掉 `bridge/protocol.py` 里没人引用的同义表 `CMD_BY_NAME`（它用的是旧名 `telem_hz`/`logging`/`telem_mode`）
+选择：命令名唯一真值 = `bridge/state.py:CMD_NAMES`，删掉 `bridge/protocol.py` 里没人引用的同义表 `CMD_BY_NAME`（它用的是旧名 `telem_hz`/`logging`/`telem_mode`）
+放弃：保留两张表、靠注释提醒
+因为：网页发 `telem_hz`、桥上叫 `set_telem_hz` —— 两张名字不同的表正是用户报的那条 toast「没有这个命令: telem_hz」的成因
+
+## 2026-10-04 — 任务写分片「没人应答」按链路状态分三种说（链路没开 / 开着但 Nms 没收到车帧 / 正常收帧却没等到 ACK）＋ `taskapi.ts` 优先用桥返回的 `env.supported` 而不是抠 error 文案
+选择：任务写分片「没人应答」按链路状态分三种说（链路没开 / 开着但 Nms 没收到车帧 / 正常收帧却没等到 ACK）＋ `taskapi.ts` 优先用桥返回的 `env.supported` 而不是抠 error 文案
+放弃：保留一句通吃的「车没连上/没上电，或固件不带任务功能」
+因为：用户 m22973 报的报障图就是这个提示，但它把三种完全不同的处境混成一句，排障时指向错误方向
+
+## 2026-10-04 — 仍整页 `useStore()` 的 5 个页面（`Overview.tsx:35`、`Drive.tsx:37`、`Sensors.tsx:46`、`Servo.tsx:10,57,115`、`Control.tsx:79`）**这一轮不继续拆窄订阅**
+选择：仍整页 `useStore()` 的 5 个页面（`Overview.tsx:35`、`Drive.tsx:37`、`Sensors.tsx:46`、`Servo.tsx:10,57,115`、`Control.tsx:79`）**这一轮不继续拆窄订阅**
+放弃：一次把 10 个页面全部改成叶子组件窄订阅
+因为：它们的每 tick 拷贝点已因 `useChannelView()` 降到 236~472、单次渲染 ~1ms（20Hz 预算 50ms），收益小于改动面带来的回归风险；已作为已知剩余项记录
+
 ## 2026-10-04 — 车上这颗 J-Link 的 CDC VCOM 上限是 230400，于是把固件 firmware/Core/Src/board.c:561 的 #define DL_BAUD 降成 230400u 重烧，桥用 --baud 230400；921600 留到以后换普通 USB-TTL 接 U12 时再用。
 选择：车上这颗 J-Link 的 CDC VCOM 上限是 230400，于是把固件 firmware/Core/Src/board.c:561 的 #define DL_BAUD 降成 230400u 重烧，桥用 --baud 230400；921600 留到以后换普通 USB-TTL 接 U12 时再用。
 放弃：继续在探针 VCOM 上凑 921600（每试一次≥460800 就把探针打进 PID_0101 引导态、只能物理拔插恢复）；或按 460800 折中（SET_LINE_CODING 直接超时，根本打不开）。

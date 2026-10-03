@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-04
+完成：用户 m22973 三条全部落地并提交 `c7de56e`（44 files, +1303/−1305）：①删录制/回放与波形 CSV（桥 `ReplayLink`/`--replay`/`--record`/`/api/record(s|ings)`、网页 `csv.ts`/`replay.test.ts`/`csv.test.ts`、`tools/console/tests/test_replay_link.py`，mock 同步，保留 `--sim`）②网页↔桥↔固件核对：命令名统一 `state.py:CMD_NAMES`、删死表 `CMD_BY_NAME`、清空日志真清桥侧（`POST /api/log/clear`）、波特率默认全线 230400、任务提示分三种 ③卡顿+IMU 抖动：`SeriesRing.view()`/`nextRange()`/窄订阅（拷贝点 4000~12000 → 236~1023）。验证：`pytest -q`（workdir tools\console）= 164 passed；`npx vitest run`（workdir tools\console\web）= 19 文件/177 项 passed；`npm run build`（tsc --noEmit + vite build）干净并重建 `dist`；起 `node mock/server.mjs` 后 contract+ssrPreview = 2 文件/8 项 passed（不起 mock 时它们是 skip 不报错）；真桥 sim 端到端：`GET /api/link` baud 230400、`POST /api/cmd {"cmd":"set_telem_hz","arg":200}` = OK(cmd 8)、`{"cmd":"telem_hz"}` = 用户报的那条 `没有这个命令：telem_hz`；`_task_reply` 三分支文案逐一打印核对。提交信息走 `out\commit-msg-console.txt` + `git commit -F`（pwsh 无 heredoc）。
+未完成：记忆文件已就地订正（`memory/PROJECT.md` 里 `--replay`/`pytest 142|167`/`vitest 174`/「桥默认 921600」/「回放之后 link.port」五处）；**历史目标仍未完成**：跑 921600（需普通 USB-TTL 接 U12）、m19448 旧内置长流程真板实跑、m20490 任务编排模型 A/B/C/D 等用户选。
+下一步：把 c7de56e 的数字与证据（pytest 164 / vitest 177 / 拷贝点对照 / 两条 toast 的根因与现状）报给用户；若用户要更彻底的卡顿优化，再拆 `Overview/Drive/Sensors/Servo/Control` 这 5 个仍整页 `useStore()` 的页面。
+
+## 2026-10-04
 完成：真机链路打通并实测（档位 230400，用户 m20705 的"烧录后实测"这一环完成）：`DL_BAUD` 改 230400 重烧（回读 116108 B firstDiff=none），probe @230400 = 204 帧/2s（≈101 帧/s、0 CRC、0 重同步，修节拍前 159 帧/2s），bench --serial = 实收 100.0 帧/s、SSE 72.0 KB/s、桥 CPU 14.8%、rx=792 crc=0 resync=0 drops=0，速率扫描 50/100/200 分别 51.3/101.7/201.4 帧/s（200Hz = 230400 的 62%）、rtt_ms 11.9(100Hz)/7.3(200Hz)，常驻桥在 8793 直接服务网页 dist。
 未完成：文档/记忆已改完，代码改动还没提交；921600 仍需换普通 USB-TTL 接 U12。
 下一步：提交 firmware（board.c 的 DL_BAUD + host_link.c 的 arg 宽容与节拍累加）+ bridge（protocol/state/sim）+ 4 个测试文件 + docs（上位机通信协议.md/固件接口规格.md/tools/console/docs/API.md）+ memory，然后把上面这组数字报给用户。
@@ -1153,9 +1158,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：无
 下一步：若用户报 Tailscale 直连失效，先确认是否开了 Clash TUN
 
-## 2026-09-16
-完成：复测 `100.71.106.46`（Tailscale 节点 `cai`）：**已上线**（`tailscale status` 无 offline 标记，`tailscale ping` 有 pong，但经 **DERP(tok) 中继**，RTT 约 320–430ms，`direct connection not established`）。**但 SSH 仍不通**，且根因已从「机器离线」变为「对端没有 SSH 服务」：ICMP 通、**TCP 22 超时（超时=被防火墙丢弃，不是 refused）**；端口扫描 22/2222/3389/5985/5986/80/443/8080 全不通，**仅 445(SMB) OPEN**。ssh -v 显示 `Connecting to 100.71.106.46 port 22 ... Connection timed out`。结论：对端是 Windows，未装/未启动 OpenSSH Server（或防火墙未放行 22），与本机 SSH 客户端、用户名、密钥都无关。
-未完成：需要在 `cai` 那台机上启动 OpenSSH 服务并放行 22（或改用其他通道）；用户名与认证方式仍未知
-下一步：等用户在 `cai` 上开 sshd + 防火墙放行 22 后重试；若要走 445 则需另定方案（当前无该授权）
-
-> 更早的会话条目已归档到 198 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 199 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
