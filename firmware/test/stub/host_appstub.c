@@ -36,6 +36,17 @@ float    stub_servo_angle[3];
 int      stub_nvram_touch;
 uint8_t  stub_nvram_state;
 
+/* ---- 任务解释器（t_task.c）要的可变观测点 ----
+ * 默认值与原来自成一体的常量完全一致（4.25f / 1.25f / 0 / idx*10+5），
+ * 所以既有测试（t_hostext 等）的行为一个字节都没变；t_task.c 直接给它们赋值来造场景。 */
+float    stub_trace_pos = 4.25f;
+uint8_t  stub_cross     = 1u;
+uint8_t  stub_gray[8]   = { 5u, 15u, 25u, 35u, 45u, 55u, 65u, 75u };
+float    stub_gyro_err  = 1.25f;
+uint8_t  stub_motion_fault;
+int      stub_cross_clears;
+int      stub_speed_mmps[2];
+
 float Yaw, Pitch, Roll;
 /* `-DHOST_PIPE_REAL_SERVO`（firmware/test/pipe_hostlink.c 的构建）会把 servo 这一段
  * 换成真的 firmware/App/Bsp/servo.c —— 那时这些假表和假函数都不能有，否则符号重复。
@@ -71,7 +82,7 @@ void Motion_SetMode(Motion_Mode m)
 void Motion_SetSpeed(int s) { stub_motion_speed = s; }
 int  Motion_GetSpeed(void) { return stub_motion_speed; }
 Motion_Mode Motion_GetMode(void) { return (Motion_Mode)stub_motion_mode; }
-uint8_t Motion_GetFault(void) { return 0u; }
+uint8_t Motion_GetFault(void) { return stub_motion_fault; }
 void Motion_ClearFault(void) { stub_clear_faults++; }
 
 /* ---- speed_control ---- */
@@ -87,7 +98,7 @@ void    GyroControl_Stop(void) { stub_gyro_stopped++; }
 uint8_t GyroControl_IsEnabled(void) { return 0u; }
 void    GyroControl_SetTargetAngle(float deg) { stub_gyro_target = NormalizeAngle(deg); }
 float   GyroControl_GetTargetAngle(void) { return stub_gyro_target; }
-float   GyroControl_HeadingError(void) { return 1.25f; }
+float   GyroControl_HeadingError(void) { return stub_gyro_err; }
 float   GyroControl_DebugRateRef(void) { return 2.5f; }
 float   GyroControl_DebugCorr(void) { return -3.75f; }
 float   NormalizeAngle(float a)
@@ -166,8 +177,15 @@ uint8_t nvram_state(void) { return stub_nvram_state; }
 /* ---- trace_cal / PID_tracing ---- */
 /* trace_cal_level() 真 trace_cal.c 里也有（`-DHOST_PIPE_REAL_NVRAM` 会链它）⇒ 同样要让位 */
 #ifndef HOST_PIPE_REAL_NVRAM
-uint8_t trace_cal_level(uint8_t idx) { return (uint8_t)(idx * 10u + 5u); }
+uint8_t trace_cal_level(uint8_t idx) { return (idx < 8u) ? stub_gray[idx] : 0u; }
 #endif
-float   PID_Tracing_TracePos(void) { return 4.25f; }
+float   PID_Tracing_TracePos(void) { return stub_trace_pos; }
 float   PID_Tracing_PidOutput(void) { return -123.0f; }
-uint8_t tracing_cross(void) { return 1u; }
+uint8_t tracing_cross(void) { return stub_cross; }
+void    tracing_cross_clear(void) { stub_cross_clears++; }
+
+/* ---- 任务解释器还要读轮速（里程积分用） ---- */
+int SpeedControl_SpeedMmps(int wheel)
+{
+    return (wheel >= 0 && wheel <= 1) ? stub_speed_mmps[wheel] : 0;
+}

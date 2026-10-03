@@ -27,6 +27,7 @@
 #include "motion.h"
 #include "gyro_control.h"  /* 任务流程（renwu.c）要用角度环，见主循环里的任务闸门 */
 #include "renwu.h"         /* 旧板的比赛任务流程 A/B/C（host_link 的 CMD_START_A/B/C 启动） */
+#include "task_run.h"      /* 上位机可编程任务（状态机）解释器，见主循环末尾的每拍推进 */
 #include "motor_bench.h" /* 只在 -DMOTOR_BENCH 的构建里干活，见 motor_bench.c */
 
 extern volatile uint32_t g_oled_tx_done;
@@ -266,6 +267,15 @@ int main(void)
     } else if (s_renwu_active) {
       s_renwu_active = 0U;
       renwu_stop();
+    }
+
+    /* ---- 上位机可编程任务（App/Svc/task_run.c + task_prog.c）----------------------
+     * 状态机解释器，全非阻塞、5ms 一拍；没有"载入 + 启动"过程序时是空操作（什么都不做）。
+     * 与旧 renwu 流程**互斥**：两者都会接管电机，所以在 renwu 跑的时候不推进解释器。
+     * 程序由上位机拼好（拖动组合）、烧进 Flash，车离线自主执行 —— 比赛不能遥控，
+     * 所以运行期解释器不受链路看门狗约束；只有显式的停止命令/END 块/故障才停车。 */
+    if (renwu_flag == 0U) {
+      TaskRun_Tick(HAL_GetTick());
     }
 
     HAL_Delay(2);
