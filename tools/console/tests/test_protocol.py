@@ -215,6 +215,32 @@ def test_hello_param_actions_cal_and_drive_reports():
     assert pr.decode_text(b"hello \xe4\xb8\xad\xe6\x96\x87") == "hello 中文"
 
 
+def test_decode_cal_per_channel_uses_bad_array():
+    """回归：`valid` 是整套 0/1 标志，逐路好坏看 `bad[]`。
+
+    老实现写成 `valid & (1 << i)`（当作位掩码）⇒ 标定有效时也只有第 1 路报 ok，
+    其余 7 路被误报 reason=2，标定页会显示「1/8 路有效」。口径要与固件的
+    trace_cal_ch_ok / trace_cal_bad_reason / trace_cal_quality 一致。
+    """
+    p = bytearray(82)
+    p[0] = 1                 # valid：整套有效
+    p[9 + 0] = 0             # 第 1 路：好
+    p[9 + 1] = 2             # 第 2 路：JITTER
+    p[9 + 7] = 1             # 第 8 路：SPAN
+    for i in range(8):
+        p[18 + i * 2:20 + i * 2] = pr.pack_u16(170 + i)   # blk
+        p[34 + i * 2:36 + i * 2] = pr.pack_u16(320 + i)   # wht
+    cal = pr.decode_cal(bytes(p))
+    assert cal["quality"] == 6
+    assert [c["ok"] for c in cal["ch"]] == [True, False, True, True, True, True, True, False]
+    assert [c["reason"] for c in cal["ch"]] == [0, 2, 0, 0, 0, 0, 0, 1]
+    assert cal["ch"][0]["blk"] == 170 and cal["ch"][7]["bad"] == 1
+
+    p[0] = 0                 # 整套没标定 ⇒ 全部 NOSAMPLE(3)，与固件 bad_reason 一致
+    cal0 = pr.decode_cal(bytes(p))
+    assert cal0["quality"] == 0 and all(c["reason"] == 3 for c in cal0["ch"])
+
+
 def test_drive_and_servo_frame_builders():
     raw = pr.frame_drive(11, 2, 300, -45)
     f = pr.FrameDecoder().feed(raw)[0]

@@ -371,6 +371,13 @@ def decode_cal(p: bytes) -> dict:
     """trace_cal_data_t（82 字节，小端、字段间有对齐空洞）：
     valid u8@0 | pol u8[8]@1 | bad u8[8]@9 | pad@17 | blk u16[8]@18 | wht u16[8]@34
     | thr u16[8]@50 | jit u16[8]@66
+
+    逐路口径对齐固件（trace_cal_ch_ok / trace_cal_bad_reason / trace_cal_quality）：
+    `valid` 是**整套 0/1 标志、不是位掩码**；逐路好坏看 `bad[]`：
+    0 好 / 1 SPAN（黑白跨度太小）/ 2 JITTER（采样在抖）/ 3 NOSAMPLE（没标定）。
+    ok = valid && bad==0；reason = ok ? 0 : (valid ? bad : 3)。
+    （2026-10-04 之前写成 `valid & (1 << i)`，于是标定有效时也只有第 1 路报 ok、
+    其余 7 路被误报 reason=2，标定页显示 1/8 有效。）
     """
     if len(p) < 82:
         raise ValueError("标定回报长度不对：%d" % len(p))
@@ -381,10 +388,11 @@ def decode_cal(p: bytes) -> dict:
         wht = u16(p, 34 + i * 2)
         thr = u16(p, 50 + i * 2)
         jit = u16(p, 66 + i * 2)
-        ok = bool(valid & (1 << i)) and blk > 0
-        reason = 0 if ok else (1 if blk == 0 else 2)
+        bad = p[9 + i]
+        ok = bool(valid) and bad == 0
+        reason = 0 if ok else (bad if valid else 3)
         ch.append({"i": i, "blk": blk, "wht": wht, "thr": thr, "jitter": jit,
-                   "pol": p[1 + i], "bad": p[9 + i], "ok": ok, "reason": reason,
+                   "pol": p[1 + i], "bad": bad, "ok": ok, "reason": reason,
                    "level": 0, "thr_level": 0})
     return {"active_set": 0, "quality": sum(1 for c in ch if c["ok"]), "ch": ch}
 

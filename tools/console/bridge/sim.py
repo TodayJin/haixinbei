@@ -281,7 +281,7 @@ class SimCar:
 
     def _cal_frame(self, seq: int):
         p = bytearray(82)
-        p[0] = 0xFF
+        p[0] = 1                 # valid = 整套 0/1 标志（与固件一致，不是位掩码）
         for i, c in enumerate(self.cal["ch"]):
             p[1 + i] = c["pol"]
             p[9 + i] = c["bad"]
