@@ -192,6 +192,28 @@ def test_cmd_endpoint(live):
     assert r["ok"] is False
 
 
+def test_set_telem_hz_actually_reaches_the_car(live):
+    """回归（2026-10-04 真车踩过）：T_CMD 的 arg 必须发满 4 字节，不能只发 1 字节。
+
+    固件是 `if (len >= 5u) { arg = p[1..4] 小端 }`（`firmware/App/Svc/host_link.c:776`），
+    老桥只发 cmd + 1 字节 arg ⇒ arg 恒为 0 ⇒ `CMD_SET_TELEM_HZ` 被 `arg<1 → 1` 钳到
+    1Hz，车上的遥测从 75 帧/s 掉到 1 帧/s，网页一拖"遥测频率"滑块链路就哑了。
+    所以这里断言"车那边的 hz 真的变了"，而不是"桥自己以为改了"。
+    """
+    base, _, con = live
+    assert POST(base + "/api/cmd", {"cmd": "set_telem_hz", "arg": 200})[1]["ok"] is True
+    assert con.runner.link.car.hz == 200, "arg 没到车上（多半是载荷少于 5 字节）"
+    assert GET(base + "/api/link")[1]["telem_hz"] == 200
+    # 固件把 arg 钳在 1..200（host_link.c:800-803）：桥本地这份也必须同口径，
+    # 否则 /api/link 会报一个车没在跑的速率（请求 300、车跑 200、网页显示 300）
+    assert POST(base + "/api/cmd", {"cmd": "set_telem_hz", "arg": 300})[1]["ok"] is True
+    assert con.runner.link.car.hz == 200
+    assert GET(base + "/api/link")[1]["telem_hz"] == 200
+    # 收尾：把速率还原成仿真车默认的 50Hz，别让后面用 live 的用例跟着一起变
+    assert POST(base + "/api/cmd", {"cmd": "set_telem_hz", "arg": 50})[1]["ok"] is True
+    assert con.runner.link.car.hz == 50
+
+
 def test_cal_endpoint(live):
     base, _, _ = live
     code, j, _ = GET(base + "/api/cal?refresh=1")

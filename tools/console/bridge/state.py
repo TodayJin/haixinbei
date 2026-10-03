@@ -1096,12 +1096,15 @@ class Console:
         code = CMD_NAMES.get(name_or_code, name_or_code)
         if not isinstance(code, int):
             return {"ok": False, "error": f"没有这个命令：{name_or_code}"}
-        r = self.send_wait(pr.T_CMD, bytes([code & 0xFF, int(arg) & 0xFF]),
+        r = self.send_wait(pr.T_CMD, pr.cmd_payload(code, arg),
                            want=(pr.T_ACK, pr.T_TEXT))
         r.update({"cmd": code, "arg": int(arg)})
         if r.get("ok") and code == pr.CMD_SET_TELEM_HZ and arg:
+            # 与固件同口径的钳位（`host_link.c:800-803`：arg<1 → 1、arg>200 → 200）。
+            # 不钳的话 `/api/link` 会报一个车上根本没在跑的速率（实测：请求 300，车跑 200，
+            # 网页滑块却显示 300）。
             with self.lock:
-                self.hz = int(arg)
+                self.hz = max(1, min(200, int(arg)))
         return r
 
     def cal_refresh(self) -> dict:

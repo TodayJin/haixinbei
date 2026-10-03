@@ -13,6 +13,25 @@
 >
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
+## 2026-10-04
+完成：真机链路打通并实测（档位 230400，用户 m20705 的"烧录后实测"这一环完成）：`DL_BAUD` 改 230400 重烧（回读 116108 B firstDiff=none），probe @230400 = 204 帧/2s（≈101 帧/s、0 CRC、0 重同步，修节拍前 159 帧/2s），bench --serial = 实收 100.0 帧/s、SSE 72.0 KB/s、桥 CPU 14.8%、rx=792 crc=0 resync=0 drops=0，速率扫描 50/100/200 分别 51.3/101.7/201.4 帧/s（200Hz = 230400 的 62%）、rtt_ms 11.9(100Hz)/7.3(200Hz)，常驻桥在 8793 直接服务网页 dist。
+未完成：文档/记忆已改完，代码改动还没提交；921600 仍需换普通 USB-TTL 接 U12。
+下一步：提交 firmware（board.c 的 DL_BAUD + host_link.c 的 arg 宽容与节拍累加）+ bridge（protocol/state/sim）+ 4 个测试文件 + docs（上位机通信协议.md/固件接口规格.md/tools/console/docs/API.md）+ memory，然后把上面这组数字报给用户。
+
+## 2026-10-04
+完成：修掉真车上挖出的两个真 bug 并各自钉了测试：①桥发 T_CMD 只带 1 字节 arg（固件 len>=5 才读 arg ⇒ telem_hz 被钳成 1Hz）⇒ 新 cmd_payload() 发 cmd+pack_i32(arg)，固件额外容 len>=2 的老式帧；②固件遥测节拍用 now 重算被主循环 3.3ms 量化（100Hz 只出 75.5 帧/s）⇒ 改累加 + 落后超 2 拍重对齐。测试：test_protocol 的 pack_i32/decode_cmd_arg、test_sim 的 5 字节载荷、test_firmware_pipe 的真固件源码对拍（5 字节→telem_hz 200）、test_api 的 set_telem_hz 真到车 + 300 被钳到 200；`pytest -q`（workdir tools/console）= 167 passed。
+下一步：以后写任何下行帧都从 protocol.py 的构造函数走，别再手拼载荷。
+
+## 2026-10-03
+完成：给上位机工具加了 J-Link VCOM 上限保护（提交 4989891）：新增 `tools/console/bridge/serial_safety.py`（认 pyserial/PnP 两种 hwid 与 "JLink CDC" description；`cap_bauds()` 过滤梯子、`check_baud()` 给 `--serial`；认不出的口不拦；`--force-baud` 越过）与 `tools/console/bridge/console_io.py`（重定向→UTF-8，终端→errors=replace），接进 `probe.py`/`bench.py`/`main.py`。验证：`pytest -q`（workdir tools/console）= **162 passed**（原 142 + test_serial_safety 13 + test_console_io 5 + test_probe 接线 2，另把 probe 三个汇总用例与本机硬件解耦）；带保护的 `python -m bridge.probe --port COM26 --seconds 2` 真的跳过 921600/460800 并打出警告、结论行不再崩。
+未完成：真板实测仍没做：硬件侧只有探针的 CDC VCOM 能到 230400，而板上固件是 921600
+下一步：等用户在 A（改 `firmware/Core/Src/board.c:556` 的 `DL_BAUD` 为 230400 重烧、桥 `--baud 230400`）与 B（USB-TTL 接 U12 脚6/5/4 保 921600）里选一个；选 A 就走 `make -C firmware -j8` → `tools/flash.ps1` → probe/bridge/bench 在 230400 上实测帧率/CRC/延迟。
+
+## 2026-10-03
+完成：复核硬件在场性并纠正判据：`Get-PnpDevice -PresentOnly -Class Ports` 里 `JLink CDC UART Port (COM26)` 现在是 **OK**（复合设备 `USB\VID_1366&PID_0105\000602711039` + MI_00 + MI_02 都在），`GetPortNames()` = COM4/COM12/COM26；不带 `-PresentOnly` 的那份列表里几十条 COM 口状态全是 `Unknown`（历史幽灵设备），不能当在场判据。用带保护的 probe 静听 COM26：@230400 收 2790 B、@115200 收 1399 B（正好 2:1，只跟听者波特率成正比）、两档均 0 合法帧 + 16 次重同步 ⇒ 线上有成串数据（约 12% 占空比，形状像 100Hz×64B 遥测），错的只是波特率。
+未完成：探针是被我自己那次 `--bauds 115200,230400,460800,921600` 的扫档打进 bootloader 态的（已经物理拔插恢复）——已向用户说明
+下一步：同上（等 A/B）。
+
 ## 2026-10-03
 完成：补上目标里「允许提高遥测量率」在界面上的残口：遥测频率滑块 `max` 从 100 改成 200（固件 `CMD_SET_TELEM_HZ` 本来就钳 1..200），从 `/api/link` 同步来的值同样钳位；顺带改正 `firmware/App/Svc/host_link.c:1045-1047` 注释里写错的网页位置（「设置 → 遥测频率」→「控制 → 遥测频率」）。验证：vitest 174 passed / 19 文件、`npm run build` 干净、`make -j8`（workdir firmware）通过 text 115712/data 364/bss 33944/bin 116084B；**纯注释改动重建后 bin MD5 与板上已烧的 EDB8343723DA36C53AF030CA98B02300 完全一致 ⇒ 不需要重烧**（记住这条：改注释后重建 bin 逐字节不变，别为它跑 flash.ps1）。提交 edab555。
 未完成：仍需用户动手：插上数据口（或选 A/B 降/换波特率）。
@@ -1139,26 +1158,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：需要在 `cai` 那台机上启动 OpenSSH 服务并放行 22（或改用其他通道）；用户名与认证方式仍未知
 下一步：等用户在 `cai` 上开 sshd + 防火墙放行 22 后重试；若要走 445 则需另定方案（当前无该授权）
 
-## 2026-09-16
-完成：用户决定 **I2C 上拉保持 4.7k**（撤回 2.2k 改动）。核算：4.7k ∥ 模块 10k = **3.197kΩ**；低电平灌电流 0.91mA（限 3mA）；tr=0.847·Rp·Cb，Cb=100pF→271ns；**400kHz 可容忍 Cb≈111pF（带模块）/75pF（不带），100kHz 可容忍≈370pF**。已把 `固件接口规格.md` 的 I2C 上拉改回 4.7k 并写明并联关系、各速率可容忍电容、以及「空闲电平 ≥3.6V 说明模块 10k 接 5V，需拆或改 2.2k」的实测判据。
-未完成：仍待实测灰度模块 I2C 空闲电压以确认其 10k 上拉到 3.3V 还是 5V
-下一步：把 OLED 裸屏接法+厂家初始化代码写进 固件接口规格.md 的 OLED 节
-
-## 2026-09-16
-完成：用户告知**循迹（灰度）模块自带 10k 上拉**。与板上 2.2k 并联 = **1.803kΩ**：低电平灌电流 1.61mA（限 3mA，安全）；上升时间 tr=0.847·Rp·Cb，Cb=100pF→153ns、400kHz 可容忍 Cb≈196pF（比只有板上 2.2k 时的 161pF 更宽松）。**待确认关键点：模块那 10k 上拉到哪个电压**——若拉到模块自己的 3.3V 则完全没问题；**若拉到 5V，总线空闲电压会被分压抬到约 3.61V**，可能顶到 OLED(SSD1315) 与 INA226 的 3.3V IO 上限，需拆掉模块上的 10k 或改到 3.3V。验证方法：插上模块、总线空闲时量 SDA 对地电压，≈3.3V 正常、≥3.6V 要处理。
-未完成：循迹模块 10k 上拉的目标电压待实测确认
-下一步：确认后可定是否需要拆模块上拉；继续把 OLED 裸屏接法写进 固件接口规格.md
-
-## 2026-09-16
-完成：解释了 I2C 的 Rp（上拉电阻）与 Cb（总线电容）并用 RC 模型（tr≈0.847·Rp·Cb）说明速率上限；用户决定 **把 R4/R5 从 4.7k 改成 2.2kΩ**（支持 400kHz）。已把 `固件接口规格.md` 的 I2C 上拉值改为 2.2k 并补了说明（tr 公式、2.2k 可容忍约 161pF、模块自带上拉并联后仍高于 Rp_min≈967Ω）。
-未完成：RES# 的 100nF 是否补；OLED 模组/裸屏对应文档更新
-下一步：把 OLED 裸屏接法+厂家初始化代码写进 固件接口规格.md 的 OLED 节
-
-## 2026-09-16
-完成：复核第六版 netlist（sha 20652129，38004B，124 元件）：**OLED 从 4 针模组（OLED1 删除）改成裸屏 U16 = X096-2864KSWPG01-H30**，新增 C39/C40（1µF 飞电容）、C42/C44（4.7µF，VCC/VCOMH）、C41（100nF 退耦）、R39（10k，RES# 上拉）。逐脚核对 **U16 全部正确**：C1P/C1N→C39、C2P/C2N→C40、VBAT(6)→3V3、VDD(9)→3V3、BS1(11)→3V3、BS2(12)→GND、CS(13)/A0(15)/WR(16)/RD(17)→GND、RES(14)→R39→3V3、D0(18)→SCL、D1(19)+D2(20) 合并→SDA、D3–D7 悬空、**IREF(26) 悬空（内部 IREF）**、VCOMH(27)→C44、VCC(28)→C42、NC 全悬空；无单节点/空网络。**小建议**：RES# 只有 10k 上拉、缺 100nF，建议补（或用 MCU GPIO 控 RES）；D3–D7 可接 GND 更干净（可选）。
-
-**I2C 总线仿真（Python RC 模型，`i2c_bus.py`）**：总线 = MCU + INA226(0x40) + OLED SSD1315(0x3C) + H3/U14 两个扩展座；板上上拉 R4/R5=4.7k→3.3V。上升时间 tr=0.847·Rp·Cb。结论：**100kHz 下 4.7k 可撑 Cb≈251pF（稳）；400kHz 下 4.7k 只能撑 ≈75pF（有风险，实际 Cb 估 60~130pF）**；Rp_min=(3.3−0.4)/3mA=967Ω。**建议把 R4/R5 换成 2.2kΩ（400kHz 可撑 ≈161pF）或保持 4.7k 只用 100kHz。** 吞吐：100kHz 满屏 1024 字节 = 92ms(≈11fps)，400kHz = 23ms(≈43fps) → 建议局部刷新。另注意灰度模块自带的上拉会与板上并联、别低于 ~1kΩ，且 I2C 地址不要撞 0x3C/0x40。
-未完成：R4/R5 是否改成 2.2k、以及用 100k 还是 400k 待用户定；RES# 的 100nF 待补
-下一步：定后更新 BOM/上拉表；把 OLED 裸屏接法+初始化代码写进 固件接口规格.md
-
-> 更早的会话条目已归档到 194 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 198 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。

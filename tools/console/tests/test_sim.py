@@ -70,6 +70,18 @@ def test_telemetry_rate_is_not_quantized_to_poll_step():
     assert 94 <= n <= 102, f"1s 内只出了 {n} 帧（旧实现约 83）"
 
 
+def test_cmd_arg_is_read_from_a_five_byte_payload():
+    """和固件同口径：载荷 ≥5 字节时 arg = p[1..4] 小端；老式 2 字节载荷取低字节。"""
+    car = SimCar()
+    car.start(0)
+    frames = req(car, pr.T_CMD, pr.cmd_payload(pr.CMD_SET_TELEM_HZ, 200), now=0)
+    assert 0x00 in acks(frames)
+    assert car.hz == 200
+    frames = req(car, pr.T_CMD, bytes([pr.CMD_SET_TELEM_HZ, 50]), now=100)
+    assert 0x00 in acks(frames)
+    assert car.hz == 50, "老桥的 1 字节 arg 也要认，当成 0 会被钳成 1Hz"
+
+
 def test_long_stall_does_not_burst_catch_up():
     """卡了很久之后只补一帧并重新对齐，不吐一串补帧。"""
     car = SimCar()

@@ -136,6 +136,24 @@ def test_hello_from_real_firmware(pipe):
     assert _first(frames, pr.T_TELEM2) is not None, "HELLO 之后应该有 64B 遥测在流"
 
 
+def test_cmd_arg_is_read_from_the_payload(pipe):
+    """真固件读 T_CMD 的 arg：载荷 ≥5 字节 = 4 字节小端；老式 2 字节载荷取低字节。
+
+    2026-10-04 真车踩过：老桥只发 cmd + 1 字节 arg（载荷 2 字节），固件 `len >= 5` 不成立
+    ⇒ arg 恒为 0 ⇒ `CMD_SET_TELEM_HZ` 被 `arg<1 → 1` 钳成 1Hz，车上遥测从 75 帧/s 掉到
+    1 帧/s（网页一拖"遥测频率"滑块链路就哑了）。这里用真源码把两种宽度都钉住。
+    """
+    frames = pipe(pr.frame_cmd(1, pr.CMD_SET_TELEM_HZ, 200), pr.frame_hello_req(2))
+    assert _first(frames, pr.T_ACK) is not None, "真固件没回 ACK"
+    h = pr.decode_hello(_last(frames, pr.T_HELLO).payload)
+    assert h["telem_hz"] == 200, "5 字节载荷里的 arg 没被固件读到"
+
+    legacy = pr.build_frame(pr.T_CMD, 1, bytes([pr.CMD_SET_TELEM_HZ, 50]))
+    frames = pipe(legacy, pr.frame_hello_req(2))
+    h = pr.decode_hello(_last(frames, pr.T_HELLO).payload)
+    assert h["telem_hz"] == 50, "老上位机的 1 字节 arg 不能被当成 0（会被钳成 1Hz）"
+
+
 def test_param_dump_values_and_order_match_the_bridge_table(pipe):
     """参数 dump：id 集合、默认值、**顺序** 三项都要对得上。
 

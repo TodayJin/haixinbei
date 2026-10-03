@@ -779,6 +779,12 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
     if (len >= 5u) {
       arg = (int32_t)((uint32_t)p[1] | ((uint32_t)p[2] << 8)
                     | ((uint32_t)p[3] << 16) | ((uint32_t)p[4] << 24));
+    } else if (len >= 2u) {
+      /* 老上位机只发 1 字节 arg（载荷 2 字节）：**别当成 0**。2026-10-04 真车实测踩过：
+       * 旧桥这么发时 arg 恒为 0，下面 CMD_SET_TELEM_HZ 的 `arg<1 → 1` 把遥测钳成
+       * 1Hz（从 75 帧/s 掉到 1 帧/s）—— 网页上拖一下"遥测频率"滑块就把链路拖哑了。
+       * 取无符号低字节：带 arg 的命令只有 SET_TELEM_HZ(1..200) 与 SET_TELEM_MODE(0..2)。 */
+      arg = (int32_t)p[1];
     }
     switch (cmd) {
     case CMD_STOP:
@@ -1066,10 +1072,19 @@ void host_link_poll(uint32_t loop_us)
   /* 驾驶看门狗：上位机/串口断了就把车停下（500ms 没有合法帧） */
   HostExt_Task(now);
 
-  if (s_stats.telem_hz && (int32_t)(now - next_tx) >= 0) {
-    next_tx = now + (1000u / s_stats.telem_hz);
-    if (s_telem_mode != 0u) send_telemetry2(loop_us);
-    if (s_telem_mode != 1u) send_telemetry(loop_us);
+  if (s_stats.telem_hz) {
+    uint32_t period = 1000u / s_stats.telem_hz;
+    if (period == 0u) period = 1u;
+    if ((int32_t)(now - next_tx) >= 0) {
+      /* 落后太多（被写 Flash / 刷屏卡住过）：重新对齐，不吐一串补帧 */
+      if ((int32_t)(now - (next_tx + 2u * period)) > 0) next_tx = now;
+      /* ★ 累加，不是"用 now 重算"：主循环一拍只有几毫秒，重算会把实际周期拉到拍频的
+       *   整数倍上 —— 2026-10-04 真车实测：要 100Hz 却只出 75.5 帧/s（230400 下量到
+       *   的 11236 字节/2s 也正好对上）。上位机 `bridge/sim.py:142-146` 早就是累加写法。 */
+      next_tx += period;
+      if (s_telem_mode != 0u) send_telemetry2(loop_us);
+      if (s_telem_mode != 1u) send_telemetry(loop_us);
+    }
   }
 
   /* 全表参数 dump 的剩余部分：每拍发几帧，避免一次性阻塞主循环几十毫秒 */

@@ -549,11 +549,16 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
   }
 }
 /* ---- LPUART1：无线下载器（PC0=RX / PC1=TX，AF8）
- * 上位机链路走这条：921600 8N1，收 = DMA1_Ch2 循环搬运、发 = DMA1_Ch3 槽位队列。
- * 波特率必须和上位机桥一致（`python -m bridge.main --serial COM26 --baud 921600`），
+ * 上位机链路走这条：8N1，收 = DMA1_Ch2 循环搬运、发 = DMA1_Ch3 槽位队列。
+ * 波特率必须和上位机桥一致（`python -m bridge.main --serial COM26 --baud 230400`），
  * 上位机那边的串口参数是 COM26 这条 CDC 串口自己的事，跟 SWD 无关。
- * 复用编号 AF8 是查数据手册 Table 13（DS12288 Rev6，第 75 页）确认的，不是猜的。 */
-#define DL_BAUD  921600u
+ * 复用编号 AF8 是查数据手册 Table 13（DS12288 Rev6，第 75 页）确认的，不是猜的。
+ * 2026-10-03 23:50 定档 **230400**：手上这颗 J-Link 的 CDC VCOM 上限实测就是 230400
+ * （115200/230400 能开能读；460800 在 SET_LINE_CODING 上超时 = ERROR_SEM_TIMEOUT 121，
+ * 921600 直接 ERROR_GEN_FAILURE 31，而且试 ≥460800 会把探针打进 bootloader 态、只能物理
+ * 拔插 USB 才能恢复）。所以真机实测先跑 230400（原 115200 的 2×）；换普通 USB-TTL 接 U12
+ * 脚6/5/4 保 921600 时，改这一行 + 桥跟上 `--baud` 就行。 */
+#define DL_BAUD  230400u
 
 HAL_StatusTypeDef board_dl_init(void)
 {

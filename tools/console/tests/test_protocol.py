@@ -236,7 +236,8 @@ def test_drive_and_servo_frame_builders():
     assert pr.decode_param_report(f.payload) == (0x0207, 1200.0)
     raw = pr.frame_cmd(17, pr.CMD_SET_TELEM_HZ, 100)
     f = pr.FrameDecoder().feed(raw)[0]
-    assert f.type == pr.T_CMD and f.payload == bytes([pr.CMD_SET_TELEM_HZ, 100])
+    assert f.type == pr.T_CMD and f.payload == bytes([pr.CMD_SET_TELEM_HZ]) + pr.pack_i32(100)
+    assert pr.decode_cmd_arg(f.payload) == 100
     raw = pr.frame_hello_req(18)
     assert pr.FrameDecoder().feed(raw)[0].type == pr.T_HELLO_REQ
     raw = pr.frame_actions_get(19)
@@ -251,3 +252,19 @@ def test_drive_and_servo_frame_builders():
     assert pr.FrameDecoder().feed(raw)[0].type == pr.T_ACTION_SAVE
     raw = pr.frame_param_get(24, 0x0301)
     assert pr.FrameDecoder().feed(raw)[0].payload == pr.pack_u16(0x0301)
+
+
+def test_cmd_payload_carries_a_full_32_bit_arg():
+    """T_CMD 载荷 = cmd + **4 字节小端** arg（固件 `len >= 5` 才读，见 host_link.c:776-782）。"""
+    assert pr.cmd_payload(pr.CMD_SET_TELEM_HZ, 200) == bytes([pr.CMD_SET_TELEM_HZ]) + b"\xc8\x00\x00\x00"
+    assert pr.decode_cmd_arg(pr.cmd_payload(pr.CMD_SET_TELEM_HZ, 200)) == 200
+    assert pr.decode_cmd_arg(pr.cmd_payload(pr.CMD_SET_TELEM_MODE, -1)) == -1
+    assert pr.pack_i32(1 << 40) == b"\xff\xff\xff\x7f"      # 溢出钳到 INT32_MAX，不炸
+    assert pr.pack_i32(-(1 << 40)) == b"\x00\x00\x00\x80"
+
+
+def test_decode_cmd_arg_accepts_the_legacy_one_byte_arg():
+    """老桥只发 1 字节 arg：当 0 会把 CMD_SET_TELEM_HZ 钳成 1Hz（2026-10-04 真车踩过）。"""
+    assert pr.decode_cmd_arg(bytes([pr.CMD_SET_TELEM_HZ, 50])) == 50
+    assert pr.decode_cmd_arg(bytes([pr.CMD_SET_TELEM_HZ])) == 0
+    assert pr.decode_cmd_arg(b"") == 0

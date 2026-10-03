@@ -441,7 +441,7 @@ class SimCar:
             self._drive_frame(f.seq)
         elif f.type == pr.T_CMD:
             cmd = f.payload[0] if f.payload else 0
-            arg = f.payload[1] if len(f.payload) > 1 else 0
+            arg = pr.decode_cmd_arg(f.payload)      # 与固件同口径：5 字节 = 4 字节小端
             if cmd == pr.CMD_SET_TELEM_HZ:
                 self.hz = max(1, min(200, arg))
                 self._ack(f.seq, pr.ST_OK)

@@ -12,6 +12,36 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-04 — 车上这颗 J-Link 的 CDC VCOM 上限是 230400，于是把固件 firmware/Core/Src/board.c:561 的 #define DL_BAUD 降成 230400u 重烧，桥用 --baud 230400；921600 留到以后换普通 USB-TTL 接 U12 时再用。
+选择：车上这颗 J-Link 的 CDC VCOM 上限是 230400，于是把固件 firmware/Core/Src/board.c:561 的 #define DL_BAUD 降成 230400u 重烧，桥用 --baud 230400；921600 留到以后换普通 USB-TTL 接 U12 时再用。
+放弃：继续在探针 VCOM 上凑 921600（每试一次≥460800 就把探针打进 PID_0101 引导态、只能物理拔插恢复）；或按 460800 折中（SET_LINE_CODING 直接超时，根本打不开）。
+因为：实测 115200/230400 能开能读、460800 OSError 121、921600 PermissionError 31；用户 m22035 已授权降档，本轮又明确选了 A。
+
+## 2026-10-04 — T_CMD 帧载荷统一发满 5 字节 = cmd(u8) + arg(i32 小端)，桥侧新增 protocol.cmd_payload()/pack_i32()/decode_cmd_arg() 并让 frame_cmd、state.Console.cmd、sim 全走它。
+选择：T_CMD 帧载荷统一发满 5 字节 = cmd(u8) + arg(i32 小端)，桥侧新增 protocol.cmd_payload()/pack_i32()/decode_cmd_arg() 并让 frame_cmd、state.Console.cmd、sim 全走它。
+放弃：保持老的 2 字节载荷（cmd + arg 低字节）只在文档里警告；或把固件读 arg 的条件从 len>=5 放宽成 len>=2（会废掉 32 位 arg、以后加不了负值/大值）。
+因为：固件 host_link.c:776-782 只在 len>=5 时读 arg，老桥发 2 字节 ⇒ arg 恒 0 ⇒ CMD_SET_TELEM_HZ 被 arg<1→1 钳成 1Hz，真车实测从 75 帧/s 掉到 1~2 帧/s。
+
+## 2026-10-04 — 固件遥测节拍改成「累加 period + 落后超过 2 个 period 才把 next_tx 重对齐到现在」，不再用 next_tx = now + period。
+选择：固件遥测节拍改成「累加 period + 落后超过 2 个 period 才把 next_tx 重对齐到现在」，不再用 next_tx = now + period。
+放弃：保留用 now 重算的写法（主循环一拍约 3.3ms 会把它量化到 13.3ms，100Hz 只出 75.5 帧/s）；或把遥测挪到定时器中断里发。
+因为：真车实测要 100Hz 只出 75.5 帧/s，与 bridge/sim.py 里早就写对并注释过的写法同因；累加式不引入中断、改动只在 host_link_poll 一处。
+
+## 2026-10-04 — 桥本地 state.Console 的 telem_hz 与固件同口径钳 max(1, min(200, arg))，/api/link 报钳过的值。
+选择：桥本地 state.Console 的 telem_hz 与固件同口径钳 max(1, min(200, arg))，/api/link 报钳过的值。
+放弃：直接存请求值（请求 300 时 /api/link 报 300、网页滑块显示 300，而车实际跑 200）。
+因为：固件 host_link.c:800-803 本来就钳 1..200；上位机报一个车没在跑的速率会让用户拿它当参照调参。
+
+## 2026-10-03 — J-Link 的 CDC VCOM 口上，工具自动跳过 >230400 的波特率档（`bridge/serial_safety.py`：`cap_bauds()` 扫档前过滤、`check_baud()` 给 `--serial` 用，`--force-baud` 可越过）
+选择：J-Link 的 CDC VCOM 口上，工具自动跳过 >230400 的波特率档（`bridge/serial_safety.py`：`cap_bauds()` 扫档前过滤、`check_baud()` 给 `--serial` 用，`--force-baud` 可越过）
+放弃：①只在文档/注释里警告 —— 下次还是会忘；②把 `DEFAULT_BAUDS` 改成从低往高扫 —— 破坏"先试用户真正想要的 921600"，还会撞 `test_default_ladder_is_the_fallback_order`；③对所有口一律拒绝高波特率 —— 会误伤普通 USB-TTL（CH340 能跑 921600）
+因为：实测 ≥460800 会把探针打进 PID_0101 bootloader 态、只能物理拔插恢复；而 `probe` 默认梯子从 921600 往下扫，等于每次体检都拿探针去撞墙
+
+## 2026-10-03 — 控制台编码加固放共享模块 `bridge/console_io.py`（stdout 被重定向→改 UTF-8；直接对终端→只 `errors=\"replace\"`），`probe/bench/main` 的 `main()` 开头都调一次
+选择：控制台编码加固放共享模块 `bridge/console_io.py`（stdout 被重定向→改 UTF-8；直接对终端→只 `errors=\"replace\"`），`probe/bench/main` 的 `main()` 开头都调一次
+放弃：①把 `⇒` 全换成 `=>` —— 只治一处、下次写中文输出还会踩；②不管三七二十一全改 UTF-8 —— 直接对着 GBK 终端会变成满屏乱码
+因为：结论行里的 `⇒`（U+21D2）在 cp936/GBK 下编不出来，`UnicodeEncodeError` 崩在最后一行，等于前面量到的数字全白量；而用 `⇒` 的地方不止 probe（bench 的判定行也用）
+
 ## 2026-10-03 — 桥侧 SSE 攒批放在桥里做（`--sse-batch-ms` 默认 20ms，`0` 关），而不是只靠前端 50ms 合并
 选择：桥侧 SSE 攒批放在桥里做（`--sse-batch-ms` 默认 20ms，`0` 关），而不是只靠前端 50ms 合并
 放弃：只在前端合并（改动前的状态）—— 报文数与浏览器唤醒数一个没少，目标里写的「桥支持 SSE 合并」等于空的

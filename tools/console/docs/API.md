@@ -42,7 +42,7 @@
 | POST | `/api/servo/center` | 两路回 0°（收回位） |
 | POST | `/api/servo/deviation` | `{ch, dev_us}` 中位偏差微调（±100µs） |
 | POST | `/api/drive` | `{mode:"off"\|"wheels"\|"base_turn", vl?,vr?,base?,turn?}`：`wheels` 的 `vl`/`vr` = 左右轮**速度刻度**（−7200..+7200，负 = 反转）；`base_turn` 的 **`base` = 基准速度刻度（−7200..+7200，负 = 倒车）、`turn` = 目标航向偏移（度，正 = 左转 = 偏航角增大，±540）**，基准航向在**进入**该模式时锁存（= 固件 `s_base_yaw`），之后重复帧只改目标；`base=0` 即"原地用车上的角度环转到并保持这个朝向"。**注意：这里的速度是固件速度环的目标刻度、不是 mm/s**（mm/s 只有遥测的 `vl/vr` 用；刻度 1000 以下落在静摩擦死区） |
-| POST | `/api/cmd` | `{cmd, arg?}`：`stop/clear_fault/reset/telem_hz`（`start_a/start_b/start_c` 仍收，但车回 **`0x08` 不支持** ⇒ 桥回 `200 + ok:false`；车上内置任务流程已删除，任务走 §3.6） |
+| POST | `/api/cmd` | `{cmd, arg?}`：`stop/clear_fault/reset/telem_hz`（`start_a/start_b/start_c` 仍收，但车回 **`0x08` 不支持** ⇒ 桥回 `200 + ok:false`；车上内置任务流程已删除，任务走 §3.6）。**`arg` 是 32 位**：桥发 `cmd`(u8) + 4 字节小端 i32，少于 5 字节的载荷固件会当成 `arg=0`（2026-10-04 修的真 bug：老代码只发 1 字节 ⇒ `telem_hz` 被钳成 1Hz）。`telem_hz` 固件钳 **1..200**，桥的 `/api/link` 报同一个钳过的值 |
 | GET | `/api/stream` | **SSE**：实时数据流（见 §4） |
 | GET | `/api/log?limit=200` | 最近的文本日志 |
 | GET | `/api/cal` | 灰度标定数据（8 路黑白阈值/抖动/有效性） |
@@ -61,7 +61,7 @@
 {
   "ok": true,
   "mode": "sim",                  // sim | serial | replay
-  "port": "COM26", "baud": 921600,
+  "port": "COM26", "baud": 921600,    // 代码默认 921600；走 J-Link 的 VCOM 时只能 230400（桥的 --baud 跟固件 DL_BAUD 一致）
   "connected": true,
   "stats": {"rx": 0, "tx": 0, "crc": 0, "resync": 0, "drops": 0},
   "telem_hz": 100,

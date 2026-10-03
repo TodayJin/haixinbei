@@ -268,6 +268,12 @@ def pack_i16(v: int) -> bytes:
     return struct.pack("<h", v)
 
 
+def pack_i32(v: int) -> bytes:
+    v = int(v)
+    v = max(-2147483648, min(2147483647, v))
+    return struct.pack("<i", v)
+
+
 def pack_f32(v: float) -> bytes:
     return struct.pack("<f", float(v))
 
@@ -489,8 +495,33 @@ def frame_servo_dev(seq: int, ch: int, dev_us: int) -> bytes:
     return build_frame(T_SERVO_DEV, seq, bytes([ch & 0xFF]) + pack_i16(dev_us))
 
 
+def cmd_payload(cmd: int, arg: int = 0) -> bytes:
+    """T_CMD 的载荷：cmd(1 字节) + arg(**4 字节小端**)。
+
+    固件只认 5 字节载荷：`firmware/App/Svc/host_link.c:776-782` 是
+    `if (len >= 5u) { arg = p[1] | p[2]<<8 | p[3]<<16 | p[4]<<24; }` —— 载荷短于 5 字节时
+    arg 恒为 0。2026-10-04 真车实测踩过这个坑：老桥只发 1 字节 arg（载荷 2 字节），
+    `CMD_SET_TELEM_HZ` 于是被固件钳成 `arg<1 → 1`，遥测从 **75 帧/s 掉到 1 帧/s**，
+    网页上拖一下"遥测频率"滑块就把链路拖哑了。所以这里必须发满 4 字节。
+    """
+    return bytes([cmd & 0xFF]) + pack_i32(arg)
+
+
+def decode_cmd_arg(p: bytes) -> int:
+    """从 T_CMD 载荷里取 arg，和固件同口径（5 字节 = 4 字节小端；2..4 字节 = 低字节）。
+
+    短载荷这一支是给老上位机兜底的：固件侧也做了同样宽容处理，别把"只发了 1 字节"
+    当成 arg = 0。
+    """
+    if len(p) >= 5:
+        return int.from_bytes(p[1:5], "little", signed=True)
+    if len(p) >= 2:
+        return int(p[1])
+    return 0
+
+
 def frame_cmd(seq: int, cmd: int, arg: int = 0) -> bytes:
-    return build_frame(T_CMD, seq, bytes([cmd & 0xFF, arg & 0xFF]))
+    return build_frame(T_CMD, seq, cmd_payload(cmd, arg))
 
 
 def frame_hello_req(seq: int) -> bytes:
