@@ -1,6 +1,10 @@
 /* STM32G474RBT6: 128K Flash / 96K SRAM / 32K CCM SRAM
- * FLASH 只给 126K：最后一页（0x0801F800..0x0801FFFF，128KB 单 bank 的页 63）
- * 留给 nvram.c 存设置和标定，链接器不许往里放东西（见 App/Svc/nvram.c）。 */
+ * 后四页全部留给运行期自己擦写的模块，链接器只拿前 120K（0x08000000..0x0801DFFF）：
+ *   页 60/61/62 = 0x0801E000/0x0801E800/0x0801F000 -> App/Svc/task_store.c 存上位机任务
+ *   页 63       = 0x0801F800                     -> App/Svc/nvram.c 存设置和标定
+ * 所以 LENGTH 必须是 120K 而不是 126K：写 126K 时链接器允许把代码放进页 60..62，
+ * 一旦镜像长过 0x0801E000 就会静默压掉车上存的任务程序（表现为"烧完固件任务没了"，
+ * 或者更糟：TaskStore_Commit 擦掉正在执行的代码）。给 120K 才让"放不下"变成链接错误。 */
 ENTRY(Reset_Handler)
 
 _estack = ORIGIN(RAM) + LENGTH(RAM);
@@ -11,7 +15,7 @@ MEMORY
 {
   CCMRAM (xrw) : ORIGIN = 0x10000000, LENGTH = 32K
   RAM    (xrw) : ORIGIN = 0x20000000, LENGTH = 96K
-  FLASH  (rx)  : ORIGIN = 0x08000000, LENGTH = 126K
+  FLASH  (rx)  : ORIGIN = 0x08000000, LENGTH = 120K
 }
 
 SECTIONS
