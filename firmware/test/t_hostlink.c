@@ -13,6 +13,9 @@
 #include <math.h>
 #include "host_link.h"
 #include "t_common.h"
+/* 任务帧（T_TASK_*）：常量取自真头文件，实现用 host_taskstub.c 的 RAM 替身 */
+#include "task_run.h"
+#include "task_store.h"
 
 extern void host_dl_feed(const uint8_t *data, uint16_t len);
 extern void host_dl_reset(void);
@@ -113,6 +116,21 @@ extern int      stubx_action_set_calls, stubx_servo_set[3], stubx_servo_dev[3];
 extern uint8_t  stubx_drive_mode, stubx_drive_enabled, stubx_nvram_state;
 extern int      stubx_wd_trips, stubx_clear_faults;
 
+/* host_taskstub.c（任务存储/解释器的 RAM 替身）的观测变量与失败钩子。
+ * 真 Flash 语义由 t_taskstore.c 用 task_store.c 真源码测；这里只验帧。 */
+extern void     TaskStoreStub_Reset(void);
+extern int      stubt_stage_resets, stubt_commits, stubt_erases, stubt_loads, stubt_starts, stubt_stops;
+extern uint16_t stubt_last_len, stubt_last_crc, stubt_last_stage_off, stubt_last_stage_n;
+extern uint8_t  stubt_last_flags, stubt_last_namelen;
+extern char     stubt_last_name[];
+extern int      stubt_commit_rc, stubt_load_rc, stubt_erase_rc;
+extern uint8_t  stubt_run_loaded, stubt_run_running, stubt_run_state, stubt_run_phase, stubt_run_flags;
+extern uint16_t stubt_run_id, stubt_run_block, stubt_run_blockcount;
+extern uint32_t stubt_run_elapsed;
+
+/* host_board.c 提供的真全局：非 0 = 旧 renwu 流程在跑（任务擦写要因此被拒） */
+extern uint8_t  renwu_flag;
+
 /* host_hal.c 的假时钟（遥测有节流，要推进时间才会再发） */
 extern void host_tick_add(uint32_t ms);
 
@@ -140,8 +158,8 @@ int main(void)
             CHECK_EQ_I(r[6], 0x00);
             CHECK_EQ_I(r[7], 0x02);                     /* proto version 2 */
             CHECK_EQ_I(memcmp(&r[13], "quandi-car", 10), 0);   /* 名字在 payload+8 */
-            /* 能力位在 payload+20：7 位全开（上位机据此决定页面显示什么） */
-            CHECK_EQ_I(r[25] | (r[26] << 8) | (r[27] << 16) | (r[28] << 24), 0x7Fu);
+            /* 能力位在 payload+20：v2 起 8 位全开（bit7 = HOST_CAP_TASK，任务页据此解禁） */
+            CHECK_EQ_I(r[25] | (r[26] << 8) | (r[27] << 16) | (r[28] << 24), 0xFFu);
         }
     }
 
@@ -738,6 +756,387 @@ int main(void)
             CHECK_EQ_I(r[5u + 50u] | (r[5u + 51u] << 8), 300);   /* thr[0] @50 */
             CHECK_EQ_I(r[5u + 66u] | (r[5u + 67u] << 8), 0);     /* jit[0] @66 */
         }
+    }
+
+    /* ==================================================================
+     *  协议 v2：上位机任务程序（T_TASK_*，docs/任务编程.md §5）
+     *
+     *  存储与解释器换成 host_taskstub.c 的 RAM 替身：真 Flash 语义在 t_taskstore.c，
+     *  执行语义在 t_task.c，这里只钉"帧怎么翻译成调用、状态码怎么回、分片怎么收尾"。
+     * ================================================================== */
+    {
+        static uint8_t fbig[160];          /* PUT 一片最长 124 字节负载，f[64] 装不下 */
+        static uint8_t pb[124];            /* 负载与帧缓冲必须分开：build() 是 memcpy 不是 memmove */
+        static uint8_t img[80];            /* 一个假的 80 字节程序镜像 */
+        int i;
+
+        for (i = 0; i < 80; i++) img[i] = (uint8_t)(0x10 + i);
+
+        TaskStoreStub_Reset();
+        renwu_flag = 0u;
+
+        /* 24) 目录为空 ⇒ 只回一帧空载荷的 T_TASK_LIST_R（n=0 就是"发完了"），且不发 ACK */
+        host_dl_tx_clear();
+        build(f, 0x60, 110, NULL, 0);
+        feed_and_poll(f, 7);
+        {
+            uint8_t l = 0;
+            const uint8_t *r = find_frame(0x61, 110, &l);
+            CHECK(r != NULL);
+            if (r) CHECK_EQ_I(l, 0);
+            CHECK_EQ_I(count_frames(0x61), 1);
+            CHECK(find_frame(0x21, 110, NULL) == NULL);
+        }
+
+        /* 25) 分片 PUT：每片一个 ST_OK，偏移原样交给暂存区；越界/参数错一律挡 */
+        put16(&pb[0], 0);                /* slot 0 */
+        put16(&pb[2], 0);                /* off 0 */
+        memcpy(&pb[4], img, 80);
+        host_dl_tx_clear();
+        build(fbig, 0x62, 112, pb, 84);
+        feed_and_poll(fbig, 91);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 112, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x00);
+            CHECK_EQ_I(stubt_last_stage_off, 0);
+            CHECK_EQ_I(stubt_last_stage_n, 80);
+        }
+        /* 第二片故意与前一片重叠（off=64）：暂存区按偏移覆盖，长度不重复累加 */
+        put16(&pb[2], 64);
+        memcpy(&pb[4], &img[64], 16);
+        host_dl_tx_clear();
+        build(fbig, 0x62, 114, pb, 20);
+        feed_and_poll(fbig, 27);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 114, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x00);
+            CHECK_EQ_I(TaskStore_StageLen(), 80);
+        }
+        /* 越过程序区上限（2008）：off=2007 + 120 字节 ⇒ ST_OUT_OF_RANGE */
+        put16(&pb[2], 2007);
+        host_dl_tx_clear();
+        build(fbig, 0x62, 116, pb, 124);
+        feed_and_poll(fbig, 131);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 116, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x04);
+        }
+        /* 槽号越界 ⇒ ST_OUT_OF_RANGE；负载长度不足 ⇒ ST_BAD_PARAM */
+        put16(&pb[0], 9);
+        put16(&pb[2], 0);
+        host_dl_tx_clear();
+        build(fbig, 0x62, 118, pb, 20);
+        feed_and_poll(fbig, 27);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 118, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x04);
+        }
+        host_dl_tx_clear();
+        build(f, 0x62, 120, pb, 3);
+        feed_and_poll(f, 10);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 120, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x03);
+            CHECK_EQ_I(stubt_commits, 0);     /* 全程没写进槽位 */
+        }
+        put16(&pb[0], 0);
+
+        /* 26) COMMIT：len/crc 原样搬运，flags 只能为 0（契约里没这个字节），名字随帧带过去 */
+        put16(&pb[2], 80);
+        put16(&pb[4], 0x1234);
+        pb[6] = 3; pb[7] = 'a'; pb[8] = 'b'; pb[9] = 'c';
+        host_dl_tx_clear();
+        build(f, 0x63, 122, pb, 10);
+        feed_and_poll(f, 17);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 122, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x00);
+            CHECK_EQ_I(stubt_commits, 1);
+            CHECK_EQ_I(stubt_last_len, 80);
+            CHECK_EQ_I(stubt_last_crc, 0x1234);
+            CHECK_EQ_I(stubt_last_flags, 0);
+            CHECK_EQ_I(stubt_last_namelen, 3);
+            CHECK_EQ_I(memcmp(stubt_last_name, "abc", 3), 0);
+        }
+        /* 名字长度撒谎（name_len=30 但帧里只有 1 个名字字节）⇒ ST_BAD_PARAM，且不写 */
+        pb[6] = 30; pb[7] = 'a';
+        host_dl_tx_clear();
+        build(f, 0x63, 124, pb, 8);
+        feed_and_poll(f, 15);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 124, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x03);
+            CHECK_EQ_I(stubt_commits, 1);
+        }
+        /* 车上说忙（车在动/任务在跑）⇒ ST_BUSY（0x07），且不写 */
+        pb[6] = 0;
+        stubt_commit_rc = TASK_STORE_E_BUSY;
+        host_dl_tx_clear();
+        build(f, 0x63, 126, pb, 7);
+        feed_and_poll(f, 14);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 126, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x07);
+            CHECK_EQ_I(stubt_commits, 1);
+        }
+        stubt_commit_rc = TASK_STORE_OK;
+        /* 旧 renwu 流程在跑：擦写会把控制环按住几十毫秒 ⇒ 一律 ST_BUSY */
+        renwu_flag = 1u;
+        host_dl_tx_clear();
+        build(f, 0x63, 128, pb, 7);
+        feed_and_poll(f, 14);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 128, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x07);
+            CHECK_EQ_I(stubt_commits, 1);
+        }
+        renwu_flag = 0u;
+
+        /* 27) 目录里已经有东西了：id/len/crc/flags/name_len/名字 一帧装下；
+         *     空槽跳过，最后一拍才是收尾空帧 */
+        host_dl_tx_clear();
+        build(f, 0x60, 130, NULL, 0);
+        feed_and_poll(f, 7);
+        {
+            uint8_t l = 0;
+            const uint8_t *r = find_frame(0x61, 130, &l);
+            CHECK(r != NULL);
+            CHECK_EQ_I(l, 11);                 /* 8 + 名字 3 字节 */
+            if (r) {
+                CHECK_EQ_I(r[5] | (r[6] << 8), 0);          /* id = 槽号 */
+                CHECK_EQ_I(r[7] | (r[8] << 8), 80);         /* len */
+                CHECK_EQ_I(r[9] | (r[10] << 8), 0x1234);    /* crc */
+                CHECK_EQ_I(r[11], 0);                       /* flags */
+                CHECK_EQ_I(r[12], 3);                       /* name_len */
+                CHECK_EQ_I(memcmp(&r[13], "abc", 3), 0);
+            }
+            CHECK_EQ_I(count_frames(0x61), 1);  /* 一拍一帧，没有连发 */
+        }
+        host_dl_tx_clear();
+        for (i = 0; i < 4; i++) host_link_poll(0u);   /* 槽 1/2 空（跳过）→ 收尾空帧 */
+        {
+            uint8_t l = 0;
+            const uint8_t *r = find_frame(0x61, 130, &l);
+            CHECK(r != NULL);
+            if (r) CHECK_EQ_I(l, 0);
+            CHECK_EQ_I(count_frames(0x61), 1);
+        }
+
+        /* 28) 读回：空槽 ⇒ ST_NOT_READY；有任务 ⇒ 一帧帧 DATA（64+16 字节 + 空数据收尾），
+         *     成功路径**不回 ACK**（一帧帧数据才是应答） */
+        host_dl_tx_clear();
+        put16(pl, 1);
+        build(f, 0x64, 132, pl, 2);
+        feed_and_poll(f, 9);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 132, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x05);
+        }
+        host_dl_tx_clear();
+        put16(pl, 0);
+        build(f, 0x64, 134, pl, 2);
+        feed_and_poll(f, 9);                  /* 这一拍就发出第一帧 DATA */
+        CHECK(find_frame(0x21, 134, NULL) == NULL);
+        {
+            uint8_t got[80];
+            int n = 0, round = 0;
+            while (round < 6) {
+                uint8_t l = 0;
+                const uint8_t *r;
+                if (round > 0) {              /* round 0 用 feed_and_poll 那一拍发的 */
+                    host_dl_tx_clear();
+                    host_link_poll(0u);
+                }
+                r = find_frame(0x65, 134, &l);
+                if (r == NULL) break;
+                CHECK_EQ_I(r[5] | (r[6] << 8), 0);          /* id */
+                CHECK_EQ_I(r[7] | (r[8] << 8), n);          /* off 连续推进 */
+                if (round == 0) CHECK_EQ_I(l, 68);          /* 4 + 64 */
+                if (round == 1) CHECK_EQ_I(l, 20);          /* 4 + 16（最后一片）*/
+                if (round == 2) CHECK_EQ_I(l, 4);           /* 空数据帧 = 收尾 */
+                if ((size_t)(l - 4) <= sizeof(got) - (size_t)n) {
+                    memcpy(&got[n], &r[9], (size_t)(l - 4));
+                }
+                n += (int)(l - 4);
+                round++;
+                if (l == 4) break;
+            }
+            CHECK_EQ_I(n, 80);
+            CHECK_EQ_I(memcmp(got, img, 80), 0);            /* 逐字节与上传的一致 */
+            CHECK_EQ_I(round, 3);
+        }
+
+        /* 29) RUN：空槽 ⇒ ST_NOT_READY；有任务 ⇒ 载入并启动；正在被上位机驾驶 ⇒ ST_BUSY + 文本 */
+        stubx_drive_enabled = 0;               /* 第 17) 节把它置 1 了，先松开 */
+        host_dl_tx_clear();
+        put16(pl, 2);
+        build(f, 0x67, 136, pl, 2);
+        feed_and_poll(f, 9);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 136, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x05);
+            CHECK_EQ_I(stubt_starts, 0);
+        }
+        stubx_drive_enabled = 0;
+        host_dl_tx_clear();
+        put16(pl, 0);
+        build(f, 0x67, 138, pl, 2);
+        feed_and_poll(f, 9);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 138, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x00);
+            CHECK_EQ_I(stubt_loads, 1);
+            CHECK_EQ_I(stubt_starts, 1);
+            CHECK_EQ_I(stubt_run_id, 0);
+            CHECK_EQ_I(stubt_run_running, 1);
+        }
+        stubx_drive_enabled = 1;               /* 上位机正在驾驶：不许交任务 */
+        host_dl_tx_clear();
+        build(f, 0x67, 140, pl, 2);
+        feed_and_poll(f, 9);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 140, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x07);
+            CHECK_EQ_I(tx_has_text("task run refused"), 1);
+            CHECK_EQ_I(stubt_starts, 1);
+        }
+        stubx_drive_enabled = 0;
+        /* 槽里的程序格式坏了（TaskStore_Load 返回负的错误码）⇒ ST_BAD_PARAM */
+        stubt_load_rc = -1;                    /* -TASK_E_SHORT：格式/长度不对 */
+        host_dl_tx_clear();
+        build(f, 0x67, 142, pl, 2);
+        feed_and_poll(f, 9);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 142, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x03);
+            CHECK_EQ_I(stubt_starts, 1);
+        }
+        stubt_load_rc = 0;
+        /* 旧 renwu 在跑时连 RUN 也要挡 */
+        renwu_flag = 1u;
+        host_dl_tx_clear();
+        build(f, 0x67, 144, pl, 2);
+        feed_and_poll(f, 9);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 144, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x07);
+        }
+        renwu_flag = 0u;
+
+        /* 30) STOP 幂等，且一定要真的停 */
+        host_dl_tx_clear();
+        build(f, 0x68, 146, NULL, 0);
+        feed_and_poll(f, 7);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 146, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x00);
+            CHECK_EQ_I(stubt_stops, 1);
+        }
+
+        /* 31) DEL 擦掉槽位；之后目录又只剩收尾空帧 */
+        host_dl_tx_clear();
+        put16(pl, 0);
+        build(f, 0x66, 148, pl, 2);
+        feed_and_poll(f, 9);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 148, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x00);
+            CHECK_EQ_I(stubt_erases, 1);
+        }
+        host_dl_tx_clear();
+        build(f, 0x60, 150, NULL, 0);
+        feed_and_poll(f, 7);
+        for (i = 0; i < 4; i++) host_link_poll(0u);
+        {
+            uint8_t l = 0;
+            const uint8_t *r = find_frame(0x61, 150, &l);
+            CHECK(r != NULL);
+            if (r) CHECK_EQ_I(l, 0);
+            CHECK_EQ_I(count_frames(0x61), 1);
+        }
+
+        /* 32) 状态推送：没载入过程序 ⇒ id=0xFFFF / state=0xFF（上位机据此显示"车上没有任务"） */
+        TaskStoreStub_Reset();
+        host_dl_tx_clear();
+        host_link_poll(0u);
+        {
+            uint8_t l = 0;
+            const uint8_t *s = find_frame(0x69, 0, &l);
+            CHECK(s != NULL);
+            CHECK_EQ_I(l, 11);
+            if (s) {
+                CHECK_EQ_I(s[5] | (s[6] << 8), 0xFFFF);
+                CHECK_EQ_I(s[7], 0xFF);
+                CHECK_EQ_I(s[8], 0);
+                CHECK_EQ_I(s[9] | (s[10] << 8), 0);
+                CHECK_EQ_I((uint32_t)s[11] | ((uint32_t)s[12] << 8)
+                           | ((uint32_t)s[13] << 16) | ((uint32_t)s[14] << 24), 0u);
+                CHECK_EQ_I(s[15], 0);
+            }
+        }
+        /* 内容一变就推：正在跑第 2 个状态、第 5 块、1234ms、超时标志置位 */
+        stubt_run_loaded = 1; stubt_run_running = 1; stubt_run_id = 2; stubt_run_state = 2;
+        stubt_run_block = 5; stubt_run_elapsed = 1234; stubt_run_flags = TASK_RUN_F_TIMEOUT;
+        host_dl_tx_clear();
+        host_link_poll(0u);
+        {
+            uint8_t l = 0;
+            const uint8_t *s = find_frame(0x69, 0, &l);
+            CHECK(s != NULL);
+            CHECK_EQ_I(l, 11);
+            if (s) {
+                CHECK_EQ_I(s[5] | (s[6] << 8), 2);
+                CHECK_EQ_I(s[7], 2);
+                CHECK_EQ_I(s[8], 1);
+                CHECK_EQ_I(s[9] | (s[10] << 8), 5);
+                CHECK_EQ_I((uint32_t)s[11] | ((uint32_t)s[12] << 8)
+                           | ((uint32_t)s[13] << 16) | ((uint32_t)s[14] << 24), 1234u);
+                CHECK_EQ_I(s[15], TASK_RUN_F_TIMEOUT);
+            }
+        }
+        /* 内容没变时不再刷屏，但 1Hz 心跳必须还在（§5）。
+         * 注意 host_link_poll() 是**无参**的，时间来自 host_hal.c 的假时钟 */
+        host_dl_tx_clear();
+        host_link_poll(0u);
+        CHECK(find_frame(0x69, 0, NULL) == NULL);
+        host_dl_tx_clear();
+        host_tick_add(1000u);
+        host_link_poll(0u);
+        CHECK(find_frame(0x69, 0, NULL) != NULL);
     }
 
     return T_SUMMARY();

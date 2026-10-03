@@ -1,10 +1,12 @@
 /* STM32G474RBT6: 128K Flash / 96K SRAM / 32K CCM SRAM
- * 后四页全部留给运行期自己擦写的模块，链接器只拿前 120K（0x08000000..0x0801DFFF）：
- *   页 60/61/62 = 0x0801E000/0x0801E800/0x0801F000 -> App/Svc/task_store.c 存上位机任务
+ * 后五页全部留给运行期自己擦写的模块，链接器只拿前 118K（0x08000000..0x0801D7FF）：
+ *   页 59       = 0x0801D800                     -> App/Svc/task_store.c 任务目录页
+ *   页 60/61/62 = 0x0801E000/0x0801E800/0x0801F000 -> App/Svc/task_store.c 任务程序区（6144 B）
  *   页 63       = 0x0801F800                     -> App/Svc/nvram.c 存设置和标定
- * 所以 LENGTH 必须是 120K 而不是 126K：写 126K 时链接器允许把代码放进页 60..62，
- * 一旦镜像长过 0x0801E000 就会静默压掉车上存的任务程序（表现为"烧完固件任务没了"，
- * 或者更糟：TaskStore_Commit 擦掉正在执行的代码）。给 120K 才让"放不下"变成链接错误。 */
+ * 所以 LENGTH 必须是 118K 而不是 126K：写 126K 时链接器允许把代码放进页 59..62，
+ * 一旦镜像长过 0x0801D800 就会静默压掉车上存的任务程序（表现为"烧完固件任务没了"，
+ * 或者更糟：TaskStore_Commit 擦掉正在执行的代码）。给 118K 才让"放不下"变成链接错误。
+ * 页分配的唯一权威是 App/Svc/task_store.h 的头部注释：改了那边就要同步改这里。 */
 ENTRY(Reset_Handler)
 
 _estack = ORIGIN(RAM) + LENGTH(RAM);
@@ -15,7 +17,7 @@ MEMORY
 {
   CCMRAM (xrw) : ORIGIN = 0x10000000, LENGTH = 32K
   RAM    (xrw) : ORIGIN = 0x20000000, LENGTH = 96K
-  FLASH  (rx)  : ORIGIN = 0x08000000, LENGTH = 120K
+  FLASH  (rx)  : ORIGIN = 0x08000000, LENGTH = 118K
 }
 
 SECTIONS

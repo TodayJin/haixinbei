@@ -84,8 +84,10 @@
 #define HOST_CAP_CAL         (1u << 4)
 #define HOST_CAP_FLASH       (1u << 5)
 #define HOST_CAP_WATCHDOG    (1u << 6)
+#define HOST_CAP_TASK        (1u << 7)   /* 上位机任务程序：T_TASK_*（0x60..0x69）+ Flash 三槽 */
 #define HOST_CAP_ALL         (HOST_CAP_TELEM2 | HOST_CAP_ACTIONS | HOST_CAP_SERVO | \
-                              HOST_CAP_DRIVE | HOST_CAP_CAL | HOST_CAP_FLASH | HOST_CAP_WATCHDOG)
+                              HOST_CAP_DRIVE | HOST_CAP_CAL | HOST_CAP_FLASH | HOST_CAP_WATCHDOG | \
+                              HOST_CAP_TASK)
 
 #define HOST_PROTO_VERSION   2u      /* 协议版本：v2 加了扩展帧/动作表/驾驶/看门狗 */
 #define HOST_FW_VERSION      0x0002u /* 固件版本 0.0.2 */

@@ -27,6 +27,8 @@
 #include "motion.h"        /* v2：驾驶状态回报用 Motion_GetMode */
 #include "nvram.h"         /* v2：T_PARAM_SAVE 真保存（nvram_touch） */
 #include "servo.h"         /* v2：动作表/舵机角度 */
+#include "task_run.h"      /* v2：任务解释器（T_TASK_RUN 启动 / T_TASK_STATUS 查询） */
+#include "task_store.h"    /* v2：任务程序 Flash 三槽（页 60/61/62） */
 #include "trace_cal.h"     /* v2：T_CAL_GET 标定回读 */
 #include "tracing.h"
 #include "SEGGER_RTT.h"
@@ -222,7 +224,11 @@ enum { T_TELEM = 0x01, T_TELEM2 = 0x03, T_PARAM_GET = 0x10, T_PARAM_SET = 0x11,
        T_ACTIONS_GET = 0x16, T_ACTIONS = 0x17, T_ACTION_SET = 0x18, T_ACTION_SAVE = 0x19,
        T_SERVO_SET = 0x1A, T_SERVO_PLAY = 0x1B, T_DRIVE = 0x1C, T_DRIVE_REPORT = 0x1D,
        T_SERVO_DEV = 0x1E,
-       T_CMD = 0x20, T_ACK = 0x21, T_HELLO = 0x40, T_HELLO_REQ = 0x41, T_TEXT = 0x50 };
+       T_CMD = 0x20, T_ACK = 0x21, T_HELLO = 0x40, T_HELLO_REQ = 0x41, T_TEXT = 0x50,
+       /* v2 上位机任务程序（docs/任务编程.md §5） */
+       T_TASK_LIST = 0x60, T_TASK_LIST_R = 0x61, T_TASK_PUT = 0x62, T_TASK_COMMIT = 0x63,
+       T_TASK_GET = 0x64, T_TASK_DATA = 0x65, T_TASK_DEL = 0x66, T_TASK_RUN = 0x67,
+       T_TASK_STOP = 0x68, T_TASK_STATUS = 0x69 };
 
 enum { ST_OK = 0x00, ST_UNKNOWN_TYPE = 0x02, ST_BAD_PARAM = 0x03,
        ST_OUT_OF_RANGE = 0x04, ST_NOT_READY = 0x05, ST_BAD_CMD = 0x06,
@@ -236,7 +242,7 @@ enum { CMD_STOP = 0x01, CMD_START_A = 0x02, CMD_START_B = 0x03, CMD_START_C = 0x
 /* v2：能力位（T_HELLO 末尾 u32）——上位机据此决定页面显示什么，不靠猜版本号 */
 #define HOST_CAPS_ALL  ((uint32_t)(HOST_CAP_TELEM2 | HOST_CAP_ACTIONS | HOST_CAP_SERVO \
                                  | HOST_CAP_DRIVE | HOST_CAP_CAL | HOST_CAP_FLASH \
-                                 | HOST_CAP_WATCHDOG))
+                                 | HOST_CAP_WATCHDOG | HOST_CAP_TASK))
 
 #define TELEM_LEN  32u
 #define TELEM2_LEN 64u
@@ -310,6 +316,7 @@ static void send_param_report(uint8_t seq, uint16_t id, float v)
   frame_send(T_PARAM_REPORT, seq, p, 6);
 }
 
+static uint16_t rd_u16(const uint8_t *p) { return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8)); }
 static void put_u16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
 static void put_u32(uint8_t *p, uint32_t v)
 {
@@ -575,6 +582,129 @@ static void rx_byte(uint8_t b)
   }
 }
 
+/* =====================================================================
+ *  v2：上位机任务程序（T_TASK_*，见 docs/任务编程.md §5）
+ *
+ *  车只是执行机构：上位机把任务编成 task_prog 的二进制、分片 PUT 上来，
+ *  COMMIT 校验通过才擦进 Flash（App/Svc/task_store.c：页 60/61/62 三个槽）。
+ *
+ *  为什么 LIST_R / DATA 不在这里连发：一帧 board_dl_send 是**同步阻塞**的
+ *  （64 字节数据 + 11 字节帧头 ≈ 6.5ms @115200）。一次 GET 最长 2008 字节
+ *  ≈ 32 帧 ≈ 200ms，在 handle_frame 里连发会把主循环按住那么久：遥测断、
+ *  OLED 不刷、驾驶看门狗（500ms）也可能被误判成掉线。所以照参数 dump 的老
+ *  办法挂"待发"标记，由 host_link_poll 每拍推进一帧。
+ *
+ *  收尾约定（§5 的语法允许 n=0，桥按这个判"收完了"，文档同一节有写）：
+ *    LIST_R：每个在场的槽一帧，最后**必发一帧空载荷**；
+ *    DATA  ：从 off=0 起每帧最多 TASK_DATA_CHUNK 字节，最后**必发一帧空数据**。
+ *  查询失败（槽是空的 / 分片没传够）不挂待发，直接回 ACK 错误码。
+ * ===================================================================== */
+#define TASK_TX_PER_POLL 1u     /* 每拍最多推一帧：单帧阻塞与一帧 T_TELEM2（≈6ms）同量级 */
+#define TASK_DATA_CHUNK  64u    /* 一帧 DATA 的数据字节数（PUT 方向上位机可给到 120） */
+#define TASK_STATUS_LEN  11u    /* id(2) state(1) running(1) block(2) elapsed(4) flags(1) */
+
+enum { TASK_TX_NONE = 0u, TASK_TX_LIST, TASK_TX_DATA };
+
+static uint8_t  s_task_tx_kind;
+static uint8_t  s_task_tx_seq;
+static uint8_t  s_task_tx_slot;
+static uint16_t s_task_tx_off;
+/* STATUS 推送：内容一变就推，没变 1Hz 心跳（§5） */
+static uint8_t  s_status_last[TASK_STATUS_LEN];
+static uint8_t  s_status_seen;
+static uint32_t s_status_ms;
+
+/* 当前解释器状态打包成 T_TASK_STATUS 载荷。没载入过任何程序时 id=0xFFFF、state=0xFF：
+ * 上位机据此显示"车上没有载入任务"，而不是把 0 号槽当成在跑。 */
+static void pack_task_status(uint8_t *p)
+{
+  uint8_t loaded = TaskRun_Loaded();
+  put_u16(p, (uint16_t)(loaded ? TaskRun_Id() : 0xFFFFu));
+  p[2] = (uint8_t)(loaded ? TaskRun_State() : TASK_RUN_OFF);
+  p[3] = TaskRun_IsRunning();
+  put_u16(&p[4], TaskRun_Block());
+  put_u32(&p[6], TaskRun_ElapsedMs());
+  p[10] = TaskRun_Flags();
+}
+
+/* 目录一帧：u16 id, u16 len, u16 crc, u8 flags, u8 name_len, name...（§5）。
+ * 缓冲多留 1 字节：TaskStore_Name() 会在名字后面补 '\0'。 */
+static void send_task_list_one(uint8_t seq, uint8_t slot)
+{
+  uint8_t p[8u + TASK_STORE_NAME_MAX + 1u];
+  uint8_t n = TaskStore_Name(slot, (char *)&p[8], (uint8_t)(TASK_STORE_NAME_MAX + 1u));
+  put_u16(&p[0], (uint16_t)slot);
+  put_u16(&p[2], TaskStore_Len(slot));
+  put_u16(&p[4], TaskStore_Crc(slot));
+  p[6] = TaskStore_Flags(slot);
+  p[7] = n;
+  frame_send(T_TASK_LIST_R, seq, p, (uint8_t)(8u + n));
+}
+
+/* 读回一帧：u16 id, u16 off, 数据（0 字节 = 整份发完了）。返回本帧带的数据字节数 */
+static uint8_t send_task_data_one(uint8_t seq, uint8_t slot, uint16_t *off)
+{
+  uint8_t p[4u + TASK_DATA_CHUNK];
+  const uint8_t *img = TaskStore_Image(slot);
+  uint16_t len = TaskStore_Len(slot);
+  uint16_t n = 0u;
+
+  put_u16(&p[0], (uint16_t)slot);
+  put_u16(&p[2], *off);
+  if (img != NULL && *off < len) {
+    n = (uint16_t)(len - *off);
+    if (n > TASK_DATA_CHUNK) n = TASK_DATA_CHUNK;
+    memcpy(&p[4], &img[*off], n);
+    *off = (uint16_t)(*off + n);
+  }
+  frame_send(T_TASK_DATA, seq, p, (uint8_t)(4u + n));
+  return (uint8_t)n;
+}
+
+/* 任务回包的剩余部分：每拍一帧（与参数 dump 同一个套路）。
+ * 计数只算**真发出去的帧**：空槽只是跳过，不算占用配额 —— 否则空目录要把
+ * 3 个空槽走完才发收尾帧，白白多等 3 拍。 */
+static void task_tx_poll(void)
+{
+  uint8_t n = 0u;
+
+  while (s_task_tx_kind != TASK_TX_NONE && n < TASK_TX_PER_POLL) {
+    if (s_task_tx_kind == TASK_TX_LIST) {
+      if (s_task_tx_slot < TASK_STORE_SLOTS) {
+        if (TaskStore_Present(s_task_tx_slot) != 0u) {
+          send_task_list_one(s_task_tx_seq, s_task_tx_slot);
+          n++;
+        }
+        s_task_tx_slot++;
+      } else {
+        frame_send(T_TASK_LIST_R, s_task_tx_seq, NULL, 0u);   /* 收尾帧：目录发完 */
+        s_task_tx_kind = TASK_TX_NONE;
+        n++;
+      }
+    } else {
+      if (send_task_data_one(s_task_tx_seq, s_task_tx_slot, &s_task_tx_off) == 0u) {
+        s_task_tx_kind = TASK_TX_NONE;                        /* 收尾帧已发 */
+      }
+      n++;
+    }
+  }
+}
+
+/* 状态推送：内容一变就推，没变 1Hz 心跳 */
+static void task_status_poll(uint32_t now_ms)
+{
+  uint8_t st[TASK_STATUS_LEN];
+
+  pack_task_status(st);
+  if (s_status_seen == 0u || memcmp(st, s_status_last, TASK_STATUS_LEN) != 0 ||
+      (uint32_t)(now_ms - s_status_ms) >= 1000u) {
+    memcpy(s_status_last, st, TASK_STATUS_LEN);
+    s_status_seen = 1u;
+    s_status_ms = now_ms;
+    frame_send(T_TASK_STATUS, 0u, st, TASK_STATUS_LEN);
+  }
+}
+
 static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t len)
 {
   /* 任何一帧合法帧都算"链路还活着"：驾驶时靠它喂看门狗，500ms 收不到就自动停车
@@ -761,6 +891,123 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
     break;
   }
 
+  /* ---------------- v2：上位机任务程序（§5，0x60..0x69） ---------------- */
+
+  case T_TASK_LIST:
+    /* 目录：只挂待发，由 poll 一帧帧发（一槽一帧 + 一帧空的收尾） */
+    s_task_tx_seq  = seq;
+    s_task_tx_slot = 0u;
+    s_task_tx_kind = TASK_TX_LIST;
+    break;
+
+  case T_TASK_PUT: {
+    uint16_t id, off;
+    if (len < 5u) { send_ack(seq, ST_BAD_PARAM); break; }
+    id  = rd_u16(p);
+    off = rd_u16(&p[2]);
+    if (id >= TASK_STORE_SLOTS) { send_ack(seq, ST_OUT_OF_RANGE); break; }
+    /* 只写 RAM 暂存，不碰 Flash ⇒ 车在动也允许（真正擦写要等 COMMIT） */
+    if (TaskStore_Stage(off, &p[4], (uint16_t)(len - 4u)) != TASK_STORE_OK) {
+      send_ack(seq, ST_OUT_OF_RANGE);        /* off + 本片 越过 2008 字节的程序区 */
+      break;
+    }
+    send_ack(seq, ST_OK);
+    break;
+  }
+
+  case T_TASK_COMMIT: {
+    uint16_t id, tlen, tcrc;
+    uint8_t  name_len = 0u;
+    const char *name = NULL;
+    int rc;
+    if (len < 6u) { send_ack(seq, ST_BAD_PARAM); break; }
+    id   = rd_u16(p);
+    tlen = rd_u16(&p[2]);
+    tcrc = rd_u16(&p[4]);
+    if (id >= TASK_STORE_SLOTS) { send_ack(seq, ST_OUT_OF_RANGE); break; }
+    if (len > 6u) {
+      /* §5 只写了前 6 字节；名字（u8 name_len + name）是超集，桥只发 6 字节也认 */
+      name_len = p[6];
+      if (name_len > TASK_STORE_NAME_MAX || (uint16_t)(7u + (uint16_t)name_len) > (uint16_t)len) {
+        send_ack(seq, ST_BAD_PARAM);
+        break;
+      }
+      name = (const char *)&p[7];
+    }
+    if (renwu_flag != 0u) {
+      /* 旧 renwu 流程在跑：擦一页会把 CPU 按住几十毫秒，正在跑的控制环直接失控 */
+      send_ack(seq, ST_BUSY);
+      break;
+    }
+    /* flags 只能给 0：上位机契约（API.md §3.6）里没有这个字节 ⇒ TASK_STORE_FLAG_AUTO
+     * （开机自启）目前没有下发通路，要做的话得先给 COMMIT 加一个 flags 字节（两边一起改） */
+    rc = TaskStore_Commit((uint8_t)id, tlen, tcrc, 0u, name, name_len);
+    if (rc == TASK_STORE_OK) {
+      send_ack(seq, ST_OK);
+    } else {
+      send_ack(seq, (rc == TASK_STORE_E_BUSY) ? ST_BUSY : ST_BAD_PARAM);
+    }
+    break;
+  }
+
+  case T_TASK_GET: {
+    uint16_t id;
+    if (len < 2u) { send_ack(seq, ST_BAD_PARAM); break; }
+    id = rd_u16(p);
+    if (id >= TASK_STORE_SLOTS) { send_ack(seq, ST_OUT_OF_RANGE); break; }
+    if (TaskStore_Present((uint8_t)id) == 0u) { send_ack(seq, ST_NOT_READY); break; }
+    /* 成功时不先回 ACK：一帧帧 DATA 才是应答（桥按"数据为空的那帧"收尾） */
+    s_task_tx_seq  = seq;
+    s_task_tx_slot = (uint8_t)id;
+    s_task_tx_off  = 0u;
+    s_task_tx_kind = TASK_TX_DATA;
+    break;
+  }
+
+  case T_TASK_DEL: {
+    uint16_t id;
+    int rc;
+    if (len < 2u) { send_ack(seq, ST_BAD_PARAM); break; }
+    id = rd_u16(p);
+    if (id >= TASK_STORE_SLOTS) { send_ack(seq, ST_OUT_OF_RANGE); break; }
+    if (renwu_flag != 0u) { send_ack(seq, ST_BUSY); break; }
+    rc = TaskStore_Erase((uint8_t)id);
+    send_ack(seq, (rc == TASK_STORE_OK) ? ST_OK
+                 : ((rc == TASK_STORE_E_BUSY) ? ST_BUSY : ST_BAD_PARAM));
+    break;
+  }
+
+  case T_TASK_RUN: {
+    uint16_t id;
+    int rc;
+    if (len < 2u) { send_ack(seq, ST_BAD_PARAM); break; }
+    id = rd_u16(p);
+    if (id >= TASK_STORE_SLOTS) { send_ack(seq, ST_OUT_OF_RANGE); break; }
+    if (renwu_flag != 0u) {
+      send_ack(seq, ST_BUSY);                /* 旧流程占着电机（与 T_DRIVE 同一条铁律） */
+      break;
+    }
+    if (HostExt_DriveEnabled() != 0u) {
+      send_ack(seq, ST_BUSY);                /* 正在被上位机驾驶：先松手再交任务 */
+      host_link_send_text("[fw] task run refused: host driving\r\n");
+      break;
+    }
+    rc = TaskStore_Load((uint8_t)id);        /* 校验格式 + 拷进 RAM（运行期不碰 Flash） */
+    if (rc != 0) {
+      send_ack(seq, (rc == TASK_STORE_E_EMPTY) ? ST_NOT_READY
+                   : ((rc == TASK_STORE_E_BUSY) ? ST_BUSY : ST_BAD_PARAM));
+      break;
+    }
+    if (TaskRun_Start(id) != 0) { send_ack(seq, ST_BAD_PARAM); break; }
+    send_ack(seq, ST_OK);
+    break;
+  }
+
+  case T_TASK_STOP:
+    TaskRun_Stop();                          /* 幂等，且会停车 */
+    send_ack(seq, ST_OK);
+    break;
+
   default:
     send_ack(seq, ST_UNKNOWN_TYPE);
     break;
@@ -812,6 +1059,10 @@ void host_link_poll(uint32_t loop_us)
       if (s_dump_i >= NSPEC) s_dump_busy = 0u;
     }
   }
+
+  /* 任务程序回包（目录/读回）同样分帧，每拍一帧；状态推送按"变了就发 + 1Hz 心跳" */
+  task_tx_poll();
+  task_status_poll(now);
 }
 
 void host_link_tick_1hz(void)

@@ -35,8 +35,11 @@ $deps = @{
   't_jy61p'    = @('App/Svc/jy61p.c')
   't_pid'      = @('App/Svc/pid.c')
   't_tracing'  = @('App/Svc/tracing.c')
-  # host_link.c 只调 HostExt_*（真业务在 host_ext.c），所以协议层测试用 host_extstub.c 顶替
-  't_hostlink' = @('App/Svc/host_link.c', 'App/Svc/jy61p.c', 'test/stub/host_extstub.c')
+  # host_link.c 只调 HostExt_*（真业务在 host_ext.c），所以协议层测试用 host_extstub.c 顶替；
+  # 任务帧（T_TASK_*）调的 TaskStore_*/TaskRun_* 由 host_taskstub.c 的 RAM 替身提供
+  #（真 Flash/解释器语义分别由 t_taskstore.c、t_task.c 用真源码测）
+  't_hostlink' = @('App/Svc/host_link.c', 'App/Svc/jy61p.c', 'test/stub/host_extstub.c',
+                   'test/stub/host_taskstub.c')
   # 反过来，host_ext.c 的控制模块依赖用 host_appstub.c 顶替
   't_hostext'  = @('App/Svc/host_ext.c', 'test/stub/host_appstub.c')
   't_tracecal' = @('App/Svc/trace_cal.c', 'App/Svc/tracing.c')
