@@ -142,6 +142,8 @@ let sim = { yaw: -64.7, pitch: 0.4, roll: -0.8, vl: 0, vr: 0, vbat: 12040, lineP
 const logs = []
 const clients = new Set()
 let lastStats = Date.now()
+// 回放用过的最后一次文件：和桥一样，只给 `{mode:"replay"}` 时复用它
+let lastReplay = ''
 
 function log(level, text) {
   const item = { ts_ms: Date.now(), level, text }
@@ -345,11 +347,17 @@ const server = http.createServer(async (req, res) => {
     if (path === '/api/link/connect' && req.method === 'POST') {
       const body = (await readBody(req)) || {}
       if (!['sim', 'serial', 'replay'].includes(body.mode)) return fail(res, 400, 'mode 必须是 sim/serial/replay', 'bad_param')
+      if (body.mode === 'replay' && !body.replay && !lastReplay) {
+        return fail(res, 400, '回放要指定文件：{mode:"replay", replay:"<jsonl>"}', 'bad_param')
+      }
+      const rec = body.replay ? String(body.replay) : lastReplay   // 和桥一样：不给文件就复用上次那个
+      if (rec) lastReplay = rec
       link.mode = body.mode
-      link.port = body.port ?? null
+      link.port = body.mode === 'replay' ? rec.split(/[\\/]/).pop() : (body.port ?? null)
       link.baud = body.baud ?? 115200
       link.connected = true
-      log('info', `已连接：${link.mode}${link.port ? ' ' + link.port : ''}`)
+      link.note = body.mode === 'replay' ? `回放 ${link.port}（${body.speed ?? 1}×）` : ''
+      log('info', `已连接：${link.mode}${link.mode === 'serial' && link.port ? ' ' + link.port : ''}`)
       ack('link/connect')
       send('link', link)
       return json(res, 200, { ok: true, link })
@@ -603,6 +611,17 @@ const server = http.createServer(async (req, res) => {
 
     if (path === '/api/record' && req.method === 'GET') return json(res, 200, { ok: true, record })
 
+    if (path === '/api/recordings') {
+      return json(res, 200, {
+        ok: true,
+        dir: '/mock/data/logs',
+        items: [
+          { name: 'rec_20261003_101500.jsonl', path: '/mock/data/logs/rec_20261003_101500.jsonl', size: 184320, mtime_ms: Date.now() - 60_000 },
+          { name: 'rec_20261002_203000.jsonl', path: '/mock/data/logs/rec_20261002_203000.jsonl', size: 2097152, mtime_ms: Date.now() - 86_400_000 },
+        ],
+      })
+    }
+
     if (path === '/api/stream') {
       res.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
@@ -651,5 +670,5 @@ startTimers()
 server.listen(PORT, HOST, () => {
   console.log(`[mock] 假后端已启动：http://${HOST}:${PORT}`)
   console.log(`[mock] 静态目录：${DIST}`)
-  console.log('[mock] 端点：/api/health /link /ports /params* /actions* /servo* /drive /cmd /log /cal /presets* /record /stream')
+  console.log('[mock] 端点：/api/health /link /ports /params* /actions* /servo* /drive /cmd /log /cal /presets* /record /recordings /stream')
 })

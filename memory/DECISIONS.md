@@ -12,6 +12,16 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-03 — 真车只读串口链路记为「待硬件」，软件侧不再继续追（用户明确选择「先放着，把这条记为待硬件」）
+选择：真车只读串口链路记为「待硬件」，软件侧不再继续追（用户明确选择「先放着，把这条记为待硬件」）
+放弃：保留两条现场恢复路径（杜邦线短接排针 pin5↔pin17 跑 out\_vcomloop.py 判定；USB-TTL 直连 U12 的 4=GND/5=PC0/6=PC1），否决了「改固件或换协议绕开串口」
+因为：本机实测两个方向都没有一个字节：板子 s_stats rx=0 / tx=1318894 / telem_hz=50 且 LPUART1 配置正确（CR1=0x0000002D、BRR=0x0005C3B2、PC0/PC1=AF8+上拉、IDR 都=1），而 COM26（JLink CDC UART Port，hwid SER=000602711039 与探针 S/N 一致）静听 2.0 s 收 0 字节、发 3 帧 HELLO 板子 rx 也不动 ⇒ 缺 J-Link 20 脚排针 pin5/pin17 到 U12 第 5/6 脚那两根线，或这台探针的 VCOM 没真正工作；用户不愿现在动线
+
+## 2026-10-03 — 参数编辑的四个端点严格按契约分工：`/api/params/set` 只改桥这边缓存并按「与车上值是否相同」标脏，`/api/params/push` 才把脏项下发到车并清脏，`/api/params/reload` 是唯一「从车上读回全表」的动作，`/api/params/defaults` 只改本机表并标脏（等用户点下发）。
+选择：参数编辑的四个端点严格按契约分工：`/api/params/set` 只改桥这边缓存并按「与车上值是否相同」标脏，`/api/params/push` 才把脏项下发到车并清脏，`/api/params/reload` 是唯一「从车上读回全表」的动作，`/api/params/defaults` 只改本机表并标脏（等用户点下发）。
+放弃：否决了「set 后自动下发」与「push 就是读回」这两种旧实现（前者让脏标记永远不出现、后者等于把 reload 当 push）。
+因为：契约 `tools/console/docs/API.md:32-36` 和假后端 `tools/console/web/mock/server.mjs` 都是这么定义的；前端「全部下发（N）」按钮的 N 就是脏项数，set 若自作主张下发，界面上「改了没下发」的状态就不存在了。
+
 ## 2026-10-03 — 上位机连真车走**无线下载器插 U12 后出现的虚拟串口**（板侧 = U12 脚 5 = LPUART1_RX/PC0、脚 6 = LPUART1_TX/PC1、脚 4 = GND），或临时用 USB-TTL 交叉接同样三根线
 选择：上位机连真车走**无线下载器插 U12 后出现的虚拟串口**（板侧 = U12 脚 5 = LPUART1_RX/PC0、脚 6 = LPUART1_TX/PC1、脚 4 = GND），或临时用 USB-TTL 交叉接同样三根线
 放弃：把 J-Link 自带的 "JLink CDC UART Port"(COM26) 当串口用 —— 被否决：实际测到 PC 侧发 3 帧、PC 收到 0 字节、车侧 rx/crc/resync 全 0，J-Link VCOM 的 UART 引脚根本不在去 U12 的那条排线上

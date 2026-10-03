@@ -437,6 +437,29 @@ class Console:
                     "path": self.rec_path or None, "samples": self.rec_samples,
                     "started_ms": self.rec_started}
 
+    def recordings(self) -> dict:
+        """`/api/recordings`：能拿来回放的录制文件（`--record` 写出的 JSONL）。
+
+        回放模式只能吃这些文件，所以列表直接给前端选，免得用户手打路径。
+        """
+        items = []
+        try:
+            names = os.listdir(self.log_dir)
+        except OSError:
+            names = []
+        for name in names:
+            if not name.lower().endswith(".jsonl"):
+                continue
+            path = os.path.join(self.log_dir, name)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            items.append({"name": name, "path": path,
+                          "size": int(st.st_size), "mtime_ms": int(st.st_mtime * 1000)})
+        items.sort(key=lambda it: it["mtime_ms"], reverse=True)
+        return {"ok": True, "dir": self.log_dir, "items": items}
+
     def params_payload(self) -> dict:
         """`/api/params` 与 SSE `params` 的载荷：前端按 `.items` 读，别改成裸列表。"""
         with self.lock:

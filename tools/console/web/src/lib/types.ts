@@ -44,6 +44,14 @@ export interface HealthInfo {
   sim: boolean
 }
 
+/** 一个可回放的录制文件（`GET /api/recordings`） */
+export interface RecItem {
+  name: string
+  path: string
+  size: number
+  mtime_ms: number
+}
+
 /** 参数分组：契约固定这几个取值 */
 export type ParamGroup = '速度环' | '角度环' | '循迹环' | '串级' | '机械/车辆' | '电源' | '任务'
 

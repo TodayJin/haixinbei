@@ -14,6 +14,15 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：参数闭环修好并提交 8c36b05：tools/console/bridge/state.py 的 param_set 只改桥缓存并按「与车上值是否相同」标脏、param_push 才真下发（T_PARAM_SET + 等 T_ACK/T_PARAM_REPORT，成功后写回 car_values 清脏）、param_reload 是唯一读回全表、param_defaults 只改本机；server.py 的 /api/params/push|defaults 透传 ids/keys 且保存预设时 keys 回填；tools/console/web/src/lib/store.ts 的 setParam 补上此前从未被调用的 api.paramSet。验证：pytest 48 passed、vitest 37 passed、npm run build 绿（dist/assets/index-DhY0ZJzb.js 285.88 kB）、out\_closeloop.py 打仿真桥 8 步全绿、store.test.ts 变异验证（删掉 paramSet 调用即 2 项失败）。
+未完成：①真车只读链路待硬件（排针 pin5/17 到 U12 的 5/6 脚连线，或 USB-TTL）；②像素级无头浏览器截图仍未成功（沙箱里 Chrome/Edge headless 失败），现以 out/console/ssr 下 9 份 SSR HTML 快照替代。
+下一步：用户给出新 COM 口后：python out\_linkprobe.py <COM> 115200 3 看板子 rx 是否 +3，再 python -m bridge.main --serial <COM> 接通真车只读链路。
+
+## 2026-10-03
+完成：修好“浏览器里改参数永远到不了车”：①`tools/console/bridge/state.py` 的 `param_set` 改成只改桥缓存 + 按与车上值是否相同标脏，`param_push(ids/keys)` 才逐条下发并清脏，`param_reload` 才是读回全表，`param_defaults` 只改本机；`preset_apply` 先改缓存再一次性下发（应用预设才真的到车）。②`bridge/server.py` 的 push/defaults 透传 ids/keys，保存预设时 keys 按实际抓到的类别回填（原来不带 targets 存出来是空数组）。③`tools/console/web/src/lib/store.ts` 的 `setParam` 除本地乐观更新外会调 `api.paramSet()` —— 此前该函数从未被任何页面调用，「全部下发」是空转。验证：pytest 48 passed；vitest 37 passed；`out/_closeloop.py` 对仿真桥 8 步全绿（改→脏→下发→不脏→存预设→恢复默认→应用预设→从车读回 2811→固化→动作改/固化/播放/还原→删预设）；`out/_static_check.py` 证桥能把 `web/dist` 托起来（/index.html 200、js 290478 B、健康检查 web_built=True）。已提交 `8c36b05`（工作树干净）。
+下一步：真车只读链路仍卡在硬件：J-Link 的 20 脚排线里没有 UART 线（SEGGER 官方文档：SWD 模式 pin 17=NC、pin 19=5V，偶数脚全 GND），所以 COM26 与板子 U12 的 PC0/PC1 无电气通路。需要用户把无线下载器插回 U12（或 USB-TTL 交叉接 U12 的 4=GND/5=PC0/6=PC1），之后 `python out\_linkprobe.py <新COM口> 115200 3` 复验。
+
+## 2026-10-03
 完成：删掉旧 Qt 上位机并整仓清理：`tools/host/`（git 跟踪 28 文件、约 8256 行）已从 git 与磁盘删除（从提交 `5051a4d` 可取回），连只服务于它的草稿脚本 `tools/_patch3.py`、`tools/_render_field.py` 一起删；`.gitignore` 补 `firmware/test/build/`（run_tests.ps1 生成的 .exe）与 `.pytest_cache/`，并把已跟踪的 10 个 .exe 从索引移除。三个新提交：`dbda415` 固件 v2 扩展、`cf237eb` 新上位机 tools/console（67 文件）、`daef5ca` 清理；工作树干净。文档指向已改对（`docs/上位机通信协议.md`、`docs/全地形机器人比赛规则与场地.md:137`、`固件接口规格.md:422`）。回归：`pwsh -File firmware/test/run_tests.ps1` → 通过 10 / 失败 0 / 编译失败 0。
 下一步：`memory/PROJECT.md` 的「怎么跑和怎么测」还写着“当前 9 个测试”（实为 10，新增 t_hostext）与「现状」里旧的 text 111012/data 368/bss 15264、烧录 111388 字节（现为 114732/364/15656、115104 字节），下次顺手订正。
 
@@ -1158,13 +1167,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：第 10 节剩余待拍板点；原理图网络表/立创EDA 工程未做
 下一步：确认接法/循迹路数/驱动型号/编码器供电/舵机数量/板尺寸后出原理图连接表
 
-## 2026-09-14
-完成：产出新主板选型文档 `pcb/主板选型与设计.md`：系统框图、电源架构（12V 单输入，TPS5450 转 5V/5A、AP2112K 转 3.3V，含反接/TVS/保险丝）、主控选型（G474RET6 首选/G431RBT6 降本，LQFP64）、功能块选型（ICM-42688-P IMU、INA226 电源监测、8 路循迹、2 路 AB 编码器、外接电机驱动接口）、完整引脚分配表（含旧板→新板对应关系）、接口定义、初版 BOM、布局布线建议。
-未完成：第 10 节 8 个待拍板点未确认；原理图网络表/立创EDA 工程未做
-下一步：等用户确认无线方案/IMU 板载与否/循迹路数/驱动型号/编码器电平/舵机数量/板尺寸层数/保留外设，再出原理图连接表
-
-## 2026-09-14
-完成：调研了旧参考固件 `D:\Today\haixinbei\Haixin`（STM32F103VET6 + HAL + FreeRTOS），从 `Haixin_FreeRtos.ioc` 与 `Core/Src/*.c`、`Hardware/*.c` 还原出完整硬件接口表：8 路循迹 PA4/PA5/PC4/PC5/PB0/PB1/PE7/PE8；电机 PWM TIM8_CH1/CH2=PC6/PC7、方向 PD6/PD7+PB4/PB5；舵机 TIM1_CH3/CH4=PE13/PE14；OLED I2C1 remap PB8/PB9；JY61P USART3+DMA PB10/PB11@115200；按键 PC1/2/3；蜂鸣器 PD10；RGB PD0/PD1/PD3/PD8/PD9/PD11；TIM2(1ms)/TIM4(10ms) 做 PID 周期中断；HSE 8MHz@72MHz。
-发现用户给的参考路径 `D:\Today\新建文件夹\Haixin` 不存在，旧代码实际在工作区内。
-未完成：新板选型 BOM、引脚分配、原理图尚未产出
-下一步：按已确认约束（G474/G431、12V、外部驱动、立创EDA）产出选型方案与引脚表，再画原理图
+> 更早的会话条目已归档到 158 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。

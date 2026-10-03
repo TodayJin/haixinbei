@@ -5,10 +5,12 @@ import { store, useStore } from '../lib/store'
 import { bytesToHuman, fmt, fmtInt } from '../lib/format'
 
 export function SettingsPage() {
-  const { link, settings, sse, stats, ports, presets } = useStore()
+  const { link, settings, sse, stats, ports, presets, recordings } = useStore()
   const [port, setPort] = React.useState(link?.port ?? 'COM26')
   const [baud, setBaud] = React.useState(String(link?.baud ?? 115200))
   const [busy, setBusy] = React.useState(false)
+  const [rec, setRec] = React.useState('')
+  const [speed, setSpeed] = React.useState(1)
 
   React.useEffect(() => {
     if (link?.port) setPort(link.port)
@@ -17,11 +19,21 @@ export function SettingsPage() {
 
   React.useEffect(() => {
     void store.listPorts()
+    void store.listRecordings()
   }, [])
+
+  // 列表到手就默认选中最新那个（列表本身是按 mtime 倒序的）
+  React.useEffect(() => {
+    if (!rec && recordings.length) setRec(recordings[0].path)
+  }, [recordings, rec])
 
   const doConnect = async (mode: 'sim' | 'serial' | 'replay') => {
     setBusy(true)
-    await store.connect(mode, mode === 'serial' ? port : undefined, mode === 'serial' ? Number(baud) : undefined)
+    if (mode === 'replay') {
+      await store.connect('replay', undefined, undefined, rec, speed)
+    } else {
+      await store.connect(mode, mode === 'serial' ? port : undefined, mode === 'serial' ? Number(baud) : undefined)
+    }
     setBusy(false)
   }
 
@@ -80,6 +92,46 @@ export function SettingsPage() {
             </div>
             <p className="text-[12px] leading-relaxed text-slate-500">
               真车要连的是无线下载器那个虚拟串口（默认 115200 8N1）。桥只监听 127.0.0.1，不对外开放。
+            </p>
+          </div>
+        </Card>
+
+        <Card
+          title="回放录制"
+          right={
+            <Badge tone={link?.mode === 'replay' ? 'mint' : 'slate'}>
+              <StatusDot on={link?.mode === 'replay'} tone="mint" />
+              {link?.mode === 'replay' ? '回放中' : '未使用'}
+            </Badge>
+          }
+        >
+          <div className="grid gap-3">
+            <div className="flex flex-wrap items-end gap-2">
+              <div>
+                <div className="mb-1 text-[12px] text-slate-400">录制文件</div>
+                <select className="field w-64" value={rec} onChange={(e) => setRec(e.target.value)}>
+                  {recordings.length === 0 && <option value="">（data/logs 里还没有 jsonl）</option>}
+                  {recordings.map((r) => (
+                    <option key={r.path} value={r.path}>
+                      {r.name}（{bytesToHuman(r.size)}）
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <div className="mb-1 text-[12px] text-slate-400">倍速</div>
+                <NumberField value={speed} min={0.25} max={8} step={0.25} decimals={2} onChange={setSpeed} unit="×" />
+              </div>
+              <button className="btn-ghost" onClick={() => void store.listRecordings()}>
+                <RefreshCw size={13} /> 刷新列表
+              </button>
+              <button className="btn" disabled={busy || !rec || link?.mode === 'replay'} onClick={() => void doConnect('replay')}>
+                播放
+              </button>
+            </div>
+            <p className="text-[12px] leading-relaxed text-slate-500">
+              回放把「控制」页点「开始记录」时录下来的遥测（<span className="num">data/logs/rec_*.jsonl</span>
+              ）按原时间戳重新喂一遍：波形、仪表、日志都照常走，只是数据来自文件、循环播放。想回到实时就点上面的「连模拟器」或「连串口」。
             </p>
           </div>
         </Card>

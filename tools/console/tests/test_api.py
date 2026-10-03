@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -253,6 +254,50 @@ def test_record_endpoint(live):
     # GET /api/record 也要给同样三个字段
     code, j, _ = GET(base + "/api/record")
     assert code == 200 and set(j["record"]) >= {"ok", "recording", "path", "samples"}
+
+
+def test_recordings_and_replay(live):
+    """录制 → 列文件 → 当场切回放 → 帧还在涨 → 切回 sim。
+
+    `live` 是 session 作用域的，所以**必须**在 finally 里切回 sim，否则后面的
+    用例（比如 SSE 那条断言 mode == "sim"）会跟着挂。
+    """
+    base, _, _ = live
+    POST(base + "/api/record", {"on": True})
+    time.sleep(1.6)                                   # 仿真车 50 Hz ⇒ 约 80 帧
+    code, j, _ = POST(base + "/api/record", {"on": False})
+    rec = j["record"]
+    assert rec["recording"] is False and rec["samples"] >= 20, rec
+    path = rec["path"]
+    assert path and os.path.isfile(path)
+
+    # GET /api/recordings：前端「回放录制」下拉的数据源
+    code, j, _ = GET(base + "/api/recordings")
+    assert code == 200 and j["ok"] is True and j["dir"]
+    assert os.path.basename(path) in [it["name"] for it in j["items"]], j["items"]
+    for it in j["items"]:
+        assert {"name", "path", "size", "mtime_ms"} <= set(it)
+    assert j["items"] == sorted(j["items"], key=lambda it: it["mtime_ms"], reverse=True)
+
+    # 不给文件 = 明确失败，而且**原来那条链路照旧在跑**（switch 先建后停）
+    code, j, _ = POST(base + "/api/link/connect", {"mode": "replay"})
+    assert code == 200 and j["ok"] is False and "回放" in j["error"], j
+    code, j, _ = GET(base + "/api/link")
+    assert j["mode"] == "sim" and j["connected"] is True, "失败的连接不许把旧链路弄断"
+
+    try:
+        code, j, _ = POST(base + "/api/link/connect",
+                          {"mode": "replay", "replay": path, "speed": 4})
+        assert code == 200 and j["ok"] is True, j
+        assert j["link"]["mode"] == "replay"
+        assert os.path.basename(path) in (j["link"]["port"] or "")
+        before = GET(base + "/api/health")[1]["frames_seen"]
+        time.sleep(0.8)
+        after = GET(base + "/api/health")[1]["frames_seen"]
+        assert after > before, f"切到回放后没有在出帧：{before} → {after}"
+    finally:
+        code, j, _ = POST(base + "/api/link/connect", {"mode": "sim"})
+        assert j["ok"] is True and j["link"]["mode"] == "sim"
 
 
 def test_unknown_endpoint_and_cors(live):

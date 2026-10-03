@@ -248,7 +248,11 @@ class ReplayLink(LinkBase):
                     self.open_ = False
                     return out
                 self.idx = 0
-                self.t0 = now_ms
+                # 绕回开头时把时间基准挪到"现在"：t_host 是录制的**绝对**毫秒
+                # （动辄 1.7e12），不挪的话第二遍要等 t_host[0]/speed 那么久才出帧
+                # ——表现就是回放放完一遍就再也不动了。
+                self.t0 = now_ms - float(self.rows[0].get("t_host", 0)) / self.speed
+                return out
             row = self.rows[self.idx]
             if len(out) > 512:                      # 防止追帧时一口气吐太多
                 break

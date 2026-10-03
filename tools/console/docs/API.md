@@ -10,7 +10,7 @@
 - 静态前端：桥直接托管 `tools/console/web/dist/`（`GET /` → `index.html`，其余按文件返回）。
   开发期可用 `npm run dev`（Vite 5173）并把 `/api` 代理到桥的 8770 端口。
 - 默认端口 **8770**，只监听 `127.0.0.1`。
-- 三种链路模式：`serial`（真车，串口）/ `sim`（内置仿真信号源，无车可用）/ `replay`（回放 CSV）。
+- 三种链路模式：`serial`（真车，串口）/ `sim`（内置仿真信号源，无车可用）/ `replay`（回放 `data/logs/rec_*.jsonl`）。
 
 ## 1. 通用
 
@@ -25,7 +25,7 @@
 |---|---|---|
 | GET | `/api/health` | 版本/运行时长/是否仿真 |
 | GET | `/api/link` | 链路状态 + 固件握手信息 |
-| POST | `/api/link/connect` | `{mode,port?,baud?}` 连接（切换模式也用它） |
+| POST | `/api/link/connect` | `{mode,port?,baud?,replay?,speed?}` 连接（切换模式也用它；`mode:"replay"` 必须给 `replay`=jsonl 路径，`speed` 是回放倍速） |
 | POST | `/api/link/disconnect` | 断开 |
 | GET | `/api/ports` | 可用串口列表 |
 | GET | `/api/params` | 全部参数（本地值 + 默认/范围 + 脏标记） |
@@ -47,11 +47,12 @@
 | GET | `/api/log?limit=200` | 最近的文本日志 |
 | GET | `/api/cal` | 灰度标定数据（8 路黑白阈值/抖动/有效性） |
 | GET | `/api/presets` | 本机预设列表 |
-| POST | `/api/presets` | `{name, kind, data?}` 保存（`data` 省略 = 抓当前） |
+| POST | `/api/presets` | `{name, targets?:["params","actions","servo"], keys?, values?, note?}` 保存（`values` 省略 = 抓当前；`kind` 由 targets 推） |
 | POST | `/api/presets/apply` | `{name, targets:["actions","params","servo"]}` 应用 |
 | DELETE | `/api/presets?name=x` | 删除 |
-| POST | `/api/record` | `{action:"start"\|"stop"}` CSV 录制到 `tools/console/data/recordings/` |
+| POST | `/api/record` | `{action:"start"\|"stop"}` 把遥测帧逐行写成 JSONL（`data/logs/rec_*.jsonl`），供回放用 |
 | GET | `/api/record` | 录制状态 + 文件路径 |
+| GET | `/api/recordings` | `{ok,dir,items:[{name,path,size,mtime_ms}]}`：`data/logs/*.jsonl`，按 mtime 倒序（前端回放下拉） |
 
 ## 3. 数据模型
 

@@ -15,6 +15,7 @@ import type {
   LogItem,
   ParamsResponse,
   PresetItem,
+  RecItem,
   RecordStatus,
   StatsEvent,
   Telem,
@@ -79,8 +80,8 @@ export const api = {
   health: () => request<HealthInfo>('/api/health'),
   link: () => request<LinkInfo>('/api/link'),
   ports: () => request<{ ok: true; ports: { port: string; desc?: string }[] }>('/api/ports'),
-  connect: (mode: 'serial' | 'sim' | 'replay', port?: string, baud = 115200) =>
-    post<{ ok: true; link: LinkInfo }>('/api/link/connect', { mode, port, baud }),
+  connect: (mode: 'serial' | 'sim' | 'replay', port?: string, baud = 115200, replay?: string, speed?: number) =>
+    post<{ ok: true; link: LinkInfo }>('/api/link/connect', { mode, port, baud, replay, speed }),
   disconnect: () => post<{ ok: true }>('/api/link/disconnect'),
 
   params: () => request<ParamsResponse>('/api/params'),
@@ -117,6 +118,8 @@ export const api = {
 
   record: (action: 'start' | 'stop') => post<{ ok: true; record: RecordStatus }>('/api/record', { action }),
   recordStatus: () => request<{ ok: true; record: RecordStatus }>('/api/record'),
+  /** 能拿来回放的录制文件（`data/logs/rec_*.jsonl`） */
+  recordings: () => request<{ ok: true; dir: string; items: RecItem[] }>('/api/recordings'),
 }
 
 /** 打开 SSE 流（断线自动重连由浏览器 EventSource 自己做） */

@@ -85,6 +85,43 @@ describe('契约自检（需要 mock 或桥在 127.0.0.1:8770）', () => {
     expect(by[9].compound).toBe(true)
   })
 
+  it('/api/recordings 列回放文件，connect replay 收文件和倍速', async () => {
+    if (!live) return
+    const r = await getJson('/api/recordings')
+    expect(r.body.ok).toBe(true)
+    expect(typeof r.body.dir).toBe('string')
+    expect(r.body.items.length).toBeGreaterThan(0)
+    for (const k of ['name', 'path', 'size', 'mtime_ms']) expect(r.body.items[0]).toHaveProperty(k)
+
+    // 回放不带文件 = 失败（mock 返回 400；桥返回 {ok:false,error}）
+    const bad = await getJson('/api/link/connect', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'replay' }),
+    })
+    expect(bad.body.ok).toBe(false)
+
+    const ok = await getJson('/api/link/connect', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'replay', replay: r.body.items[0].path, speed: 2 }),
+    })
+    if (ok.body.ok) {
+      expect(ok.body.link.mode).toBe('replay')
+    } else {
+      // 真桥上 mock 的假路径确实不存在：失败也必须是明说的失败
+      expect(String(ok.body.error)).toMatch(/回放|不存在/)
+    }
+
+    // 收尾切回模拟器：后面的用例还指望链路是 sim
+    const back = await getJson('/api/link/connect', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'sim' }),
+    })
+    expect(back.body.link.mode).toBe('sim')
+  })
+
   it('SSE 先发 state，并能在 3s 内收到 telem', async () => {
     if (!live) return
     const res = await fetch(`${BASE}/api/stream`, { signal: AbortSignal.timeout(3000) })

@@ -24,6 +24,7 @@ import type {
   ParamItem,
   ParamsResponse,
   PresetItem,
+  RecItem,
   RecordStatus,
   StatsEvent,
   Telem,
@@ -104,6 +105,8 @@ export interface ConsoleSnapshot {
   lastError: string | null
   /** 桥扫描到的串口（设置页下拉用） */
   ports: string[]
+  /** 能回放的录制文件（设置页「回放」卡用） */
+  recordings: RecItem[]
 }
 
 const LOG_CAP = 500
@@ -129,6 +132,7 @@ class ConsoleStore {
     ringFill: 0,
     lastError: null,
     ports: [],
+    recordings: [],
   }
 
   readonly ring = new SeriesRing(loadSettings().ringPoints, CHANNELS.length)
@@ -288,9 +292,7 @@ class ConsoleStore {
   /**
    * 把一帧遥测塞进来（走的是和 SSE 完全相同的那条路径）。
    *
-   * 只给两种场合用：
-   *  - 离线预览/回归：`tools` 里的 SSR 预览脚本先把 mock 的数据喂进来，再渲染页面；
-   *  - 将来的"回放文件"功能（把 CSV 重新喂一遍，看波形图）。
+   * 只给一种场合用：离线预览/回归 —— `ssrPreview.test.tsx` 先用 mock 的数据喂进来，再渲染页面。
    * 真机数据一律走 `openStream()`，不要在这里造假数据。
    */
   feedTelem(t: Telem): void {
@@ -319,8 +321,22 @@ class ConsoleStore {
   }
 
   // ---- 链路 ----
-  async connect(mode: 'serial' | 'sim' | 'replay', port?: string, baud?: number): Promise<void> {
-    await this.op('连接', () => api.connect(mode, port, baud), `已发起连接（${mode}${port ? ' ' + port : ''}）`)
+  /**
+   * 连链路。`replay` 是回放要用的 jsonl 路径（只有回放模式需要），
+   * `speed` 是回放倍速（1.0 = 原速）。
+   */
+  async connect(
+    mode: 'serial' | 'sim' | 'replay',
+    port?: string,
+    baud?: number,
+    replay?: string,
+    speed?: number,
+  ): Promise<void> {
+    await this.op(
+      '连接',
+      () => api.connect(mode, port, baud, replay, speed),
+      `已发起连接（${mode}${mode === 'replay' && replay ? '：' + replay : port ? ' ' + port : ''}）`,
+    )
     await this.refreshAll()
   }
 
@@ -338,6 +354,17 @@ class ConsoleStore {
       this.emit()
     } catch (e) {
       this.toast('err', `扫描串口失败：${(e as Error).message}`)
+    }
+  }
+
+  /** 列出 `data/logs/*.jsonl`（设置页回放下拉用） */
+  async listRecordings(): Promise<void> {
+    try {
+      const r = await api.recordings()
+      this.snap = { ...this.snap, recordings: r.items ?? [] }
+      this.emit()
+    } catch (e) {
+      this.toast('err', `读录制文件列表失败：${(e as Error).message}`)
     }
   }
 
@@ -457,7 +484,7 @@ class ConsoleStore {
 
   async toggleRecord(): Promise<void> {
     const on = this.snap.record?.recording ?? false
-    const r = await this.op('记录', () => api.record(on ? 'stop' : 'start'), on ? '已停止记录' : '开始记录 CSV')
+    const r = await this.op('记录', () => api.record(on ? 'stop' : 'start'), on ? '已停止记录' : '开始记录 JSONL')
     if (r) {
       this.snap = { ...this.snap, record: r.record }
       this.emit()
