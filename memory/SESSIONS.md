@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：补齐 m20705 目标里剩下的两条：①「桥支持 SSE 合并」= `bridge/server.py` 的 `group_sse()` + `--sse-batch-ms`（默认 20ms，0 关，连续遥测攒成一条 `telem_batch`，单帧仍发 `telem`）+ 前端 `api.ts` 逐帧喂 `onTelem`；②「网页按 rAF 合并渲染」= `store.ts` 新增 `renderHot()`，热通知挂 `requestAnimationFrame`。`bench.py` 增 `expand()`/`batched`/`per_event`，攒批时间隔标成报文级。验证：`pytest -q`（workdir tools/console）= 142 passed；`npm test`（workdir tools/console/web）= 174 passed / 19 文件；`npm run build` 干净（dist 已重建，dist 进版本库）。实测 `python -m bridge.bench --replay --hz 100,200 --seconds 4`：帧率 100.4→100.2 / 199.3→199.8 帧/s 不变，报文 402→135 / 803→134，字节率 73.2→72.1 KB/s。提交 a8fb97f、3ac61cc。
+未完成：目标里「烧录后实测帧率/crc/延迟」的真板那一半仍做不了：硬件不在场（`GetPortNames()` 只有蓝牙 COM4/COM12，USB 上没有任何串口芯片，`USB\VID_1366*` 不在总线上），且用户还没在 A（`DL_BAUD` 降 230400 重烧）/ B（USB-TTL 接 U12 脚4/5/6 保 921600）里选。
+下一步：用户把数据口插上后（CH340 那条已改名为 COM11 的口，或 USB-TTL 接到 U12）跑 `python -m bridge.bench --serial COM11 --baud 230400`（workdir tools/console）出帧率/间隔/丢帧报告，CRC/重同步/波特率另看 `python -m bridge.probe --port COM11`。
+
+## 2026-10-03
 完成：新增承载量测工具 `tools/console/bridge/bench.py` + `tools/console/tests/test_bench.py`（14 项），并修好两处量测口径 bug（rx 基线与计时同窗口、CPU 报窗口均值）。验证：`C:\Python314\python.exe -m pytest -q`（workdir `tools\console`）= **132 passed / 37s**；`python -m bridge.bench --replay --hz 50,100,200` 三档实跑均与喂帧率一致（50.1/100.0–100.6/199.8 帧/s，丢 0–1 帧），100Hz 单条 740B、73KB/s、桥 CPU 1.6%（两遍复现）；`--sim` 量出"发指令→遥测看见"= 16–33ms（p50 30.6ms，n=6）；错误路径 `--attach 9` / `--serial COM99` 都给 rc 2 + 人话诊断。
 未完成：m20705 的"真车实测帧率/crc/延迟"仍需硬件：帧率/承载这一半现在无硬件也能用 `--replay` 出数，但 CRC/波特率那半必须等探针或 USB-TTL。
 下一步：提交 bench.py/test_bench.py + memory；文档已在 `memory/PROJECT.md`（东西都在哪）写了用法与口径；探针仍不在 USB 总线上（等用户物理拔插）、等用户选 A（固件 DL_BAUD 降 230400）或 B（USB-TTL 接 U12 保 921600）。
@@ -1156,9 +1161,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：OLED 该用这块裸屏还是 4 针模组仍未最终定；固件接口规格.md 的 OLED 节还没写
 下一步：定屏后把该屏的接法+初始化代码写进 固件接口规格.md，并给出 I2C 写命令/写数据的封装
 
-## 2026-09-16
-完成：**更正**：上一轮按 SSD1306 手册算的 IREF 电阻（400kΩ）对 **SSD1315 不适用**。查 SSD1315 手册（Rev 1.1，`SSD1315.pdf`）确认：① `ISEG = (Contrast/32) × IREF`，对比度用命令 **81h**；手册**推荐 IREF = 30µA**（对比度 FFh 时 ISEG=240µA）；② **IREF 脚电压 = VCC − 3V**（不是 SSD1306 的 −2.5V），故 `R = (VCC − 3V)/IREF`；内部泵 VCC=7.5V → **R ≈ 150kΩ**（手册 I2C 应用图用 19µA → 240kΩ）；③ **也可用内部 IREF**：命令 **ADh** 选内部、ISEG 150/240µA，此时 **IREF 脚悬空**（连电阻都省）。另有：电荷泵 VCC 三档 **7.5/8.5/9V** 由命令 **8Dh** 选；上电顺序 **先 VDD → 再 VBAT → RES# 拉低≥3µs → 8Dh 开泵 → AFh 开显示 → 约 100ms 点亮**；关电 AEh→8Dh 10h→关 VBAT→关 VDD；**VBAT 绝不能拉到地**。SSD1315 显存 128×64（不是 SH1106 的 132），命令兼容 SSD1306。
-未完成：IREF 具体阻值仍以该屏厂家参考电路为准（150kΩ 或 240kΩ）；OLED 模组/裸屏未定
-下一步：可出 I2C 初始化命令序列；定屏后写进 固件接口规格.md
-
-> 更早的会话条目已归档到 192 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 193 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
