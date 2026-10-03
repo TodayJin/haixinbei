@@ -406,3 +406,51 @@ def http_get(url: str, method: str = "GET", body: dict | None = None):
             return e.code, json.loads(raw.decode("utf-8")), raw
         except Exception:
             return e.code, None, raw
+
+
+# --------------------------------------------------- 任务存储：跑着的时候不许擦页
+def test_task_write_refused_while_running(live):
+    """解释器在跑时 COMMIT / DELETE / RUN 必须回"忙"，仿真车要和真固件同一条铁律。
+
+    固件侧判据是 `TaskRun_IsRunning()`（`host_link.c` 的三个守卫）：擦一页会把 CPU 按住
+    几十毫秒，正在跑的控制环直接失控。2026-10-03 这条检查逮到假车曾经"悄悄把任务停掉
+    再写/删"——那比拒绝更坏，操作员会以为删的是个死任务。分片 PUT 只写 RAM 暂存，
+    车在动也允许。
+    """
+    base, _bridge, _con = live
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "fixtures", "task.golden.json"), encoding="utf-8") as f:
+        g = json.load(f)
+    img = bytes.fromhex(g["hex"])
+    tid = 7
+
+    POST(base + "/api/tasks/stop", {})
+    POST(base + "/api/tasks/delete", {"id": tid})
+    for off in range(0, len(img), 120):                      # 页面按 120B 一片（协议上限 124）
+        code, j, _ = POST(base + "/api/tasks/put",
+                          {"id": tid, "offset": off, "hex": img[off:off + 120].hex()})
+        assert code == 200 and j["ok"] is True, j
+    code, j, _ = POST(base + "/api/tasks/commit",
+                      {"id": tid, "len": g["len"], "crc": g["crc16"], "name": "守卫", "flags": 0})
+    assert j["ok"] is True, j
+    code, j, _ = POST(base + "/api/tasks/run", {"id": tid})
+    assert j["ok"] is True, j
+    code, j, _ = GET(base + "/api/tasks/status")
+    assert j["status"]["running"] is True, j
+
+    code, j, _ = POST(base + "/api/tasks/delete", {"id": tid})
+    assert j["ok"] is False, f"跑着时删除必须被拒：{j}"
+    code, j, _ = POST(base + "/api/tasks/commit",
+                      {"id": tid, "len": g["len"], "crc": g["crc16"], "flags": 0})
+    assert j["ok"] is False, f"跑着时提交必须被拒：{j}"
+    code, j, _ = POST(base + "/api/tasks/run", {"id": tid})
+    assert j["ok"] is False, f"已经有一个任务在跑时再启动必须被拒：{j}"
+    code, j, _ = GET(base + "/api/tasks")
+    assert any(it["id"] == tid for it in j["items"]), "被拒的 DELETE 不许真把任务删掉"
+
+    code, j, _ = POST(base + "/api/tasks/stop", {})
+    assert j["ok"] is True, j
+    code, j, _ = POST(base + "/api/tasks/delete", {"id": tid})
+    assert j["ok"] is True, j
+    code, j, _ = GET(base + "/api/tasks")
+    assert all(it["id"] != tid for it in j["items"]), "停下来以后就能删了"

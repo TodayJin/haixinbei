@@ -5,7 +5,7 @@
  * 链接真 `App/Svc/host_ext.c` + `test/stub/host_appstub.c`（控制模块替身）。
  * 钉死的是**调用序列与安全策略**：
  *   - 驾驶三种模式各自该动哪些模块、顺序对不对；
- *   - 任务(renwu)在跑时一律拒绝；
+ *   - 任务解释器在跑时一律拒绝（`TaskRun_IsRunning()` 由 host_taskrunstub.c 造）；
  *   - 500ms 链路看门狗（边界 499/500）；
  *   - 动作表读写、舵机夹限、固化请求落到 nvram_touch()。
  * 实机的控制行为不在这里验（那是台架/上板的事）。
@@ -34,9 +34,8 @@ extern int   stub_nvram_touch;
 extern uint8_t stub_nvram_state;
 extern float Yaw, Pitch, Roll;
 
-/* host_board.c 里定义的真变量 */
-extern uint8_t renwu_flag;
-extern uint8_t black_num;
+/* host_taskrunstub.c：任务解释器的替身（host_ext.c 只问 TaskRun_IsRunning） */
+extern uint8_t stubx_taskrun_running;
 
 /* host_hal.c 的假时钟 */
 extern void host_tick_set(uint32_t ms);
@@ -59,8 +58,7 @@ static void reset_all(void)
     stub_nvram_touch = 0;
     stub_nvram_state = 0;
     Yaw = Pitch = Roll = 0.0f;
-    renwu_flag = 0u;
-    black_num = 0u;
+    stubx_taskrun_running = 0u;
     host_tick_set(1000U);
     HostExt_Init();
 }
@@ -76,14 +74,16 @@ int main(void)
     CHECK_EQ_I(HostExt_DriveGet(&a, &b), 0);
     CHECK_EQ_I(HostExt_CurrentAction(), 0);
 
-    /* ---- 2. 任务在跑时拒绝远程驾驶 ---- */
+    /* ---- 2. 任务解释器在跑时拒绝远程驾驶 ---- */
     reset_all();
-    renwu_flag = 1u;
+    stubx_taskrun_running = 1u;
+    CHECK_EQ_I(HostExt_TaskRunning(), 1);    /* 遥测/页面的"车在忙"就是问这个 */
     CHECK_EQ_I(HostExt_DriveSet(HOST_DRIVE_WHEELS, 300, 300), -2);
     CHECK_EQ_I(HostExt_DriveMode(), HOST_DRIVE_OFF);
     CHECK_EQ_I(stub_sc_enabled, 0);          /* 一根手指头都没动过 */
     CHECK_EQ_I(stub_motion_mode, 0);
-    renwu_flag = 0u;
+    stubx_taskrun_running = 0u;
+    CHECK_EQ_I(HostExt_TaskRunning(), 0);
 
     /* ---- 3. WHEELS：速度环单环（先 IDLE，再设斜坡/目标/使能） ---- */
     reset_all();
@@ -221,9 +221,6 @@ int main(void)
     CHECK(HostExt_AngleRateRef() == 2.5f);
     CHECK(HostExt_AngleCorr() == -3.75f);
     CHECK_EQ_I(HostExt_TraceCross(), 1);
-    black_num = 7u;
-    CHECK_EQ_I(HostExt_BlackNum(), 7);
-    CHECK_EQ_I(HostExt_RenwuFlag(), 0);
     stub_motion_mode = 3;                           /* 替身里的 Motion_GetMode() */
     CHECK_EQ_I(HostExt_MotionMode(), 3);
     CHECK_EQ_I(HostExt_MotionFault(), 0);

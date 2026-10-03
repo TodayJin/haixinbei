@@ -27,12 +27,12 @@ void        Motion_Stop(void);                 /* = SetMode(MOTION_IDLE) */
 void        Motion_Task(void);                 /* TIM6，5ms 一拍 */
 
 /* 运动安全故障：0 = 没有，1 = 陀螺仪失联（>500ms 没有新帧，已自动停车）
- * 只要角度环在跑就会检查（UI 的陀螺模式 + 任务流程 renwu.c 的转弯都算）。
+ * 只要角度环在跑就会检查（UI 的陀螺模式 + 任务解释器的转弯都算）。
  * 故障位会一直挂着（界面/RTT 看得见），直到重新打开角度环或显式 ClearFault()。 */
 #define MOTION_FAULT_NONE        0U
 #define MOTION_FAULT_GYRO_STALE  1U
 uint8_t     Motion_GetFault(void);
-void        Motion_ClearFault(void);      /* 清故障位（开机 / 开始跑任务流程时用） */
+void        Motion_ClearFault(void);      /* 清故障位（开机 / 开始跑任务时用） */
 
 /* ------------------------------------------------------------------
  * 5ms 控制中断的耗时统计（DWT->CYCCNT，170 MHz 时 /170 = 微秒）

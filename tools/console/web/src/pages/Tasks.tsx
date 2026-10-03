@@ -598,7 +598,7 @@ export function TasksPage() {
                 className="field h-7 flex-1 text-[12px]"
                 value={task.name}
                 onChange={(e) => updTask({ ...task, name: e.target.value.slice(0, 32) })}
-                placeholder="任务名（只存在上位机）"
+                placeholder="任务名（随 COMMIT 下发到车上的目录页）"
               />
               <button
                 className="btn-ghost !px-2 !py-0.5 text-[11px] text-neon-rose"

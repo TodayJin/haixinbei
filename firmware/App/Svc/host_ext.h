@@ -7,7 +7,7 @@
  * 改完动作角度/PID 之后一键固化到小车 Flash。
  *
  * 这些功能每一个都横跨好几个模块（motion / speed_control / gyro_control /
- * servo / nvram / PID_tracing / renwu），**全部集中在本文件**，而
+ * servo / nvram / PID_tracing / task_run），**全部集中在本文件**，而
  * `host_link.c`（串口协议）只调这里 —— 这样：
  *   1) 协议层不认识业务模块，主机测试里只用一个 stub 文件就能编译；
  *   2) 驾驶的安全策略（任务在跑就拒绝、链路断了 500ms 自动停车）只有一份实现。
@@ -43,7 +43,7 @@ void    HostExt_Init(void);
 void    HostExt_Task(uint32_t now_ms);            /* host_link_poll() 每拍调：链路看门狗 */
 void    HostExt_DriveKeepAlive(uint32_t now_ms);  /* 每收到一个合法帧调一次 */
 
-/* @return 0 = 成功；-1 = 模式非法；-2 = 任务(renwu)在跑，拒绝远程驾驶 */
+/* @return 0 = 成功；-1 = 模式非法；-2 = 任务解释器在跑，拒绝远程驾驶 */
 int     HostExt_DriveSet(uint8_t mode, int a, int b);
 void    HostExt_DriveStop(void);
 uint8_t HostExt_DriveMode(void);
@@ -70,8 +70,7 @@ float       HostExt_ServoAngle(int ch);
 int      HostExt_SaveParams(void);       /* 立即请求保存到 Flash（不走 1.5s 防抖） */
 uint8_t  HostExt_NvramState(void);       /* NVRAM_STATE_* */
 uint8_t  HostExt_MotorEnabled(void);     /* 1 = 速度环使能中（电机可能带电） */
-uint8_t  HostExt_RenwuFlag(void);
-uint8_t  HostExt_BlackNum(void);
+uint8_t  HostExt_TaskRunning(void);   /* 1 = 任务解释器正在跑（占着电机） */
 uint8_t  HostExt_MotionMode(void);       /* Motion_Mode */
 uint8_t  HostExt_MotionFault(void);
 

@@ -612,5 +612,19 @@ int main(void)
     CHECK_EQ_I(stub_motion_speed, 6480);
     CHECK_EQ_I(TaskRun_IsRunning(), 0);
 
+    /* ===============================================================
+     * 11) 启动时按 HP_TASK_SPEED 设一次基准速度（默认 6480；host_paramstub.c 回落兜底）
+     *     程序里**没有** SET_SPEED，所以唯一动过 stub_motion_speed 的就是启动那一下
+     * =============================================================== */
+    pg_reset(1u, 0u);
+    add_body(0u, TASK_OP_END, 0u, 0, 0u, 0xFFFFu, 0u);
+    len = pg_build();
+    CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
+    stub_motion_speed = -1;
+    CHECK_EQ_I(TaskRun_Start(11u), 0);
+    CHECK_EQ_I(stub_motion_speed, 6480);       /* 参数表默认值，旧板内置流程的"直行速度" */
+    TaskRun_Tick(1000u);
+    CHECK_EQ_I(TaskRun_IsRunning(), 0);
+
     return T_SUMMARY();
 }

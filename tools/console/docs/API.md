@@ -42,7 +42,7 @@
 | POST | `/api/servo/center` | 两路回 0°（收回位） |
 | POST | `/api/servo/deviation` | `{ch, dev_us}` 中位偏差微调（±100µs） |
 | POST | `/api/drive` | `{mode:"off"\|"wheels"\|"base_turn", vl?,vr?,base?,turn?}`：`wheels` 左右轮直接给 mm/s；`base_turn` 的 **`base` = 基准速度 mm/s、`turn` = 目标航向偏移（度，正 = 左转 = 偏航角增大）**，基准航向在**进入**该模式时锁存（= 固件 `s_base_yaw`），之后重复帧只改目标；`base=0` 即"原地用车上的角度环转到并保持这个朝向" |
-| POST | `/api/cmd` | `{cmd, arg?}`：`stop/start_a/start_b/start_c/clear_fault/reset/telem_hz` |
+| POST | `/api/cmd` | `{cmd, arg?}`：`stop/clear_fault/reset/telem_hz`（`start_a/start_b/start_c` 仍收，但车回 **`0x08` 不支持** ⇒ 桥回 `200 + ok:false`；车上内置任务流程已删除，任务走 §3.6） |
 | GET | `/api/stream` | **SSE**：实时数据流（见 §4） |
 | GET | `/api/log?limit=200` | 最近的文本日志 |
 | GET | `/api/cal` | 灰度标定数据（8 路黑白阈值/抖动/有效性） |
@@ -158,14 +158,21 @@
  "vbat_mv":12010,"ibat_ma":330,
  "servo1_us":1500,"servo2_us":1500,"servo1_deg":90,"servo2_deg":90,
  "line":[0,0,1,1,1,0,0,0],"gray":[12,34,180,220,190,30,10,8],
- "state_id":23,"loop_us":412,"mode":0,"renwu":0,"action":3,
+ "state_id":23,"loop_us":412,"mode":0,"task_id":255,"action":3,
  "trace":{"pos":0.52,"pid":300},
  "angle":{"err":0.12,"rate_ref":0.0,"corr":0.0},
  "flags":{"lost":false,"slope":false,"gyro_ok":true,"motor":false,
           "host_drive":false,"logging":false,"flash":false,"fault":false},
  "nvram":0}
 ```
-- `mode`：0 空闲 / 1 陀螺 / 2 循迹 / 3 串级；`renwu`：0 停 / 1 任务A / 2 任务B / 3 任务C。
+- `mode`：0 空闲 / 1 陀螺 / 2 循迹 / 3 串级。
+- `state_id`：**任务解释器在跑时的当前状态号**；没在跑（含没载入）= `0xFF`（255，界面上显示为 `--`）。
+- `task_id`：**正在跑的任务号**（车上目录页里的槽号）；没在跑 = `0xFF`（255）。判据是解释器**在跑**
+  （固件 `TaskRun_IsRunning()`）：程序跑完 `END`、被 `stop` 停掉或出故障之后立刻回 `0xFF`，
+  不会因为 RAM 里还留着一份程序就继续报旧号；`0x69` 状态帧另有 `running` 字段可以区分"载入但没跑"。
+  键名 2026-10-03 从 `renwu` 改来 ——
+  旧语义是"内置比赛流程 0 停 / 1 任务A / 2 任务B / 3 任务C"，那套流程连同 `renwu.c` 已从固件删除，
+  这三个命令（`start_a/b/c`）现在回 `0x08` 不支持。
 - `nvram`：0 空闲 / 1 待保存 / 2 保存中 / 3 已保存 / 4 失败。
 - `gray` 0..255（255=最黑）；`line` 为 0/1。
 

@@ -158,10 +158,12 @@ export interface Telem {
   servo2_deg: number
   line: number[]
   gray: number[]
+  /** 解释器当前状态号（原「renwu 步号」）；0xFF = 没载入 / 没在跑 */
   state_id: number
   loop_us: number
   mode: number
-  renwu: number
+  /** 当前任务号（TELEM2[51]）；0xFF = 没在跑 */
+  task_id: number
   action: number
   trace: { pos: number; pid: number }
   angle: { err: number; rate_ref: number; corr: number }
@@ -208,12 +210,16 @@ export const MODE_TEXT: Record<number, string> = {
   3: '串级',
 }
 
-/** 比赛流程状态：0 停 / 1 A / 2 B / 3 C */
-export const RENWU_TEXT: Record<number, string> = {
-  0: '停',
-  1: '任务A',
-  2: '任务B',
-  3: '任务C',
+/** 任务号直出：0xFF（没在跑）与越界值都显示成 `--`，其余 `任务 #N` */
+export function taskText(id: number | null | undefined): string {
+  if (id === null || id === undefined || id === 0xff || id > 0xfe) return '--'
+  return `任务 #${id}`
+}
+
+/** 解释器状态号：0xFF = 没载入 / 没在跑 */
+export function stateText(id: number | null | undefined): string {
+  if (id === null || id === undefined || id === 0xff || id > 0xfe) return '--'
+  return `#${id}`
 }
 
 /** NVRAM 状态：0 空闲 / 1 待保存 / 2 保存中 / 3 已保存 / 4 失败 */
@@ -236,11 +242,14 @@ export interface DriveRequest {
   turn?: number
 }
 
-/** /api/cmd 支持的命令 */
+/** /api/cmd 支持的命令（`start_a/b/c` 已废弃：固件删了内置任务流程，收到回 `ST_UNSUPPORTED`） */
 export type CmdName =
   | 'stop'
+  /** @deprecated 用 `#/tasks` 页的「开始」；固件回「不支持」 */
   | 'start_a'
+  /** @deprecated 同上 */
   | 'start_b'
+  /** @deprecated 同上 */
   | 'start_c'
   | 'clear_fault'
   | 'reset'

@@ -226,7 +226,7 @@ int main(void)
     CHECK_EQ_I((int)Motion_GetFault(), (int)MOTION_FAULT_NONE);
     back_to_idle();
 
-    /* 2g) 任务流程路径：不走 Motion_SetMode，直接 GyroControl_Start()（renwu.c 的
+    /* 2g) 任务路径：不走 Motion_SetMode，直接 GyroControl_Start()（任务解释器的
      *     Toggle_Gyro_Control(1,..) 就是这样）—— 失联同样必须停车 + 置故障。 */
     feed_yaw_frame(0.0f);
     Motion_ClearFault();

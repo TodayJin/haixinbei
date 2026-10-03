@@ -19,6 +19,8 @@ LOG_MAX = 800
 EVENT_MAX = 4000          # 每路订阅者最多积压多少事件（防前端卡住把内存吃光）
 
 CMD_NAMES = {
+    # start_a/start_b/start_c 的字节定义保留（协议不删），但固件里的内置任务流程已删除，
+    # 这三个命令现在一律回 ST_UNSUPPORTED（0x08）。「开始/停止任务」走 /api/tasks/run|stop。
     "stop": pr.CMD_STOP, "start_a": pr.CMD_START_A, "start_b": pr.CMD_START_B,
     "start_c": pr.CMD_START_C, "calib_gyro": pr.CMD_CALIB_GYRO,
     "save_params": pr.CMD_SAVE_PARAMS, "clear_fault": pr.CMD_CLEAR_FAULT,
@@ -28,11 +30,10 @@ CMD_NAMES = {
 DRIVE_MODES = {"off": 0, "wheels": 1, "base_turn": 2, "trace": 3}
 DRIVE_KEEPALIVE_MS = 200      # 车上驾驶看门狗是 500ms，留 2 倍余量
 DRIVE_HOLD_MS = 3000          # 有 /api/stream 订阅者挂着就算"在场"，超时就不再喂
-RENWU_NAMES = {0: "空闲", 1: "任务A", 2: "任务B", 3: "任务C"}
 MODE_NAMES = {0: "空闲", 1: "陀螺", 2: "循迹", 3: "串级"}
 NVRAM_NAMES = {0: "空闲", 1: "待保存", 2: "保存中", 3: "已保存", 4: "失败"}
 ST_NAMES = {0x00: "OK", 0x02: "未知类型", 0x03: "参数错", 0x04: "超范围",
-            0x05: "未就绪", 0x06: "命令错", 0x07: "忙"}
+            0x05: "未就绪", 0x06: "命令错", 0x07: "忙", 0x08: "不支持"}
 # ACK 事件里给前端看的"这是哪个请求的应答"（契约 §4 `ack.req`）
 REQ_NAMES = {
     pr.T_PARAM_SET: "params.set", pr.T_PARAM_GET: "params.push", pr.T_PARAM_SAVE: "params.save",
@@ -687,7 +688,7 @@ class Console:
                 "rec_path": self.rec_path,
                 "presets": self.preset_list(),
                 "logs": list(self.logs),
-                "names": {"mode": MODE_NAMES, "renwu": RENWU_NAMES, "nvram": NVRAM_NAMES},
+                "names": {"mode": MODE_NAMES, "nvram": NVRAM_NAMES},
             }
 
     # ------------------------------------------------------------------ 录制

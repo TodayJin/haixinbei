@@ -40,22 +40,28 @@ $deps = @{
   #（真 Flash/解释器语义分别由 t_taskstore.c、t_task.c 用真源码测）
   't_hostlink' = @('App/Svc/host_link.c', 'App/Svc/jy61p.c', 'test/stub/host_extstub.c',
                    'test/stub/host_taskstub.c')
-  # 反过来，host_ext.c 的控制模块依赖用 host_appstub.c 顶替
-  't_hostext'  = @('App/Svc/host_ext.c', 'test/stub/host_appstub.c')
+  # 反过来，host_ext.c 的控制模块依赖用 host_appstub.c 顶替；
+  # 任务解释器它只问一个 TaskRun_IsRunning()，用 host_taskrunstub.c（host_appstub.c
+  # 被 t_task/t_taskstore 和真 task_run.c 一起链，不能塞 TaskRun_* 替身进去）
+  't_hostext'  = @('App/Svc/host_ext.c', 'test/stub/host_appstub.c',
+                   'test/stub/host_taskrunstub.c')
   't_tracecal' = @('App/Svc/trace_cal.c', 'App/Svc/tracing.c')
 't_speedctrl' = @('App/Svc/speed_control.c')
 't_gyrotest'  = @('App/Svc/gyro_control.c')
 't_motion'    = @('App/Svc/motion.c', 'App/Svc/jy61p.c')
 't_bushealth' = @('App/Svc/bus_health.c')
-  # 任务编程：格式层 + 解释器，控制模块全用 host_appstub.c 的记录式替身
-  't_task'      = @('App/Svc/task_prog.c', 'App/Svc/task_run.c', 'test/stub/host_appstub.c')
+  # 任务编程：格式层 + 解释器，控制模块全用 host_appstub.c 的记录式替身；
+  # 参数表用 host_paramstub.c（TaskRun_Start 要取 HP_TASK_SPEED）。单独一个文件是因为
+  # 管道对拍构建里 host_link.c 是真源码，host_appstub.c 里放 host_param_get 会撞符号
+  't_task'      = @('App/Svc/task_prog.c', 'App/Svc/task_run.c', 'test/stub/host_appstub.c',
+                    'test/stub/host_paramstub.c')
   # 全工程唯一会擦写 Flash 的模块：真 nvram.c + 真 trace_cal 标定，
   # 其余外部依赖（g_cfg/UI 三函数/动作表/参数表）由 t_nvram.c 自己做最小替身
   't_nvram'    = @('App/Svc/nvram.c', 'App/Svc/trace_cal.c')
   # 任务程序在 Flash 里的存储：真 task_store.c + 格式层 + 解释器（拒写判据要问
   # TaskRun_IsRunning），控制模块仍然用 host_appstub.c 的记录式替身
   't_taskstore' = @('App/Svc/task_store.c', 'App/Svc/task_prog.c', 'App/Svc/task_run.c',
-                    'test/stub/host_appstub.c')
+                    'test/stub/host_appstub.c', 'test/stub/host_paramstub.c')
 }
 $stubs = @('host_hal.c', 'host_board.c', 'host_rtt.c') | ForEach-Object { Join-Path $stub $_ }
 

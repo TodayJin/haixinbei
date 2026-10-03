@@ -791,7 +791,7 @@ void GyroControl_Task(void)
  * 新板只有 TIM6(5ms)=Motion_Task、TIM7(5ms)=Servo_Task 两个周期 tick，且都由
  * bsp_periodic_start() 在初始化时统一启动 —— 再在这里 Start/Stop 硬件定时器会误伤：
  * htim4 只是 TIM7 的别名，**Stop 会把舵机缓动 Servo_Task 停掉**。
- * 所以这个接口在新板上是空操作：任务流程（renwu.c）调 Toggle_Gyro_Control() 起停的是
+ * 所以这个接口在新板上是空操作：上层调 Toggle_Gyro_Control() 起停的是
  * gyro_control_enabled 标志，角度环由 Motion_Task() 在 TIM6 上按 5ms 调用。
  */
 void Gyro_Timer_Start(void)

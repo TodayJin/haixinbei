@@ -18,6 +18,7 @@
 #include "task_run.h"
 #include "task_prog.h"
 #include "gyro_control.h"
+#include "host_link.h"     /* HP_TASK_SPEED + host_param_get：启动时的默认基准速度 */
 #include "motion.h"
 #include "PID_tracing.h"
 #include "servo.h"
@@ -286,6 +287,10 @@ int TaskRun_Start(uint16_t id)
 
     Motion_ClearFault();
     tracing_cross_clear();
+    /* 默认基准速度：任务块里没有显式给速度时按 HP_TASK_SPEED 跑（默认 6480，即旧板
+     * "900 刻度"在本板 PWM 满量程 7200 下的等价量）。这个参数以前只有旧的内置比赛流程
+     * 在用，旧流程删掉后由解释器接手 —— 参数值/范围/上位机页面都保持不变。 */
+    Motion_SetSpeed((int)host_param_get(HP_TASK_SPEED, 6480.0f));
     seq_begin(s_prog[4]);                        /* 从主页状态开始 */
     return 0;
 }

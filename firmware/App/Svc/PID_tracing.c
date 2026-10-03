@@ -430,7 +430,7 @@ void motor_tracing_reset_cascade(void)
     all_sensors_lost = 0U;
 }
 
-/* ============= 旧接口（renwu.c 的 A() 在调）的基准速度（2026-09-30 m02112 同步） =============
+/* ============= 后台循迹环的基准速度（2026-09-30 m02112 同步） =============
  * 旧板 PWM 满量程只有 1000，所以旧代码里写死的是 1000（满油门）和 200（20%）；
  * 本板满量程 7200。照抄的 1000 在本板只有 13.9% 占空比（低于静摩擦死区 ~2500）⇒ 推不动。
  * 现在跟随“当前循迹”的两个参数：正常档 = 菜单里的“循迹速度”（HP_BASE_SPEED，默认 6480 = 旧 900），
@@ -487,7 +487,7 @@ void motor_tracing_pid_0_task(void)
 /* ---------------------------------------------------------------------------
  * 后台循迹环的开关与时基（2026-09-30 m02112 同步）
  *
- * 旧板：`renwu.c` 里写 `PID_Tracing_Timer_Start(); HAL_Delay(1000); PID_Tracing_Timer_Stop();`
+ * 旧板：任务流程（`renwu.c`，已删除）里写 `PID_Tracing_Timer_Start(); HAL_Delay(1000); PID_Tracing_Timer_Stop();`
  * ——那 1 秒里主循环阻塞在 HAL_Delay，真正循迹的是 TIM2 中断里的 motor_tracing_pid_0_task()
  * （TIM2：PSC=7199 / ARR=999 @72MHz = 10Hz）。
  *

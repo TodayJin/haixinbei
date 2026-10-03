@@ -7,8 +7,8 @@
  *
  * 安全（用户 m13466 明确要求"确保现在是无人化的，你不能动这些电机舵机"是
  * 台架约束，真车跑起来必须有保护）：
- *   1) 任务流程在跑（`renwu_flag != 0`）时**拒绝任何驾驶请求**，避免和比赛
- *      流程抢电机；停任务后重新连接即可；
+ *   1) 任务解释器在跑（`TaskRun_IsRunning() != 0`）时**拒绝任何驾驶请求**，避免和任务
+ *      抢电机；停任务后重新连接即可；
  *   2) 链路看门狗：500ms 没收到任何合法帧就自动停车（`HostExt_Task()`）；
  *   3) 所有角度/脉宽最终都由 servo.c / speed_control.c 自己夹限幅。
  */
@@ -19,9 +19,9 @@
 #include "motion.h"
 #include "nvram.h"
 #include "PID_tracing.h"
-#include "renwu.h"
 #include "servo.h"
 #include "speed_control.h"
+#include "task_run.h"      /* 任务解释器在跑时不许抢电机（判据 = TaskRun_IsRunning） */
 #include "trace_cal.h"
 
 /* ------------------------------------------------------------------ 状态 */
@@ -98,8 +98,8 @@ void HostExt_Task(uint32_t now_ms)
 
 int HostExt_DriveSet(uint8_t mode, int a, int b)
 {
-    if (renwu_flag != 0U) {
-        return -2;                     /* 任务流程在跑：不抢电机 */
+    if (TaskRun_IsRunning() != 0U) {
+        return -2;                     /* 任务解释器在跑：不抢电机 */
     }
 
     s_a = a;
@@ -237,14 +237,9 @@ uint8_t HostExt_MotorEnabled(void)
     return SpeedControl_IsEnabled();
 }
 
-uint8_t HostExt_RenwuFlag(void)
+uint8_t HostExt_TaskRunning(void)
 {
-    return renwu_flag;
-}
-
-uint8_t HostExt_BlackNum(void)
-{
-    return black_num;
+    return (TaskRun_IsRunning() != 0U) ? 1U : 0U;
 }
 
 uint8_t HostExt_MotionMode(void)

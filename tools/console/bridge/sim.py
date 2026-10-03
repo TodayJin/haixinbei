@@ -85,8 +85,8 @@ class SimCar:
         self.ibat = 330
         self.loop_us = 412
         self.mode = 0
-        self.renwu = 0
-        self.state_id = 23
+        # 遥测里的「解释器状态 / 当前任务」现在都从任务解释器镜像取（见 _telem_task_fields），
+        # 不再有内置任务流程 A/B/C 的概念。
         self.lost = False
         self.lost_until = 0
         self.track = 3.6                      # 虚拟线上的位置（格）
@@ -139,7 +139,19 @@ class SimCar:
             out.append(pr.Frame(pr.T_TELEM2, 0, self._telem_bytes()))
         return out
 
+    def _telem_task_fields(self) -> tuple[int, int]:
+        """遥测里的 `(state_id, task_id)`：解释器当前状态号 / 当前任务号。
+
+        和真固件同一口径：没载入/没在跑都是 `0xFF`（不是 0 —— 0 是合法的状态号/任务号）。
+        """
+        st = self.task_run
+        if not st["running"]:
+            return 0xFF, 0xFF
+        tid = int(st["id"])
+        return int(st["state"]) & 0xFF, (tid if 0 <= tid <= 0xFE else 0xFF)
+
     def _telem(self) -> dict:
+        state_id, task_id = self._telem_task_fields()
         gray = self._gray()
         lm = 0
         for i, g in enumerate(gray):
@@ -153,8 +165,8 @@ class SimCar:
             "vbat_mv": int(self.vbat), "ibat_ma": int(self.ibat),
             "servo1_us": self.servo_us[0], "servo2_us": self.servo_us[1],
             "line": [(lm >> i) & 1 for i in range(8)], "gray": gray,
-            "state_id": self.state_id, "loop_us": self.loop_us,
-            "mode": self.mode, "renwu": self.renwu, "action": self.action,
+            "state_id": state_id, "loop_us": self.loop_us,
+            "mode": self.mode, "task_id": task_id, "action": self.action,
             "nvram": self.nvram, "cross": False,
             "trace": {"pos": 0.0 if self.lost else round(self.track - 3.5, 2),
                       "pid": 0 if self.lost else int(round((self.track - 3.5) * 300))},
@@ -387,7 +399,7 @@ class SimCar:
             mode = f.payload[0]
             a = pr.i16(f.payload, 1)
             b = pr.i16(f.payload, 3)
-            if self.renwu:
+            if self.task_run["running"]:
                 self._ack(f.seq, pr.ST_NOT_READY)
                 self._text("[sim] drive refused: task running")
             elif mode not in (0, 1, 2, 3):
@@ -432,17 +444,12 @@ class SimCar:
                 self.drive_mode = 0
                 self.vl_t = self.vr_t = 0.0
                 self.mode = 0
-                self.renwu = 0
+                self._task_stop_run()          # CMD_STOP 现在也能停住正在跑的任务
                 self._ack(f.seq, pr.ST_OK)
-            elif cmd == pr.CMD_START_A:
-                self.renwu = 1
-                self._ack(f.seq, pr.ST_OK)
-            elif cmd == pr.CMD_START_B:
-                self.renwu = 2
-                self._ack(f.seq, pr.ST_OK)
-            elif cmd == pr.CMD_START_C:
-                self.renwu = 3
-                self._ack(f.seq, pr.ST_OK)
+            elif cmd in (pr.CMD_START_A, pr.CMD_START_B, pr.CMD_START_C):
+                # 内置任务流程已从固件删除 ⇒ 这三个命令不再有任何作用（与真固件同口径）
+                self._ack(f.seq, pr.ST_UNSUPPORTED)
+                self._text("[sim] start_a/b/c 已废弃：任务现在走 T_TASK_RUN")
             elif cmd == pr.CMD_CLEAR_FAULT:
                 self.drive_trips = 0
                 self._ack(f.seq, pr.ST_OK)
@@ -521,6 +528,11 @@ class SimCar:
                 self._ack(seq, pr.ST_BAD_PARAM)   # 名字长度撒谎
                 return
             name = p[8:8 + n].decode("utf-8", "replace")
+        if self.task_run["running"]:
+            # 真固件同一条铁律（host_link.c 的 T_TASK_COMMIT）：解释器在跑时擦一页会把
+            # CPU 按住几十毫秒，正在跑的控制环直接失控 ⇒ 回 ST_BUSY，先 0x68 STOP。
+            self._ack(seq, pr.ST_BUSY)
+            return
         buf = self.task_stage.get(tid)
         if buf is None:
             self._ack(seq, pr.ST_NOT_READY)
@@ -563,12 +575,17 @@ class SimCar:
 
     def _task_del(self, seq: int, p: bytes):
         tid = pr.u16(p, 0) if len(p) >= 2 else 0xFFFF
+        if self.task_run["running"]:
+            # 与固件一致：跑着的时候**不删也不停**，只回 ST_BUSY（先 0x68 STOP 再删）。
+            # "悄悄帮你停掉任务再删"比拒绝更坏：操作员以为删的是个死任务。
+            self._ack(seq, pr.ST_BUSY)
+            return
         self.tasks.pop(tid, None)
         self.task_stage.pop(tid, None)
         self.task_names.pop(tid, None)
         self.task_flags.pop(tid, None)
         if self.task_run["id"] == tid:
-            self.task_run.update({"running": False, "state": 0xFF, "block": 0, "elapsed_ms": 0})
+            self._task_stop_run()
         self._ack(seq, pr.ST_OK)
 
     def _task_run(self, seq: int, p: bytes):
@@ -576,13 +593,20 @@ class SimCar:
         if tid not in self.tasks:
             self._ack(seq, pr.ST_NOT_READY)
             return
+        if self.task_run["running"]:
+            self._ack(seq, pr.ST_BUSY)     # 已经有一个任务占着电机（固件同规则）
+            return
         self.task_run = {"id": tid, "state": 1, "running": True, "block": 0,
                          "elapsed_ms": 0, "flags": 0}
         self.task_run_t0 = self.now
         self._ack(seq, pr.ST_OK)
 
-    def _task_stop(self, seq: int):
+    def _task_stop_run(self):
+        """把解释器镜像置成"没在跑"（`state_id`/`task_id` 随之回 0xFF）。"""
         self.task_run.update({"state": 0xFF, "running": False, "block": 0, "elapsed_ms": 0})
+
+    def _task_stop(self, seq: int):
+        self._task_stop_run()
         self._ack(seq, pr.ST_OK)
 
     def _task_tick(self, now_ms: int):

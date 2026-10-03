@@ -92,7 +92,7 @@ def test_telemetry_layout_matches_firmware_offsets():
     struct.pack_into("<h", p, 46, 25)             # arate ×10
     struct.pack_into("<h", p, 48, -3)             # acorr
     p[50] = 3                                     # mode=串级
-    p[51] = 1                                     # renwu=A
+    p[51] = 1                                     # task_id=1（当前任务号）
     p[52] = 90
     p[53] = 45
     p[54] = 6                                     # 动作号
@@ -119,7 +119,7 @@ def test_telemetry_layout_matches_firmware_offsets():
     assert t["gray"] == [5, 20, 35, 50, 65, 80, 95, 110]
     assert t["trace"] == {"pos": 4.25, "pid": -123}
     assert t["angle"] == {"err": 1.3, "rate_ref": 2.5, "corr": -3}
-    assert t["mode"] == 3 and t["renwu"] == 1
+    assert t["mode"] == 3 and t["task_id"] == 1
     assert t["servo1_deg"] == 90 and t["servo2_deg"] == 45
     assert t["action"] == 6 and t["nvram"] == 2
     assert t["drive"] == {"mode": 1, "enabled": True}
@@ -141,12 +141,32 @@ def test_telemetry_short_frame_leaves_extended_fields_empty():
     assert t["mode"] == 0 and t["servo_dev"] == {"1": 0, "2": 0}
 
 
+def test_telemetry_task_id_is_ff_when_absent_or_idle():
+    # 新语义：`task_id`（原 renwu）0xFF = 没在跑。
+    # ①老 32B 帧根本没这个字节 ⇒ 必须回 0xFF，不能假装是任务 0
+    p = bytearray(pr.TELEM_LEN)
+    struct.pack_into("<I", p, 0, 77)
+    t = pr.decode_telemetry(bytes(p[:32]))
+    assert t["task_id"] == 0xFF, "短帧缺 task_id 时必须回「没在跑」，不能是 0"
+    # ②完整帧里车真的报了 0xFF ⇒ 原样透传（不要被归一成 0）
+    p = bytearray(pr.TELEM2_LEN)
+    struct.pack_into("<I", p, 0, 78)
+    p[27] = 0xFF                                  # 解释器状态号：没载入/没在跑
+    p[51] = 0xFF                                  # 当前任务号：没在跑
+    t = pr.decode_telemetry(bytes(p))
+    assert t["task_id"] == 0xFF and t["state_id"] == 0xFF
+    # ③编回去也得是 0xFF（encode/decode 对这两个字段互逆）
+    assert pr.encode_telemetry2(t)[27] == 0xFF and pr.encode_telemetry2(t)[51] == 0xFF
+    # ④缺省值也不是 0：只给 `state_id` 的老字典编出来的帧，task_id 位应为 0xFF
+    assert pr.encode_telemetry2({"state_id": 0xFF})[51] == 0xFF
+
+
 def test_telemetry_encoder_is_inverse_of_decoder():
     t = {"t": 999, "yaw": -12.3, "pitch": 4.4, "roll": -1.2, "vl": 100, "vr": -100,
          "pwm_l": 900, "pwm_r": -900, "vbat_mv": 11900, "ibat_ma": -120,
          "servo1_us": 1500, "servo2_us": 700, "line": [1, 0, 1, 0, 0, 0, 0, 1],
          "gray": [1, 2, 3, 4, 5, 6, 7, 8], "state_id": 5, "loop_us": 300,
-         "mode": 2, "renwu": 0, "action": 3, "nvram": 1, "cross": True,
+         "mode": 2, "task_id": 0, "action": 3, "nvram": 1, "cross": True,
          "trace": {"pos": -1.5, "pid": 42}, "angle": {"err": -0.7, "rate_ref": 1.1, "corr": 7},
          "flags": {"gyro_ok": True, "lost": True, "slope": False, "host_drive": True,
                    "motor": True, "logging": False, "flash": False, "fault": True},
@@ -155,7 +175,7 @@ def test_telemetry_encoder_is_inverse_of_decoder():
     back = pr.decode_telemetry(pr.encode_telemetry2(t))
     for k in ("t", "yaw", "pitch", "roll", "vl", "vr", "pwm_l", "pwm_r", "vbat_mv",
               "ibat_ma", "servo1_us", "servo2_us", "line", "gray", "state_id", "loop_us",
-              "mode", "renwu", "action", "nvram", "cross", "watchdog_trips", "trace",
+              "mode", "task_id", "action", "nvram", "cross", "watchdog_trips", "trace",
               "angle", "flags", "drive", "servo1_deg", "servo2_deg", "servo_dev"):
         assert back[k] == t[k], k
 

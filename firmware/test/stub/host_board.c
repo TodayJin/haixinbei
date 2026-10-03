@@ -172,9 +172,8 @@ int host_load_right(void) { return s_load_right; }
 uint8_t keys_raw(void) { return s_keys; }
 void host_keys_set(uint8_t bits) { s_keys = bits; }
 
-/* renwu.c 里的任务全局（host_link.c 会读它上报状态） */
-uint8_t renwu_flag = 0u;
-uint8_t black_num  = 0u;
+/* 旧比赛流程（renwu.c）的全局 renwu_flag / black_num 已随该文件删除：
+ * 任务状态与"车在忙"的判据现在由 App/Svc/task_run.c 提供（测试用各自的替身）。 */
 
 /* 真 servo.c 自己就有 Servo_Task()（TIM7 回调），管道对拍构建里要关掉这个空壳 */
 #ifndef HOST_PIPE_REAL_SERVO

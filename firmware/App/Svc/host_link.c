@@ -11,7 +11,7 @@
  *   servo1/servo2    <- TIM1 CH1/CH2 的 CCR（实际脉宽 us）
  *   vbat/ibat        <- INA226（只在 OLED 不占 I2C1 时读，避免抢总线）
  *   line_mask        <- 8 路灰度原始电平（1 = 压线）
- *   state_id         <- renwu.c 的 black_num
+ *   state_id         <- 任务解释器在跑时的当前状态号（没在跑 = 0xFF，见 TELEM2_TASK_OFF 同口径）
  */
 
 #include "host_link.h"
@@ -36,8 +36,6 @@
 /* 实际 PWM / 舵机脉宽要从定时器比较寄存器读 */
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim8;
-extern uint8_t black_num;              /* renwu.c：任务步号 */
-extern uint8_t renwu_flag;             /* renwu.c：任务选择（0 停 / 1 A / 2 B / 3 C） */
 
 /* =====================================================================
  *  CRC16/CCITT-FALSE  (poly 0x1021, init 0xFFFF, 不反转)
@@ -232,7 +230,11 @@ enum { T_TELEM = 0x01, T_TELEM2 = 0x03, T_PARAM_GET = 0x10, T_PARAM_SET = 0x11,
 
 enum { ST_OK = 0x00, ST_UNKNOWN_TYPE = 0x02, ST_BAD_PARAM = 0x03,
        ST_OUT_OF_RANGE = 0x04, ST_NOT_READY = 0x05, ST_BAD_CMD = 0x06,
-       ST_BUSY = 0x07 };
+       ST_BUSY = 0x07,
+       /* 0x08：命令/功能"认识但不支持"（不是坏帧，也不是暂时没就绪）。
+        * 目前唯一来源：CMD_START_A/B/C —— 内置比赛流程已删除，改用任务页的 0x67 RUN。
+        * 上位机 protocol.py 的 ST_NAMES 要同步这个码，否则只显示成未知 0x08。 */
+       ST_UNSUPPORTED = 0x08 };
 
 enum { CMD_STOP = 0x01, CMD_START_A = 0x02, CMD_START_B = 0x03, CMD_START_C = 0x04,
        CMD_CALIB_GYRO = 0x05, CMD_SAVE_PARAMS = 0x06, CMD_CLEAR_FAULT = 0x07,
@@ -254,7 +256,7 @@ enum { CMD_STOP = 0x01, CMD_START_A = 0x02, CMD_START_B = 0x03, CMD_START_C = 0x
 #define TELEM2_ARATE_OFF  46u   /* i16   角度环期望角速度 ×10 */
 #define TELEM2_ACORR_OFF  48u   /* i16   角度环修正量 */
 #define TELEM2_MODE_OFF   50u   /* u8    0 空闲 1 陀螺 2 循迹 3 串级 */
-#define TELEM2_RENWU_OFF  51u   /* u8    0 停 1 A 2 B 3 C */
+#define TELEM2_TASK_OFF   51u   /* u8    任务号（TaskRun_Id）；没载入 = 0xFF */
 #define TELEM2_S1_OFF     52u   /* u8    舵机1 角度 */
 #define TELEM2_S2_OFF     53u   /* u8    舵机2 角度 */
 #define TELEM2_ACT_OFF    54u   /* u8    当前动作号（最近一次下发的） */
@@ -438,7 +440,10 @@ static void put_telemetry_base(uint8_t *p, uint32_t loop_us)
   put_u16(&p[22], v1);
   put_u16(&p[24], v2);
   p[26] = lm;
-  p[27] = black_num;                                  /* 任务步号 */
+  /* 判据用 IsRunning 而不是 Loaded：程序跑完 END / 被 STOP / 出故障之后，
+   * "RAM 里还留着一份校验过的程序"对操作员没有信息量，报旧任务号/状态号反而误导。
+   * 遥测这两个字节只回答一件事："现在在跑哪个任务的哪个状态"。 */
+  p[27] = TaskRun_IsRunning() ? TaskRun_State() : TASK_RUN_OFF;  /* 解释器当前状态号 */
   put_u16(&p[28], (uint16_t)(loop_us > 65535u ? 65535u : loop_us));
   p[30] = flags;
   p[31] = 0;
@@ -467,7 +472,7 @@ static void send_telemetry2(uint32_t loop_us)
   put_i16(&p[TELEM2_ARATE_OFF], clamp_i16(HostExt_AngleRateRef() * 10.0f));
   put_i16(&p[TELEM2_ACORR_OFF], clamp_i16(HostExt_AngleCorr()));
   p[TELEM2_MODE_OFF]  = HostExt_MotionMode();
-  p[TELEM2_RENWU_OFF] = HostExt_RenwuFlag();
+  p[TELEM2_TASK_OFF]  = TaskRun_IsRunning() ? (uint8_t)TaskRun_Id() : 0xFFu;
   p[TELEM2_S1_OFF]    = (uint8_t)(HostExt_ServoAngle(1) + 0.5f);
   p[TELEM2_S2_OFF]    = (uint8_t)(HostExt_ServoAngle(2) + 0.5f);
   p[TELEM2_ACT_OFF]   = HostExt_CurrentAction();
@@ -774,10 +779,20 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
                     | ((uint32_t)p[3] << 16) | ((uint32_t)p[4] << 24));
     }
     switch (cmd) {
-    case CMD_STOP:        renwu_flag = 0u; HostExt_DriveStop(); send_ack(seq, ST_OK); break;
-    case CMD_START_A:     renwu_flag = 1u; send_ack(seq, ST_OK); break;
-    case CMD_START_B:     renwu_flag = 2u; send_ack(seq, ST_OK); break;
-    case CMD_START_C:     renwu_flag = 3u; send_ack(seq, ST_OK); break;
+    case CMD_STOP:
+      /* 急停：松驾驶 + 停任务解释器（红色停止按钮必须能停住正在跑的任务） */
+      HostExt_DriveStop();
+      TaskRun_Stop();
+      send_ack(seq, ST_OK);
+      break;
+    case CMD_START_A:
+    case CMD_START_B:
+    case CMD_START_C:
+      /* 旧板内置比赛流程（renwu.c）已删除。这里**不能**再假装成功：假装成功会让
+       * 上位机以为车在跑流程，而实际一个电机都不会动。明说"不支持 + 该去哪儿"。 */
+      send_ack(seq, ST_UNSUPPORTED);
+      host_link_send_text("[fw] 内置任务流程已移除：请用任务页（0x67 RUN）跑 Flash 里的任务\r\n");
+      break;
     case CMD_CLEAR_FAULT: Motion_ClearFault(); send_ack(seq, ST_OK); break;
     case CMD_SAVE_PARAMS: (void)HostExt_SaveParams(); send_ack(seq, ST_OK); break;
     case CMD_SET_TELEM_HZ:
@@ -939,8 +954,8 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
       }
       name = (const char *)&p[8];
     }
-    if (renwu_flag != 0u) {
-      /* 旧 renwu 流程在跑：擦一页会把 CPU 按住几十毫秒，正在跑的控制环直接失控 */
+    if (TaskRun_IsRunning() != 0u) {
+      /* 解释器正在跑：擦一页会把 CPU 按住几十毫秒，正在跑的控制环直接失控 */
       send_ack(seq, ST_BUSY);
       break;
     }
@@ -973,7 +988,7 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
     if (len < 2u) { send_ack(seq, ST_BAD_PARAM); break; }
     id = rd_u16(p);
     if (id >= TASK_STORE_SLOTS) { send_ack(seq, ST_OUT_OF_RANGE); break; }
-    if (renwu_flag != 0u) { send_ack(seq, ST_BUSY); break; }
+    if (TaskRun_IsRunning() != 0u) { send_ack(seq, ST_BUSY); break; }
     rc = TaskStore_Erase((uint8_t)id);
     send_ack(seq, (rc == TASK_STORE_OK) ? ST_OK
                  : ((rc == TASK_STORE_E_BUSY) ? ST_BUSY : ST_BAD_PARAM));
@@ -986,8 +1001,8 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
     if (len < 2u) { send_ack(seq, ST_BAD_PARAM); break; }
     id = rd_u16(p);
     if (id >= TASK_STORE_SLOTS) { send_ack(seq, ST_OUT_OF_RANGE); break; }
-    if (renwu_flag != 0u) {
-      send_ack(seq, ST_BUSY);                /* 旧流程占着电机（与 T_DRIVE 同一条铁律） */
+    if (TaskRun_IsRunning() != 0u) {
+      send_ack(seq, ST_BUSY);                /* 已经有一个任务占着电机：先 0x68 STOP */
       break;
     }
     if (HostExt_DriveEnabled() != 0u) {

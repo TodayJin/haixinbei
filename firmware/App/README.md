@@ -7,7 +7,7 @@
 
 | 层 | 旧文件 | 处理 |
 |---|---|---|
-| **上层：任务/算法** | `renwu.c`（任务A/B 状态机）、`tracing.c`、`PID_tracing.c`、`pid.c`、`gyro_control.c` | **不动**，只改 `#include` 与引脚宏 |
+| **上层：任务/算法** | `renwu.c`（旧板任务A/B 状态机，**已删除**）、`tracing.c`、`PID_tracing.c`、`pid.c`、`gyro_control.c` | **不动**，只改 `#include` 与引脚宏；任务改由 `App/Svc/task_prog.c` + `task_run.c`（上位机可编程）执行 |
 | **上层：显示** | `main.c` 里的 `OLED_ShowString/ShowNum/Clear/Update` | 从"主循环直接刷屏"改成 **KK_UI 自定义页**里画（KK_UI 独占整屏刷新） |
 | **底层：板级驱动** | `motor.c` `servo.c` `encoder.c` `key.c` `buzzer.c` `rgb.c` `jy61p.c` | **重写**为新板引脚/外设（保留同名对外 API） |
 | **底层：显示驱动** | `OLED.c`(48KB 江协科技软件I2C) + `OLED_Data.c`(字库) | **整体删掉**，换成 `kk_oled`(图形+SSD1315驱动) + `kk_ui`(菜单UI) |
@@ -63,6 +63,6 @@
 |---|---|---|
 | **P1** | KK_OLED+KK_UI 在新板点亮，显示首页/菜单 | ✅ 现在就能（3.3V 够） |
 | **P2** | 生成中文字模、菜单项换成中文 | ✅ |
-| **P3** | 旧上层 `renwu/tracing/gyro/pid` 编译进来，实时数据进自定义页 | ⚠️ 显示可验，电机/陀螺仪要等电源件 |
+| **P3** | 上层 `tracing/gyro/pid` 编译进来，实时数据进自定义页 | ⚠️ 显示可验，电机/陀螺仪要等电源件 |
 | **P4** | 底层 BSP 重写：motor/servo/key/buzzer/jy61p 按新板引脚 | ⚠️ 等 5V/12V |
 | **P5** | 整机联调（循迹、任务 A/B） | ⛔ 等电源件 + 上场地 |

@@ -4,7 +4,7 @@ import { store, useStore } from '../lib/store'
 import { Badge, Card, GrayArray, Stat, StatusDot } from '../components/ui'
 import { MiniTrend } from '../components/Trend'
 import { fmt, fmtClock, fmtInt, fmtUptime, pwmToPct } from '../lib/format'
-import { MODE_TEXT, NVRAM_TEXT, RENWU_TEXT, type Telem } from '../lib/types'
+import { MODE_TEXT, NVRAM_TEXT, taskText, type Telem } from '../lib/types'
 
 function Flags({ t }: { t: Telem | null }) {
   if (!t) return <span className="text-[12px] text-slate-500">暂无遥测</span>
@@ -96,7 +96,7 @@ export function OverviewPage() {
           <Stat label="俯仰 / 横滚" value={`${fmt(t?.pitch, 1)} / ${fmt(t?.roll, 1)}`} unit="°" />
           <Stat label="左 / 右轮速" value={`${fmt(t?.vl, 0)} / ${fmt(t?.vr, 0)}`} unit="mm/s" />
           <Stat label="电池 / 电流" value={`${fmt(t ? t.vbat_mv / 1000 : NaN, 2)}`} unit={`V · ${fmtInt(t?.ibat_ma)}mA`} tone={(t?.vbat_mv ?? 99999) < 10500 ? 'rose' : 'mint'} />
-          <Stat label="模式" value={MODE_TEXT[t?.mode ?? 0] ?? '--'} hint={RENWU_TEXT[t?.renwu ?? 0]} />
+          <Stat label="模式" value={MODE_TEXT[t?.mode ?? 0] ?? '--'} hint={taskText(t?.task_id)} />
           <Stat label="主循环" value={fmtInt(t?.loop_us)} unit="µs" tone={(t?.loop_us ?? 0) > 20000 ? 'amber' : 'slate'} />
           <Stat label="PWM 左/右" value={`${fmtInt(t?.pwm_l)}/${fmtInt(t?.pwm_r)}`} unit={`${fmt(pwmToPct(t?.pwm_l ?? 0), 0)}%`} />
           <Stat label="动作 / NVRAM" value={`${t?.action ?? '--'}`} hint={NVRAM_TEXT[t?.nvram ?? 0]} />

@@ -1,11 +1,16 @@
 """仿真车（`--sim` 数据源）行为测试：走的是真帧协议，所以这一层也在测桥的解码。"""
 from __future__ import annotations
 
+import json
+import os
+
 import pytest
 
 from bridge import params as P
 from bridge import protocol as pr
 from bridge.sim import ACTION_DEFAULT, SimCar, norm180
+
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def req(car: SimCar, ftype: int, payload: bytes = b"", seq: int = 1,
@@ -175,18 +180,103 @@ def test_drive_modes_and_watchdog():
     assert 0x00 in acks(frames) and car.drive_enabled is False and car.mode == 0
 
 
-def test_drive_refused_while_task_running():
+def test_telemetry_task_fields_are_ff_when_idle():
+    # 语义变更：state_id = 解释器状态号、task_id = 当前任务号；没在跑时两者都是 0xFF（不是 0）
     car = SimCar()
     car.start(0)
-    assert acks(req(car, pr.T_CMD, bytes([pr.CMD_START_A]), seq=31, now=10)) == [pr.ST_OK]
-    assert car.renwu == 1
-    frames = req(car, pr.T_DRIVE, bytes([1]) + pr.pack_i16(300) + pr.pack_i16(300), seq=32, now=20)
+    t = pr.decode_telemetry(only(car.poll(0), pr.T_TELEM2).payload)
+    assert t["state_id"] == 0xFF and t["task_id"] == 0xFF
+
+
+def test_cmd_start_a_b_c_are_unsupported_now():
+    # 固件删了内置任务流程 ⇒ 这三个命令不再有作用，仿真车必须模拟真固件（回 0x08）
+    car = SimCar()
+    car.start(0)
+    before = car.task_run["running"]
+    for i, c in enumerate((pr.CMD_START_A, pr.CMD_START_B, pr.CMD_START_C)):
+        frames = req(car, pr.T_CMD, bytes([c]), seq=21 + i, now=100 + i)
+        assert acks(frames) == [pr.ST_UNSUPPORTED]
+        assert any(b"\xe5\xb7\xb2\xe5\xba\x9f\xe5\xbc\x83" in f.payload
+                   for f in frames if f.type == pr.T_TEXT), "该回一条说明文本"
+    assert car.task_run["running"] is before is False
+    t = pr.decode_telemetry(only(car.poll(150), pr.T_TELEM2).payload)
+    assert t["task_id"] == 0xFF
+
+
+def test_drive_refused_while_task_running():
+    car = SimCar()
+    car.start(1000)
+    # 内置任务流程已删 ⇒ 只能走真的 T_TASK_PUT/COMMIT 把任务烧进去（START_A 已不生效）
+    with open(os.path.join(HERE, "fixtures", "task.golden.json"), encoding="utf-8") as f:
+        g = json.load(f)
+    img, off, seq = bytes.fromhex(g["hex"]), 0, 31
+    while off < len(img):
+        chunk = img[off:off + pr.TASK_PUT_MAX]
+        assert acks(req(car, pr.T_TASK_PUT, pr.pack_u16(0) + pr.pack_u16(off) + chunk,
+                        seq=seq, now=1000 + seq)) == [pr.ST_OK]
+        off += len(chunk)
+        seq += 1
+    assert acks(req(car, pr.T_TASK_COMMIT, pr.payload_task_commit(0, len(img), g["crc16"]),
+                    seq=seq, now=1000 + seq)) == [pr.ST_OK]
+
+    assert acks(req(car, pr.T_TASK_RUN, pr.pack_u16(0), seq=40, now=2000)) == [pr.ST_OK]
+    assert car.task_run["running"] is True and car.task_run["id"] == 0
+    t = pr.decode_telemetry(only(car.poll(2020), pr.T_TELEM2).payload)
+    assert t["task_id"] == 0 and t["state_id"] == car.task_run["state"], "遥测要反映正在跑的任务"
+
+    frames = req(car, pr.T_DRIVE, bytes([1]) + pr.pack_i16(300) + pr.pack_i16(300), seq=32, now=2100)
     assert acks(frames) == [pr.ST_NOT_READY]
     assert any(b"drive refused" in f.payload for f in frames if f.type == pr.T_TEXT)
     assert car.drive_enabled is False
-    assert acks(req(car, pr.T_CMD, bytes([pr.CMD_STOP]), seq=33, now=30)) == [pr.ST_OK]
-    assert car.renwu == 0
-    assert acks(req(car, pr.T_DRIVE, bytes([1]) + pr.pack_i16(0) + pr.pack_i16(0), seq=34, now=40)) == [pr.ST_OK]
+
+    # CMD_STOP 现在也能停住正在跑的任务：停车 + task_id 回 0xFF
+    assert acks(req(car, pr.T_CMD, bytes([pr.CMD_STOP]), seq=33, now=2200)) == [pr.ST_OK]
+    assert car.task_run["running"] is False
+    t = pr.decode_telemetry(only(car.poll(2220), pr.T_TELEM2).payload)
+    assert t["task_id"] == 0xFF and t["state_id"] == 0xFF, "停了以后两个字段都要回没在跑"
+    assert acks(req(car, pr.T_DRIVE, bytes([1]) + pr.pack_i16(0) + pr.pack_i16(0), seq=34, now=2300)) == [pr.ST_OK]
+
+
+def test_flash_write_refused_while_task_running():
+    # 擦一页会把 CPU 按住几十毫秒（正在跑的控制环直接失控）⇒ 解释器在跑时 COMMIT/DEL/RUN
+    # 必须回 ST_BUSY，与固件 host_link.c 的守卫同规则。"悄悄帮你停掉任务再写/删"比拒绝更坏：
+    # 操作员会以为删的是个死任务。分片 PUT 只写 RAM 暂存，车在动也允许。
+    car = SimCar()
+    car.start(1000)
+    with open(os.path.join(HERE, "fixtures", "task.golden.json"), encoding="utf-8") as f:
+        g = json.load(f)
+    img = bytes.fromhex(g["hex"])
+
+    def stage(seq0, now0):
+        seq, off = seq0, 0
+        while off < len(img):
+            chunk = img[off:off + pr.TASK_PUT_MAX]
+            assert acks(req(car, pr.T_TASK_PUT, pr.pack_u16(0) + pr.pack_u16(off) + chunk,
+                            seq=seq, now=now0 + seq)) == [pr.ST_OK]
+            off += len(chunk)
+            seq += 1
+        return seq
+
+    seq = stage(31, 1000)
+    assert acks(req(car, pr.T_TASK_COMMIT, pr.payload_task_commit(0, len(img), g["crc16"]),
+                    seq=seq, now=1100)) == [pr.ST_OK]
+    assert acks(req(car, pr.T_TASK_RUN, pr.pack_u16(0), seq=seq + 1, now=2000)) == [pr.ST_OK]
+    assert car.task_run["running"] is True
+
+    # 跑着的时候：合法数据 + 正确 CRC 也一律拒
+    seq = stage(70, 3000)
+    assert acks(req(car, pr.T_TASK_COMMIT, pr.payload_task_commit(0, len(img), g["crc16"]),
+                    seq=seq, now=3100)) == [pr.ST_BUSY]
+    assert acks(req(car, pr.T_TASK_DEL, pr.pack_u16(0), seq=seq + 1, now=3200)) == [pr.ST_BUSY]
+    assert acks(req(car, pr.T_TASK_RUN, pr.pack_u16(0), seq=seq + 2, now=3300)) == [pr.ST_BUSY]
+    assert 0 in car.tasks, "被拒的 DELETE 不许真把任务删掉"
+    assert car.task_run["running"] is True, "被拒的写/删不许偷偷把任务停掉"
+
+    # 停下来以后恢复正常
+    assert acks(req(car, pr.T_CMD, bytes([pr.CMD_STOP]), seq=seq + 3, now=3400)) == [pr.ST_OK]
+    assert acks(req(car, pr.T_TASK_COMMIT, pr.payload_task_commit(0, len(img), g["crc16"]),
+                    seq=seq + 4, now=3500)) == [pr.ST_OK]
+    assert acks(req(car, pr.T_TASK_DEL, pr.pack_u16(0), seq=seq + 5, now=3600)) == [pr.ST_OK]
 
 
 def test_nvram_state_machine():

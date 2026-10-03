@@ -113,6 +113,7 @@ extern int      stubx_drive_set_calls, stubx_last_a, stubx_last_b, stubx_drive_s
 extern uint8_t  stubx_last_mode;
 extern int      stubx_save_calls, stubx_center_calls, stubx_play_n;
 extern int      stubx_action_set_calls, stubx_servo_set[3], stubx_servo_dev[3];
+extern int      stubx_stop_calls;
 extern uint8_t  stubx_drive_mode, stubx_drive_enabled, stubx_nvram_state;
 extern int      stubx_wd_trips, stubx_clear_faults;
 
@@ -128,8 +129,8 @@ extern uint8_t  stubt_run_loaded, stubt_run_running, stubt_run_state, stubt_run_
 extern uint16_t stubt_run_id, stubt_run_block, stubt_run_blockcount;
 extern uint32_t stubt_run_elapsed;
 
-/* host_board.c 提供的真全局：非 0 = 旧 renwu 流程在跑（任务擦写要因此被拒） */
-extern uint8_t  renwu_flag;
+/* host_board.c 不再提供 renwu_flag/black_num（旧比赛流程已删除）：协议层现在
+ * 直接问解释器，观测点就是 host_taskstub.c 的 stubt_run_*（见上） */
 
 /* host_hal.c 的假时钟（遥测有节流，要推进时间才会再发） */
 extern void host_tick_add(uint32_t ms);
@@ -444,7 +445,8 @@ int main(void)
             CHECK_EQ_I((int16_t)(t[51] | (t[52] << 8)), 25);         /* 期望角速度 2.5×10 */
             CHECK_EQ_I((int16_t)(t[53] | (t[54] << 8)), -3);         /* 修正量 */
             CHECK_EQ_I(t[5u + 50u], 3);                              /* 运动模式 */
-            CHECK_EQ_I(t[5u + 51u], 0);                              /* 任务 */
+            CHECK_EQ_I(t[5u + 51u], 0xFF);                           /* 任务号：没载入 = 0xFF */
+            CHECK_EQ_I(t[5u + 27u], 0xFF);                           /* state_id：没载入 = 0xFF */
             CHECK_EQ_I(t[5u + 52u], 90);                             /* 舵机1 */
             CHECK_EQ_I(t[5u + 53u], 45);                             /* 舵机2 */
             CHECK_EQ_I(t[5u + 54u], 0);                              /* 当前动作 */
@@ -459,6 +461,43 @@ int main(void)
         }
         CHECK_EQ_I(count_frames(0x01), 0);      /* 默认不发老 32B 帧 */
     }
+
+    /* 17b) 任务解释器载入并跑到状态 2 时：task 号（TELEM2 51）与 state_id（TELEM 27）
+     *      必须报**解释器**的读数 —— 这两个字段以前报的是旧比赛流程的 black_num/renwu_flag */
+    stubt_run_loaded  = 1u;
+    stubt_run_running = 1u;
+    stubt_run_id      = 3u;
+    stubt_run_state   = 2u;
+    host_tick_add(25u);
+    host_dl_tx_clear();
+    host_link_poll(0u);
+    {
+        uint8_t l = 0;
+        const uint8_t *t = find_frame(0x03, 0, &l);
+        CHECK(t != NULL);
+        if (t) {
+            CHECK_EQ_I(t[5u + 51u], 3);                              /* TaskRun_Id() */
+            CHECK_EQ_I(t[5u + 27u], 2);                              /* TaskRun_State() */
+        }
+    }
+    /* 17c) 载入过但**没在跑**（END / STOP / 故障后）：两个字段必须回 0xFF。判据是
+     *      IsRunning 不是 Loaded —— "RAM 里还留着一份程序"不该被显示成"正在跑任务 3" */
+    stubt_run_running = 0u;
+    host_tick_add(25u);
+    host_dl_tx_clear();
+    host_link_poll(0u);
+    {
+        uint8_t l = 0;
+        const uint8_t *t = find_frame(0x03, 0, &l);
+        CHECK(t != NULL);
+        if (t) {
+            CHECK_EQ_I(t[5u + 51u], 0xFF);                           /* 没在跑 ⇒ task = 0xFF */
+            CHECK_EQ_I(t[5u + 27u], 0xFF);                           /* 没在跑 ⇒ state = 0xFF */
+        }
+    }
+    stubt_run_loaded  = 0u;
+    stubt_run_id      = 0u;
+    stubt_run_state   = TASK_RUN_OFF;
 
     /* 18) CMD_SET_TELEM_MODE=0 ⇒ 只发老 32B T_TELEM */
     host_dl_tx_clear();
@@ -593,6 +632,52 @@ int main(void)
         CHECK_EQ_I(stubx_save_calls, before + 1);
     }
 
+    /* 20b) CMD_STOP：先停远程驾驶，**再停解释器**，然后回 OK
+     *      （红色停止按钮必须能停住正在跑的 Flash 任务） */
+    {
+        int stops0 = stubt_stops, dstop0 = stubx_stop_calls;
+        host_dl_tx_clear();
+        pl[0] = 0x01;                          /* CMD_STOP */
+        build(f, 0x20, 86, pl, 1);
+        feed_and_poll(f, 8);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 86, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x00);
+        }
+        CHECK_EQ_I(stubt_stops, stops0 + 1);   /* TaskRun_Stop() 真被调了 */
+        CHECK_EQ_I(stubx_stop_calls, dstop0 + 1);
+    }
+
+    /* 20c) CMD_START_A/C：内置任务流程已删除 ⇒ ST_UNSUPPORTED(0x08) + 提示去任务页。
+     *      旧实现会去写 renwu_flag —— 那个全局现在压根不存在，编译期就保证改不回去 */
+    {
+        int starts0 = stubt_starts;
+        host_dl_tx_clear();
+        pl[0] = 0x02;                          /* CMD_START_A */
+        build(f, 0x20, 88, pl, 1);
+        feed_and_poll(f, 8);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 88, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x08);
+        }
+        CHECK_EQ_I(tx_has_text("内置任务流程已移除"), 1);
+        host_dl_tx_clear();
+        pl[0] = 0x04;                          /* CMD_START_C */
+        build(f, 0x20, 90, pl, 1);
+        feed_and_poll(f, 8);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 90, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x08);
+        }
+        CHECK_EQ_I(stubt_starts, starts0);     /* 一个任务都没被启动 */
+    }
+
     /* 21) 舵机：T_SERVO_SET 合法/越界/通道非法；T_SERVO_PLAY 回中与越界 */
     host_dl_tx_clear();
     pl[0] = 1; put16(&pl[1], 90);
@@ -685,7 +770,7 @@ int main(void)
         }
     }
     host_dl_tx_clear();
-    stubx_drive_set_rc = -2;                    /* 模拟 renwu 在跑 */
+    stubx_drive_set_rc = -2;                    /* 模拟解释器在跑：驾驶被拒 */
     pl[0] = 1; put16(&pl[1], 100); put16(&pl[3], 100);
     build(f, 0x1C, 94, pl, 5);
     feed_and_poll(f, 12);
@@ -773,7 +858,7 @@ int main(void)
         for (i = 0; i < 80; i++) img[i] = (uint8_t)(0x10 + i);
 
         TaskStoreStub_Reset();
-        renwu_flag = 0u;
+        stubt_run_running = 0u;
 
         /* 24) 目录为空 ⇒ 只回一帧空载荷的 T_TASK_LIST_R（n=0 就是"发完了"），且不发 ACK */
         host_dl_tx_clear();
@@ -898,8 +983,8 @@ int main(void)
             CHECK_EQ_I(stubt_commits, 1);
         }
         stubt_commit_rc = TASK_STORE_OK;
-        /* 旧 renwu 流程在跑：擦写会把控制环按住几十毫秒 ⇒ 一律 ST_BUSY */
-        renwu_flag = 1u;
+        /* 解释器在跑：擦页会把 CPU 按住几十毫秒 ⇒ 一律 ST_BUSY，字节一个都不许进 Flash */
+        stubt_run_running = 1u;
         host_dl_tx_clear();
         build(f, 0x63, 128, pb, 7);
         feed_and_poll(f, 14);
@@ -910,7 +995,7 @@ int main(void)
             if (a) CHECK_EQ_I(a[6], 0x07);
             CHECK_EQ_I(stubt_commits, 1);
         }
-        renwu_flag = 0u;
+        stubt_run_running = 0u;
 
         /* 27) 目录里已经有东西了：id/len/crc/flags/name_len/名字 一帧装下；
          *     空槽跳过，最后一拍才是收尾空帧 */
@@ -1016,6 +1101,9 @@ int main(void)
             CHECK_EQ_I(stubt_run_id, 0);
             CHECK_EQ_I(stubt_run_running, 1);
         }
+        /* 替身里任务一直"在跑"（TaskRun_Start 的替身不会自己停），但后面两拍要验的是
+         * "驾驶中不许交任务"和"槽里格式坏了"，都不能被我新加的 RUN 守卫先命中 ⇒ 先放停 */
+        stubt_run_running = 0u;
         stubx_drive_enabled = 1;               /* 上位机正在驾驶：不许交任务 */
         host_dl_tx_clear();
         build(f, 0x67, 140, pl, 2);
@@ -1042,8 +1130,8 @@ int main(void)
             CHECK_EQ_I(stubt_starts, 1);
         }
         stubt_load_rc = 0;
-        /* 旧 renwu 在跑时连 RUN 也要挡 */
-        renwu_flag = 1u;
+        /* 解释器已经在跑时连 RUN 也要挡：车只有一个，不许叠任务 */
+        stubt_run_running = 1u;
         host_dl_tx_clear();
         build(f, 0x67, 144, pl, 2);
         feed_and_poll(f, 9);
@@ -1053,7 +1141,7 @@ int main(void)
             CHECK(a != NULL);
             if (a) CHECK_EQ_I(a[6], 0x07);
         }
-        renwu_flag = 0u;
+        stubt_run_running = 0u;
 
         /* 30) STOP 幂等，且一定要真的停 */
         host_dl_tx_clear();
@@ -1079,6 +1167,20 @@ int main(void)
             if (a) CHECK_EQ_I(a[6], 0x00);
             CHECK_EQ_I(stubt_erases, 1);
         }
+        /* 31b) 解释器在跑时 DEL 也要挡：擦页会按住 CPU 几十毫秒，正在跑的任务会歪 */
+        stubt_run_running = 1u;
+        host_dl_tx_clear();
+        put16(pl, 0);
+        build(f, 0x66, 152, pl, 2);
+        feed_and_poll(f, 9);
+        {
+            uint8_t l = 0;
+            const uint8_t *a = find_frame(0x21, 152, &l);
+            CHECK(a != NULL);
+            if (a) CHECK_EQ_I(a[6], 0x07);
+            CHECK_EQ_I(stubt_erases, 1);       /* 一个字节都没擦 */
+        }
+        stubt_run_running = 0u;
         host_dl_tx_clear();
         build(f, 0x60, 150, NULL, 0);
         feed_and_poll(f, 7);

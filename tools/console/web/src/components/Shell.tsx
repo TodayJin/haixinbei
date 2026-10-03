@@ -19,7 +19,7 @@ import { Badge, StatusDot } from './ui'
 import { ErrorBanner } from './Toasts'
 import { PageBoundary } from './PageBoundary'
 import { fmt } from '../lib/format'
-import { MODE_TEXT, RENWU_TEXT } from '../lib/types'
+import { MODE_TEXT, taskText } from '../lib/types'
 
 const ICONS: Record<PageId, LucideIcon> = {
   overview: Gauge,
@@ -60,7 +60,7 @@ function LinkBadge() {
       )}
       <span className="num text-[12px] text-slate-400">
         {telem ? `${fmt(telem.mode >= 0 ? telem.mode : 0, 0)} ${MODE_TEXT[telem.mode] ?? ''}` : ''}
-        {telem?.renwu ? ` · ${RENWU_TEXT[telem.renwu] ?? ''}` : ''}
+        {telem?.task_id !== undefined && telem.task_id !== 0xff ? ` · ${taskText(telem.task_id)}` : ''}
       </span>
       <Badge tone={sse === 'open' ? 'cyan' : sse === 'connecting' ? 'amber' : 'rose'}>
         SSE {sse === 'open' ? '已连' : sse === 'connecting' ? '连接中' : '断开'}

@@ -3,7 +3,7 @@ import { CircleStop, Play, Power, Radio, RefreshCw, RotateCcw, Trash2 } from 'lu
 import { Badge, Card, StatusDot } from '../components/ui'
 import { store, useStore } from '../lib/store'
 import { fmt, fmtClock } from '../lib/format'
-import { MODE_TEXT, NVRAM_TEXT, RENWU_TEXT } from '../lib/types'
+import { MODE_TEXT, NVRAM_TEXT, stateText, taskText } from '../lib/types'
 
 const LOG_TONE: Record<string, string> = {
   info: 'text-slate-300',
@@ -16,6 +16,7 @@ const LOG_TONE: Record<string, string> = {
 export function ControlPage() {
   const { logs, acks, record, link, stats, params, telem } = useStore()
   const recording = record?.recording ?? false
+  const isTaskRunning = telem?.task_id !== undefined && telem.task_id !== 0xff
   const [hz, setHz] = React.useState(50)
   const [filter, setFilter] = React.useState('')
 
@@ -33,19 +34,18 @@ export function ControlPage() {
       <div className="grid gap-3">
         <Card title="任务命令" right={<Badge tone={recording ? 'rose' : 'slate'}>车上记录 {recording ? '开' : '关'}</Badge>}>
           <div className="grid grid-cols-2 gap-2">
-            <button className="btn-primary" onClick={() => void store.cmd('start_a')}>
-              <Play size={13} /> 启动任务 A
-            </button>
-            <button className="btn" onClick={() => void store.cmd('start_b')}>
-              <Play size={13} /> 启动任务 B
-            </button>
-            <button className="btn" onClick={() => void store.cmd('start_c')}>
-              <Play size={13} /> 启动任务 C
-            </button>
             <button className="btn-danger" onClick={() => void store.cmd('stop')}>
               <CircleStop size={13} /> 停止
             </button>
+            <a className="btn" href="#/tasks">
+              <Play size={13} /> 任务编排
+            </a>
           </div>
+          <p className="mt-2 text-[12px] text-slate-500">
+            车上的内置任务流程（任务 A/B/C）已删除。任务在
+            <a className="text-neon-cyan hover:underline" href="#/tasks"> 任务编排页 </a>
+            拼装后烧进车的 Flash，启停也在那里；这里的「停止」会停住正在跑的任务。
+          </p>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <button className="btn-ghost" onClick={() => void store.cmd('clear_fault')}>
               <RefreshCw size={13} /> 清故障
@@ -106,10 +106,10 @@ export function ControlPage() {
               模式 <Badge tone="cyan">{MODE_TEXT[telem?.mode ?? 0] ?? '--'}</Badge>
             </div>
             <div>
-              任务 <Badge tone={(telem?.renwu ?? 0) ? 'mint' : 'slate'}>{RENWU_TEXT[telem?.renwu ?? 0] ?? '--'}</Badge>
+              当前任务 <Badge tone={isTaskRunning ? 'mint' : 'slate'}>{taskText(telem?.task_id)}</Badge>
             </div>
             <div>
-              状态号 <span className="num text-slate-200">{telem?.state_id ?? '--'}</span>
+              解释器状态 <span className="num text-slate-200">{stateText(telem?.state_id)}</span>
             </div>
             <div>
               动作 <span className="num text-slate-200">{telem?.action ?? '--'}</span>

@@ -11,14 +11,14 @@
 #include "jy61p.h"
 
 /* 陀螺仪活性看门狗：**只要角度环在跑**（UI 的 MOTION_GYRO / MOTION_TRACE_GYRO，
- * 或者任务流程 renwu.c 用 Toggle_Gyro_Control() 直接开的那些转弯），只要 500ms
+ * 或者任务解释器用 Toggle_Gyro_Control() 直接开的那些转弯），只要 500ms
  * 没解析出新帧（JY61P 默认 100Hz，正常 10ms 一帧）就判定失联并停车。
  *
  * 为什么必须停：角度环拿的是 Yaw 的**冻结值** —— 传感器一死，环会认为"已经
  * 朝着目标、误差 0"，于是不再修正；循迹串级里外层改的目标航向也就跟不动了，
  * 车会笔直冲出去（比停下来危险得多）。故障方向只能是"停"。
  *
- * 判据用 GyroControl_IsEnabled() 而不是运动模式：任务流程（renwu.c）不走
+ * 判据用 GyroControl_IsEnabled() 而不是运动模式：任务解释器不走
  * Motion_SetMode，它只是在 IDLE 模式下借用同一个角度环，光看模式会漏掉它。
  * 上升沿（角度环刚被打开）给 500ms 宽限：上电/刚插上模块时它可能还没开始发帧。 */
 #define GYRO_STALE_MS 500U
@@ -162,12 +162,12 @@ void Motion_Task(void)
 
     case MOTION_IDLE:
     default:
-        /* 任务流程（renwu.c）不走运动模式：它直接调 Toggle_Gyro_Control() 和
+        /* 任务解释器不走运动模式：它直接调 Toggle_Gyro_Control() 和
          * PID_Tracing_Timer_Start()。旧板这两种“后台环”分别跑在 TIM4(10ms) 和 TIM2(10Hz)
          * 的中断里；新板没有多余的周期定时器，统一在这里补上：
          *   · 角度环（5ms 一拍，gyro_control_enabled 关着时 GyroControl_Task() 自己返回）
          *   · 后台循迹环（内部 /20 分频 = 100ms，保持旧板 TIM2 的采样率）
-         * 运动模式（MOTION_GYRO/TRACE/TRACE_GYRO）与任务流程互斥：进任务前会 Motion_Stop()。 */
+         * 运动模式（MOTION_GYRO/TRACE/TRACE_GYRO）与任务互斥：进任务前会 Motion_Stop()。 */
         if (GyroControl_IsEnabled()) {
             GyroControl_Task();
         }

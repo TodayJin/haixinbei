@@ -256,10 +256,10 @@ function makeTelem() {
     servo2_deg: round(servo.ch2, 1),
     line,
     gray,
-    state_id: sim.action,
+    state_id: taskRun.running ? taskRun.state : 0xff,   // 解释器当前状态号；0xFF = 没在跑
     loop_us: 900 + Math.round(Math.random() * 260),
     mode: driving ? 3 : 0,
-    renwu: record.recording ? 1 : 0,
+    task_id: taskRun.running ? taskRun.id : 0xff,       // 当前任务号；0xFF = 没在跑
     action: sim.action,
     trace: { pos: round(sim.linePos, 2), pid: Math.round((4.5 - sim.linePos) * 260) },
     angle: { err: round(err, 2), rate_ref: round(err * 12, 1), corr: Math.round(err * 30) },
@@ -566,6 +566,11 @@ const server = http.createServer(async (req, res) => {
       const body = (await readBody(req)) || {}
       const allowed = ['stop', 'start_a', 'start_b', 'start_c', 'clear_fault', 'reset', 'telem_hz', 'gyro_cal', 'gyro_turn', 'gyro_zero']
       if (!allowed.includes(body.cmd)) return fail(res, 400, `不认识的命令 ${body.cmd}`, 'bad_cmd')
+      if (['start_a', 'start_b', 'start_c'].includes(body.cmd)) {
+        // 固件删了内置任务流程 ⇒ 这三个命令回 ST_UNSUPPORTED（0x08）＝ 桥侧 ok:false
+        log('warn', `命令 ${body.cmd} 已废弃（固件回"不支持"）`)
+        return json(res, 200, { ok: false, code: 'unsupported', status: 0x08, error: `${body.cmd} 已废弃：任务改用 #/tasks 页的「开始」` })
+      }
       if (body.cmd === 'telem_hz') {
         const hz = Number(body.arg)
         if (!Number.isFinite(hz) || hz < 1 || hz > 100) return fail(res, 400, 'telem_hz 必须在 1..100', 'out_of_range')
@@ -688,6 +693,9 @@ const server = http.createServer(async (req, res) => {
     if (path === '/api/tasks/commit' && req.method === 'POST') {
       const body = (await readBody(req)) || {}
       const id = Number(body.id)
+      // 假后端也要装真固件的铁律：解释器在跑时擦一页会把 CPU 按住几十毫秒 ⇒ 回 busy，
+      // 让操作员先按停止，而不是"悄悄帮你停掉任务再烧"（那比拒绝更坏）。
+      if (taskRun.running) return fail(res, 400, '任务正在跑：先点「停止」再烧写', 'busy')
       const buf = staging.get(id)
       if (!buf) return fail(res, 400, `任务 ${id} 还没收到任何数据`, 'bad_param')
       const len = Number(body.len)
@@ -713,10 +721,10 @@ const server = http.createServer(async (req, res) => {
     if (path === '/api/tasks/delete' && req.method === 'POST') {
       const body = (await readBody(req)) || {}
       const id = Number(body.id)
+      if (taskRun.running) return fail(res, 400, '任务正在跑：先点「停止」再删除', 'busy')
       if (!tasks.has(id)) return fail(res, 404, `车上没有任务 ${id}`, 'not_found')
       tasks.delete(id)
       staging.delete(id)
-      if (taskRun.id === id) taskRun = { ...taskRun, running: false }
       return json(res, 200, { ok: true })
     }
 
@@ -725,6 +733,7 @@ const server = http.createServer(async (req, res) => {
       const id = Number(body.id)
       const t = tasks.get(id)
       if (!t) return fail(res, 404, `车上没有任务 ${id}`, 'not_found')
+      if (taskRun.running) return fail(res, 400, '已经有一个任务在跑：先停止', 'busy')
       if (t.buf.subarray(0, 2).toString('latin1') !== 'TK' && t.buf.readUInt16LE(0) !== 0x4b54) {
         return fail(res, 400, 'magic 不对', 'bad_param')
       }

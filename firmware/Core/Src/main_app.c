@@ -25,8 +25,7 @@
 #include "encoder.h"
 #include "speed_control.h"
 #include "motion.h"
-#include "gyro_control.h"  /* 任务流程（renwu.c）要用角度环，见主循环里的任务闸门 */
-#include "renwu.h"         /* 旧板的比赛任务流程 A/B/C（host_link 的 CMD_START_A/B/C 启动） */
+#include "gyro_control.h"  /* 角度环：任务块里的转向/摆正由它执行，见主循环的每拍推进 */
 #include "task_run.h"      /* 上位机可编程任务（状态机）解释器，见主循环末尾的每拍推进 */
 #include "task_store.h"    /* 任务程序在 Flash 里的 3 个槽位（页 60/61/62）+ 开机自启 */
 #include "motor_bench.h" /* 只在 -DMOTOR_BENCH 的构建里干活，见 motor_bench.c */
@@ -172,9 +171,6 @@ int main(void)
     }
   }
 
-  /* 旧比赛任务流程的收尾标志（见主循环里那一小段）：1=旧 renwu 流程曾被启动过 */
-  static uint8_t s_renwu_active = 0U;
-
   while (1) {
     now = HAL_GetTick();
 
@@ -269,21 +265,6 @@ int main(void)
     /* 设置存档：200ms 看一眼快照有没有变，变了再等 1.5s 稳定才擦写最后一页
      * （擦+写约 30ms，期间取指停摆；内部自己避开 OLED 传输）。 */
     nvram_poll();
-
-    /* ---- 旧比赛任务流程（renwu.c 的 A/B/C）已从主循环摘掉 -------------------------
-     * 任务编排已由上位机可编程任务取代（App/Svc/task_prog.c + task_run.c，见下）。
-     * renwu.c **保留不删**（当旧流程的参考），但不再从主循环里跑：它与解释器都会
-     * 接管电机，同时跑必然互相踩。
-     * 只留"收尾清 flag"这一段：上位机的旧 CMD_START_A/B/C 仍会把 renwu_flag 置起来，
-     * 而 host_link 把 renwu_flag != 0 当"车在动"（任务存储区拒绝擦写的判据之一）
-     * ⇒ 不清掉它，一次老式 START 会让任务存储区**永远 BUSY**。 */
-    if (renwu_flag != 0U) {
-      renwu_flag = 0U;
-    }
-    if (s_renwu_active != 0U) {
-      s_renwu_active = 0U;
-      renwu_stop();           /* 关角度环 + Load(0,0) 断电机（防御性保留） */
-    }
 
     /* ---- 上位机可编程任务（App/Svc/task_run.c + task_prog.c）----------------------
      * 状态机解释器，全非阻塞、5ms 一拍；没有"载入 + 启动"过程序时是空操作（什么都不做）。

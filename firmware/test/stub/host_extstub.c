@@ -102,8 +102,7 @@ float HostExt_ServoAngle(int ch) { return (ch == 1) ? 90.0f : 45.0f; }
 int     HostExt_SaveParams(void) { stubx_save_calls++; return 1; }
 uint8_t HostExt_NvramState(void) { return stubx_nvram_state; }
 uint8_t HostExt_MotorEnabled(void) { return 0u; }
-uint8_t HostExt_RenwuFlag(void) { return 0u; }
-uint8_t HostExt_BlackNum(void) { return 7u; }
+uint8_t HostExt_TaskRunning(void) { return 0u; }   /* TELEM2 51 现在直接问 TaskRun_IsRunning() */
 uint8_t HostExt_MotionMode(void) { return 3u; }
 uint8_t HostExt_MotionFault(void) { return 0u; }
 

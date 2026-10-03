@@ -7,6 +7,7 @@ import { CHANNEL_BY_KEY } from '../lib/channels'
 import { fmt, fmtInt, fmtSigned, normDeg } from '../lib/format'
 import { TURN_TICK_MS, norm180, offsetLabel } from '../lib/heading'
 import { compassText } from '../lib/attitude3d'
+import { taskText } from '../lib/types'
 
 /** 三张姿态波形的窗口（和 MiniTrend 的默认一致，写出来是为了印在卡片上） */
 const WAVE_WINDOW_MS = 20000
@@ -220,7 +221,7 @@ export function ImuPage() {
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <Stat label="遥测帧率" value={fmt(link?.telem_hz, 1)} unit="Hz" />
             <Stat label="主循环" value={fmt(t?.loop_us, 0)} unit="µs" />
-            <Stat label="状态机" value={`${t?.mode ?? '--'}`} hint={`renwu ${t?.renwu ?? 0}`} />
+            <Stat label="整车模式" value={`${t?.mode ?? '--'}`} hint={`当前任务 ${taskText(t?.task_id)}`} />
             <Stat label="动作号" value={`${t?.action ?? '--'}`} />
           </div>
           <div className="mt-3 text-[12px] text-slate-500">

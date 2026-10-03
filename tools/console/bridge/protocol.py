@@ -77,17 +77,18 @@ ST_OUT_OF_RANGE = 0x04
 ST_NOT_READY = 0x05
 ST_BAD_CMD = 0x06
 ST_BUSY = 0x07
+ST_UNSUPPORTED = 0x08          # 命令/功能已废弃或不支持（固件删了内置任务流程后 CMD_START_A/B/C 回这个）
 
 ST_NAMES = {
     ST_OK: "ok", ST_UNKNOWN_TYPE: "未知帧类型", ST_BAD_PARAM: "参数非法",
     ST_OUT_OF_RANGE: "超出范围", ST_NOT_READY: "当前不可用", ST_BAD_CMD: "命令非法",
-    ST_BUSY: "忙",
+    ST_BUSY: "忙", ST_UNSUPPORTED: "不支持",
 }
 
 CMD_STOP = 0x01
-CMD_START_A = 0x02
-CMD_START_B = 0x03
-CMD_START_C = 0x04
+CMD_START_A = 0x02             # 已废弃：固件内置任务流程已删，收到就回 ST_UNSUPPORTED
+CMD_START_B = 0x03             # 同上
+CMD_START_C = 0x04             # 同上
 CMD_CALIB_GYRO = 0x05
 CMD_SAVE_PARAMS = 0x06
 CMD_CLEAR_FAULT = 0x07
@@ -314,6 +315,7 @@ def decode_telemetry(p: bytes) -> dict:
         "servo1_us": u16(p, 22),
         "servo2_us": u16(p, 24),
         "line": [(lm >> i) & 1 for i in range(8)],
+        # 键名保持 state_id：含义已从"renwu 步号"改成「解释器当前状态号」，0xFF = 没载入/没在跑
         "state_id": p[27],
         "loop_us": u16(p, 28),
         "flags": {
@@ -335,7 +337,9 @@ def decode_telemetry(p: bytes) -> dict:
                   "rate_ref": i16(p, 46) / 10.0 if len(p) >= 48 else 0.0,
                   "corr": i16(p, 48) if len(p) >= 50 else 0}
     d["mode"] = p[50] if len(p) >= 51 else 0
-    d["renwu"] = p[51] if len(p) >= 52 else 0
+    # p[51] = 当前任务号（原来叫 renwu=任务A/B/C）；0xFF = 没在跑。
+    # 老 32B 帧里根本没有这个字节 ⇒ 回"没在跑"（0xFF），不要假装是任务 0。
+    d["task_id"] = p[51] if len(p) >= 52 else 0xFF
     d["servo1_deg"] = p[52] if len(p) >= 53 else 0
     d["servo2_deg"] = p[53] if len(p) >= 54 else 0
     d["action"] = p[54] if len(p) >= 55 else 0
@@ -584,7 +588,7 @@ def encode_telemetry2(t: dict) -> bytes:
         if b:
             lm |= 1 << i
     p[26] = lm
-    p[27] = int(t.get("state_id", 0)) & 0xFF
+    p[27] = int(t.get("state_id", 0xFF)) & 0xFF    # 0xFF = 解释器没载入/没在跑
     struct.pack_into("<H", p, 28, max(0, min(65535, int(t.get("loop_us", 0)))))
     f = t.get("flags", {})
     p[30] = ((FL_GYRO_OK if f.get("gyro_ok") else 0) | (FL_LOST if f.get("lost") else 0)
@@ -601,7 +605,7 @@ def encode_telemetry2(t: dict) -> bytes:
     struct.pack_into("<h", p, 46, int(round(t.get("angle", {}).get("rate_ref", 0.0) * 10)))
     struct.pack_into("<h", p, 48, max(-32768, min(32767, int(t.get("angle", {}).get("corr", 0)))))
     p[50] = int(t.get("mode", 0)) & 0xFF
-    p[51] = int(t.get("renwu", 0)) & 0xFF
+    p[51] = int(t.get("task_id", 0xFF)) & 0xFF    # 0xFF = 没在跑
     p[52] = int(t.get("servo1_deg", 0)) & 0xFF
     p[53] = int(t.get("servo2_deg", 0)) & 0xFF
     p[54] = int(t.get("action", 0)) & 0xFF
