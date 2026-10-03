@@ -1,6 +1,6 @@
 /**
  * 极简哈希路由（不引 react-router）。
- * 页面 id 与 API.md §5 的 9 个页面一一对应。
+ * 页面 id 与 API.md §5 的 10 个页面一一对应。
  */
 
 import { useSyncExternalStore } from 'react'
@@ -12,6 +12,7 @@ export type PageId =
   | 'sensors'
   | 'servo'
   | 'params'
+  | 'tasks'
   | 'scope'
   | 'control'
   | 'settings'
@@ -30,6 +31,7 @@ export const PAGES: PageDef[] = [
   { id: 'sensors', title: '传感器', desc: '8 路灰度与循迹' },
   { id: 'servo', title: '舵机与动作', desc: '14 个动作的角度' },
   { id: 'params', title: '调参', desc: '三环参数与下发' },
+  { id: 'tasks', title: '任务', desc: '状态机拖拽编程' },
   { id: 'scope', title: '波形', desc: '多通道独立量程' },
   { id: 'control', title: '控制与日志', desc: '命令 / 记录 / 回放' },
   { id: 'settings', title: '设置', desc: '缓冲 / 预设 / 关于' },

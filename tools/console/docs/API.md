@@ -107,7 +107,30 @@
 {"ok":true,"items":[{"name":"默认调试","kind":"mixed","updated_ms":1728000000000,
                      "keys":["actions","params"],"note":""}]}
 ```
-`kind`：`actions` | `params` | `servo` | `mixed`。文件落在 `tools/console/data/presets/*.json`。
+`kind`：`actions` | `params` | `servo` | `mixed`。文件落在 `tools\console/data/presets/*.json`。
+
+### 3.6 任务（`#/tasks` 页用；**契约已冻结，桥待实现**）
+格式与语义的真值来源是仓根 `docs/任务编程.md`（二进制 v1、帧 `0x60`–`0x69`、能力位 `HOST_CAP_TASK=bit7`）。
+前端 `web/src/lib/taskapi.ts` 已按下面的端点写好，桥只要照做就能接上（现在桥没有这些端点 ⇒ 页面顶部显示琥珀色
+「桥上还没有任务端点」而不是报错）：
+
+| 方法 | 路径 | 请求体 | 回 |
+|---|---|---|---|
+| GET | `/api/tasks` | — | `{"ok":true,"items":[{"id","name","len","crc","flags"}]}` |
+| GET | `/api/tasks/get?id=N` | — | `{"ok":true,"hex":"…"}`（整镜像，前端自己切分块） |
+| POST | `/api/tasks/put` | `{"id","offset","hex"}` | `{"ok":true}`（一帧 `T_TASK_PUT`，**hex 长度 ≤ 240 个字符 = 120 B**） |
+| POST | `/api/tasks/commit` | `{"id","len","crc","name"}` | `{"ok":true}`（`T_TASK_COMMIT`，车上擦写 Flash） |
+| POST | `/api/tasks/delete` | `{"id"}` | `{"ok":true}` |
+| POST | `/api/tasks/run` | `{"id"}` | `{"ok":true}` |
+| POST | `/api/tasks/stop` | `{}` | `{"ok":true}` |
+| GET | `/api/tasks/status` | — | `{"ok":true,"status":{"id","state","running","block","elapsed_ms","flags"}}` |
+
+- 失败体一律 `{"ok":false,"error":"…"}`；**桥上根本没有这些端点时回 404/501**，前端会切成「等固件/桥支持」的提示态。
+- `crc` 是 `T_TASK_COMMIT` 里那个 CRC16-CCITT（覆盖镜像 `[12,len)`），前端算好一起发；车上回读后前端会再比一次字节。
+- `status` 允许平铺（`{"ok":true,"id":…}`）也允许嵌在 `status` 里，两种都认。
+- **假后端 `web/mock/server.mjs` 已经按本表实现了一遍**（内存里的假 Flash：`put` 收分片、`commit` 查 magic/版本/状态数/**CRC 必须对**、`get` 回整镜像、
+  `run`/`stop`/`status` 让监视画面真的动起来），所以 `#/tasks` 页不用等固件就能整条演示。
+  `web/src/lib/contract.test.ts` 里有一条用例专门走这条真 HTTP 闭环（烧写 → 目录 → 回读逐字节 → 运行 → 状态 → 错 CRC 必须被拦 → 删掉）。
 
 ## 4. SSE 事件（`GET /api/stream`）
 
@@ -150,7 +173,7 @@
 - 技术栈：**Vite + React 18 + TypeScript + Tailwind CSS 3.4 + uPlot**（图标用 `lucide-react`，其余不引入 UI 库）。禁止 Qt/tkinter/electron。
 - 语言：界面中文；数字用等宽字体（`tabular-nums`）。
 - 设计：深色优先（`#0b1020` 级背景）、玻璃拟态卡片（`bg-white/5 + backdrop-blur + ring-1 ring-white/10`）、圆角 16px、青/紫霓虹强调色、切换 150ms 过渡、状态点脉冲动效；桌面三栏自适应，窄屏折叠侧栏。
-- 页面：**总览 / 操控 / IMU / 传感器 / 舵机与动作 / 调参 / 波形 / 控制与日志 / 设置**。
+- 页面：**总览 / 操控 / IMU / 传感器 / 舵机与动作 / 调参 / 任务 / 波形 / 控制与日志 / 设置**（10 个）。
 - 操控页：键盘 **W/S = 前进/后退、A/D = 左/右转**（方向键同义），可组合（W+A = 边走边左转），A+D 或 W+S 相互抵消；空格的优先级最高 = 急停交还车上任务流程。所有键松开 ⇒ `{mode:"off"}`。前端只在指令变化时 POST 一次 `/api/drive`，之后靠桥的 200 ms 驾驶保活喂车上的 500 ms 看门狗。
 - 键盘给的转向是**角速度**（°/s，滑块 0..`TURN_RATE_LIMIT`=180），前端每 100 ms 把角速度积分成**目标航向偏移**（累计最多 `HOLD_LIMIT`=540°）再下发；松键 = 保持当前朝向（不发 off），A/D 的符号与固件一致：**按 A（左转）发正 `turn`**。
 - IMU 页「朝向控制」：一个 −180°..+180° 滑块（左侧 = 右转、右侧 = 左转），拖动即接管角度环（`{mode:"base_turn", base:0, turn:offset}`，节流 100 ms + 尾部补一帧），松手保持；「回到 0°」归零，「交还车上任务」发 `{mode:"off"}`。读数：基准朝向 / 目标朝向 / 当前朝向 / 角度环误差。
@@ -160,6 +183,14 @@
 - 波形页：每通道**独立量程泳道**（节约纵向空间）、可选 5/10/20/30 s 窗口、暂停/继续、游标读数、CSV 导出（前端生成）。
 - 每个写操作后给出 1 行反馈（成功/失败原因），失败要用后端返回的 `error` 原文。
 - 安全提示常驻：操控页顶部一行“真车模式下会真的让车轮转动 —— 先架空空转”。
+- 任务页（`#/tasks`）：三栏 = 左任务列表（新建/复制/删除/导入导出 JSON，localStorage `hxb.tasks.v1`）/ 中状态卡片（每张
+  两个序列「进门」「循环体」，块可拖动排序、点开改参数）+ 编译与烧写卡 / 右块库（按 运动/等待/动作/流程 分组，
+  **拖进去或点一下**加到当前状态）。**烧写 = 分块 `put` → `commit` → 立刻 `get` 回来逐字节比对**；运行监视 500 ms 轮询
+  `status` 并高亮正在跑的状态与块。诊断信息（`elapsed_ms`）是给界面看的经验值，**不要**用它做逻辑判断（固定 5 ms 一拍、1 Hz 心跳）。
+  拖拽用手写 HTML5 DnD（`dataTransfer` 里放 `application/x-hxb-task`），不做嵌套拖拽。
+- 任务页的编译器是 `web/src/lib/task.ts`（与车上 `firmware/App/Svc/task_prog.c` 同格式，有跨语言金样本对拍：`tests/c/taskgen.c` + `tests/fixtures/task.golden.json` + `web/src/lib/task.golden.ts`）；编辑操作全在 `web/src/lib/taskedit.ts`，**改格式要同时改这两处 + `docs/任务编程.md` + 重新生成金样本（`tools/console/tests/c/make_golden.ps1`）**。
+- 还有一条**反向**对拍（`tools/console/tests/test_task_firmware_e2e.py`）：esbuild 打包 `tests/c/taskentry.ts` → node 用**上位机的编码器**编出 7 个镜像 → gcc 把 `tests/c/taskcheck.c` 链上**真** `task_prog.c` 读一遍，断言车上校验 `TASK_OK`、车上算出的 len/CRC/状态名/块字段与上位机一致，并且"缺收尾块"时两边都报错（上位机 `最后一块` / 车上 `TASK_E_TAIL=9`）。
+  查这个链路时抓到过一个**格式陷阱**：名字区没有长度也没有 `'\0'`，读名字只能用"下一个更大的偏移"定界（`%s` 会把下一个名字一起读出来）—— 已写进 `docs/任务编程.md` §4 的警告块。
 
 ## 6. 后端开发/测试要求
 

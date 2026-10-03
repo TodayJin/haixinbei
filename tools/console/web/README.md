@@ -5,7 +5,7 @@
 
 - 后端契约（冻结版）：[`../docs/API.md`](../docs/API.md) —— 页面字段、端点、SSE 事件全按它来。
 - 后端实现（Python 桥）：`../bridge/`（由主工程维护，本目录不碰）。
-- 本目录只负责**界面**：9 个页面 + 数据层 + 假后端（mock）。
+- 本目录只负责**界面**：10 个页面 + 数据层 + 假后端（mock）。
 
 ---
 
@@ -35,7 +35,7 @@ node mock/server.mjs   # 直接开 http://127.0.0.1:8770 ，托管 dist/
 | `npm run mock` | 启动零依赖假后端（托管 `dist/`，端口 `PORT` 可改） |
 | `npm test` / `npx vitest run` | 单元测试 + SSR 冒烟 + 契约自检 |
 
-## 3. 页面（9 个，哈希路由 `#/<id>`）
+## 3. 页面（10 个，哈希路由 `#/<id>`）
 
 | 路由 | 页面 | 内容 |
 |---|---|---|
@@ -45,8 +45,8 @@ node mock/server.mjs   # 直接开 http://127.0.0.1:8770 ，托管 dist/
 | `#/sensors` | 传感器 | 8 路灰度柱（压线高亮）、重心/偏差/PID 输出、四路趋势、标定表（黑/白/阈值/抖动/极性/质量） |
 | `#/servo` | 舵机与动作 | 两路舵机手动角度 + 回中 + 中位偏差；**14 个动作的逐行编辑**（下发 / 播放 / 与出厂值对比 / 复合动作标记）；「固化到车」（写小车 Flash）；预设 |
 | `#/params` | 调参 | 按环分组（速度环/角度环/循迹环/串级/任务/车辆/电源）逐项编辑、范围条 + 默认位置刻线、只看改动、全部下发、固化到车、回默认 |
-| `#/scope` | 波形 | uPlot **每通道独立量程泳道**、5/10/20/30s 窗口、暂停、游标读数、通道勾选、导出 CSV（当前窗口或整个缓冲）、清空 |
-| `#/control` | 控制与日志 | 任务 A/B/C 启停、清故障、软复位、遥测频率、车上记录；日志（可过滤）与 ACK 列表；车辆状态（「陀螺校准」按钮已删除：`gyro_cal` 桥没这个名字、固件 `0x05` 也没实现） |
+| `#/tasks` | 任务 | **状态机拖拽编程**：左任务列表（新建/复制/删除/导入导出 JSON，浏览器 localStorage 存 `hxb.tasks.v1`）、中状态卡片（每张「进门」+「循环体」两个序列，块拖动排序 / 点开改参数 / 设为主页 / 复制 / 删除）+ 编译与烧写卡（长度·占用%·CRC16·状态块数、红错/黄警列表、烧写后**回读逐字节比对**、开始/停车/500ms 运行监视高亮当前状态与块）、右块库（10 种块按 运动/等待/动作/流程 分组，拖进去或点一下加到当前状态）。格式真值是仓根 [任务编程](../../../docs/任务编程.md)；编译器 `src/lib/task.ts`、编辑器 `src/lib/taskedit.ts`、桥客户端 `src/lib/taskapi.ts`（`/api/tasks*` 端点未实现时切成「等桥/固件支持」提示） |
+| `#/scope` | 波形 | uPlot **每通道独立量程泳道**、5/10/20/30s 窗口、暂停、游标读数、通道勾选、导出 CSV（当前窗口或整个缓冲）、清空 || `#/control` | 控制与日志 | 任务 A/B/C 启停、清故障、软复位、遥测频率、车上记录；日志（可过滤）与 ACK 列表；车辆状态（「陀螺校准」按钮已删除：`gyro_cal` 桥没这个名字、固件 `0x05` 也没实现） |
 | `#/settings` | 设置 | 串口/波特率选择、连模拟器/串口/断开、环形缓冲点数、波形窗口、安全提示开关、固件能力位、预设管理与导出、关于 |
 
 全局：侧栏导航 + 顶栏链路徽章；右下角 toast（写操作的成功/失败提示，**失败直接显示后端的 `error` 原文**）；
@@ -62,6 +62,10 @@ node mock/server.mjs   # 直接开 http://127.0.0.1:8770 ，托管 dist/
   `SeriesRing`（默认 30000 点，设置页可改并 `resize` 保留最近数据）。
 - `src/lib/channels.ts`：18 个波形通道的定义（键/标签/单位/颜色/取值），新增通道只改这里。
 - 设置持久化在 `localStorage['console.settings.v1']`（窗口、缓冲点数、勾选通道、操控页步进、安全提示开关）。
+- 任务页的数据层是**另一条线**（不进 `store`，页面自己 `useState` + `localStorage['hxb.tasks.v1']`）：
+  `task.ts`（镜像编解码）= 与车上同一份格式；`taskedit.ts` = 拖拽/增删/脏数据修复/编译预览；
+  `taskapi.ts` = `/api/tasks*` 的 HTTP 客户端（每文件各带一份 `.test.ts`）。程序区 6 KB（Flash 页 60..62），
+  编译卡上的「占用 %」就是按 6144 B 算的。
 
 ## 5. 假后端 mock（零依赖）
 
@@ -73,10 +77,14 @@ node mock/server.mjs   # 直接开 http://127.0.0.1:8770 ，托管 dist/
 
 写操作会真的改内存状态并回 `ack`，越界/未知名返回 `4xx + {ok:false,error,code}` —— 前端就把这句话显示出来。
 
+任务端点（`/api/tasks*`，契约见 `docs/API.md` §3.6）也实现了，用的是内存里的**假 Flash**：`put` 收 120 B 分片、
+`commit` 查 magic/版本/状态数并且 **CRC 不对就拒收**、`get` 回整镜像、`run` 之后 `status` 每 400 ms 走一块
+（走完序列换下一个状态）——所以 `#/tasks` 页不用等固件就能整条演示（烧写 → 目录 → 回读 → 运行 → 停车）。
+
 ## 6. 自测
 
 ~~~bash
-npm test                 # 5 个测试文件
+npm test                 # 16 个测试文件
 ~~~
 
 | 文件 | 覆盖 |
@@ -84,9 +92,13 @@ npm test                 # 5 个测试文件
 | `src/lib/ring.test.ts` | 环形缓冲：窗口切片、绕回、resize 保留、NaN 归零 |
 | `src/lib/format.test.ts` | 单位/格式换算：PWM%、脉宽→角度、角度归一、灰度、时长 |
 | `src/lib/csv.test.ts` | CSV 转义（逗号/引号/换行）、逐列小数位、表头、文件名 |
-| `src/lib/render.test.tsx` | **9 个页面 SSR 冒烟**：能渲染、含关键中文、不出现 `NaN`/`undefined` |
-| `src/lib/contract.test.ts` | 对 mock 的**契约自检**：字段形状、分组、越界错误体、14 个动作抽查、SSE 先 `state` 后 `telem`（mock 没起就 skip） |
-| `src/lib/ssrPreview.test.tsx` | **产物生成器**：喂真实结构数据后把 9 个页面渲染成 `out/console/ssr/*.html` |
+| `src/lib/render.test.tsx` | **10 个页面 SSR 冒烟**：能渲染、含关键中文、不出现 `NaN`/`undefined` |
+| `src/lib/contract.test.ts` | 对 mock 的**契约自检**：字段形状、分组、越界错误体、14 个动作抽查、SSE 先 `state` 后 `telem`、`/api/tasks*` 整条闭环（烧写→目录→回读逐字节→运行→错 CRC 被拦→删掉；mock 没起就 skip） |
+| `src/lib/ssrPreview.test.tsx` | **产物生成器**：喂真实结构数据后把 10 个页面渲染成 `out/console/ssr/*.html` |
+| `src/lib/task.test.ts` | 任务镜像的编解码/校验/CRC（与 C 侧同格式） |
+| `src/lib/task.golden.test.ts` | **跨语言金样本**：`encodeTask` 编出来的字节逐字节等于 C 侧 `task_prog.c` 生成的 `GOLDEN_HEX`（208 B / CRC16 `0x023A`），再解码往返 |
+| `src/lib/taskedit.test.ts` | 编辑器纯逻辑：块默认值/描述、拖拽插入与右移补偿、跨状态移动、状态增删克隆与跳转改道、按 UTF-8 字节截名、脏数据修复、存盘往返、编译预览（含红错/黄警） |
+| `src/lib/taskapi.test.ts` | 桥客户端：hex 编解码、120 B 分片拼镜像、`/api/tasks*` 各端点载荷、404/`不支持` ⇒ 提示态而不是报错、桥不在/非 JSON 的报错文案 |
 
 契约自检与预览生成需要 mock 在跑：
 

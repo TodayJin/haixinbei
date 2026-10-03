@@ -9,6 +9,7 @@ import {
   Radio,
   Settings as SettingsIcon,
   SlidersHorizontal,
+  Workflow,
   Wrench,
   type LucideIcon,
 } from 'lucide-react'
@@ -27,6 +28,7 @@ const ICONS: Record<PageId, LucideIcon> = {
   sensors: Radio,
   servo: Wrench,
   params: SlidersHorizontal,
+  tasks: Workflow,
   scope: LineChart,
   control: Activity,
   settings: SettingsIcon,

@@ -26,6 +26,7 @@ import { ImuPage } from '../pages/Imu'
 import { SensorsPage } from '../pages/Sensors'
 import { ServoPage } from '../pages/Servo'
 import { ParamsPage } from '../pages/Params'
+import { TasksPage } from '../pages/Tasks'
 import { ScopePage } from '../pages/Scope'
 import { ControlPage } from '../pages/Control'
 import { SettingsPage } from '../pages/Settings'
@@ -41,6 +42,7 @@ const TITLES: Record<string, string> = {
   sensors: '传感器',
   servo: '舵机与动作',
   params: '调参',
+  tasks: '任务',
   scope: '波形',
   control: '控制与日志',
   settings: '设置',
@@ -85,7 +87,7 @@ async function readCss(): Promise<string> {
 }
 
 describe('SSR 预览生成（需要 mock 在 127.0.0.1:8770）', () => {
-  it('把 9 个页面渲染成 out/console/ssr/*.html', async () => {
+  it('把 10 个页面渲染成 out/console/ssr/*.html', async () => {
     let live = false
     try {
       live = (await fetch(`${BASE}/api/health`, { signal: AbortSignal.timeout(1500) })).ok
@@ -121,6 +123,7 @@ describe('SSR 预览生成（需要 mock 在 127.0.0.1:8770）', () => {
       ['sensors', SensorsPage],
       ['servo', ServoPage],
       ['params', ParamsPage],
+      ['tasks', TasksPage],
       ['scope', ScopePage],
       ['control', ControlPage],
       ['settings', SettingsPage],

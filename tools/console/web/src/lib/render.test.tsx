@@ -14,6 +14,7 @@ import { ImuPage } from '../pages/Imu'
 import { SensorsPage } from '../pages/Sensors'
 import { ServoPage } from '../pages/Servo'
 import { ParamsPage } from '../pages/Params'
+import { TasksPage } from '../pages/Tasks'
 import { ScopePage } from '../pages/Scope'
 import { ControlPage } from '../pages/Control'
 import { SettingsPage } from '../pages/Settings'
@@ -25,6 +26,7 @@ const CASES: Array<[string, () => React.JSX.Element, string]> = [
   ['传感器', SensorsPage, '灰度'],
   ['舵机与动作', ServoPage, '舵机'],
   ['调参', ParamsPage, '参数'],
+  ['任务', TasksPage, '状态机'],
   ['波形', ScopePage, 'CSV'],
   ['控制与日志', ControlPage, '任务'],
   ['设置', SettingsPage, '串口'],

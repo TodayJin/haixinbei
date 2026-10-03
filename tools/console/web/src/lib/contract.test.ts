@@ -153,4 +153,66 @@ describe('契约自检（需要 mock 或桥在 127.0.0.1:8770）', () => {
     for (const k of ['"link"', '"params"', '"actions"', '"presets"', '"cal"']) expect(text).toContain(k)
     await reader!.cancel()
   })
+
+  // 任务页（#/tasks）：假后端也按 API.md §3.6 实现了 /api/tasks*，所以这里能用**真 HTTP** 走一遍
+  // 「烧写 → 目录 → 回读逐字节 → 运行 → 状态 → 删掉」——只不过用的是假 Flash。
+  // 这条是真 HTTP（十来次往返），跑全量时其它文件在并行编译，5s 默认超时不够 ⇒ 单独给 30s。
+  it('任务：烧写/回读/运行/删除整条闭环（走真 HTTP）', async () => {
+    if (!live) return
+    const { createTaskApi } = await import('./taskapi')
+    const { newTaskDef } = await import('./taskedit')
+    const { encodeTask, crc16Ccitt } = await import('./task')
+    const api = createTaskApi((u, init) => fetch(`${BASE}${u}`, init))
+
+    const prog = newTaskDef(0, '契约自检').prog
+    const bytes = encodeTask(prog).bytes
+    const crc = crc16Ccitt(bytes.subarray(12))
+    const id = 9
+
+    const burn = await api.burn(id, bytes, bytes.length, crc, '契约自检')
+    expect(burn.ok, JSON.stringify(burn)).toBe(true)
+
+    const list = await api.list()
+    expect(list.ok).toBe(true)
+    if (list.ok) {
+      expect(list.data.supported).toBe(true)
+      const mine = list.data.items.find((x) => x.id === id)
+      expect(mine?.len).toBe(bytes.length)
+      expect(mine?.crc).toBe(crc)
+      expect(mine?.name).toBe('契约自检')
+    }
+
+    const back = await api.get(id)
+    expect(back.ok).toBe(true)
+    if (back.ok) {
+      expect(Array.from(back.data)).toEqual(Array.from(bytes))   // 逐字节
+      expect(crc16Ccitt(back.data.subarray(12))).toBe(crc)       // 车上算的 CRC 也一样
+    }
+
+    const run = await api.run(id)
+    expect(run.ok, JSON.stringify(run)).toBe(true)
+    const st = await api.status()
+    expect(st.ok).toBe(true)
+    if (st.ok && st.data) {
+      expect(st.data.id).toBe(id)
+      expect(st.data.running).toBe(1)
+      expect(st.data.state).toBe(0)        // newTaskDef 的主页是 0
+    }
+    const stop = await api.stop()
+    expect(stop.ok).toBe(true)
+
+    // CRC 报错时必须被桥上拦住（烧半个程序的经典事故）：先按 120 B 分片 put 一遍让桥上有暂存，
+    // 再用错 CRC 提交 —— 顺带验证分片 offset 与 mock 的 "一帧最多 120 字节" 限制一致。
+    const { chunkImage } = await import('./taskapi')
+    for (const c of chunkImage(bytes)) {
+      const p = await api.put(id, c.offset, c.hex)
+      expect(p.ok, JSON.stringify(p)).toBe(true)
+    }
+    const bad = await api.commit(id, bytes.length, (crc ^ 0x1234) & 0xffff, '坏 CRC')
+    expect(bad.ok).toBe(false)
+    if (!bad.ok) expect(bad.error).toMatch(/CRC/)
+
+    const del = await api.del(id)
+    expect(del.ok).toBe(true)
+  }, 30000)
 })

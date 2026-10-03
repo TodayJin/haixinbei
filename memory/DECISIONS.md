@@ -12,6 +12,36 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-03 — 任务程序格式以父代理的 A 格式（web/src/lib/task.ts：magic 0x4B54、ver 1、12B 头 + 8B 状态表 + 10B 块、CRC16-CCITT、帧由固件 task_prog.c 解析）为唯一标准
+选择：任务程序格式以父代理的 A 格式（web/src/lib/task.ts：magic 0x4B54、ver 1、12B 头 + 8B 状态表 + 10B 块、CRC16-CCITT、帧由固件 task_prog.c 解析）为唯一标准
+放弃：我先前自创的 B 格式（tools/console/bridge/tasks.py + tasksim.py + docs/任务程序格式.md，magic 0x31545848）：整包移到 out/_archive_taskfmt_b/ 归档不删
+因为：父代理已经把它接进 firmware/Core/Src/main_app.c 主循环并有 t_task.c 130 项测试与文档，同时存在两套格式必然分叉
+
+## 2026-10-03 — 上位机的任务页自己做编译（encodeTask）并把 CRC 一起发给桥，烧写后立刻回读逐字节比对
+选择：上位机的任务页自己做编译（encodeTask）并把 CRC 一起发给桥，烧写后立刻回读逐字节比对
+放弃：把二进制编码只放在桥/Python 端、前端只发 JSON
+因为：烧半个程序让车上跑错轨迹这类事故只能在校验+回读环节拦住；桥端只做透传不做第二种编码实现
+
+## 2026-10-03 — 桥的 /api/tasks* 端点未实现期间，由 web/mock/server.mjs 按同一份契约实现（内存假 Flash），页面即可整条演示
+选择：桥的 /api/tasks* 端点未实现期间，由 web/mock/server.mjs 按同一份契约实现（内存假 Flash），页面即可整条演示
+放弃：等真桥实现后再做界面
+因为：用户要看到效果，而真桥端点与固件帧要等父代理那侧；契约冻结在 tools/console/docs/API.md §3.6，假后端与真桥同契约
+
+## 2026-10-03 — 任务程序的跨语言金样本只走生成链：tools/console/tests/c/taskgen.c（链真 firmware/App/Svc/task_prog.c）→ tools/console/tests/fixtures/task.golden.json → tools/console/web/src/lib/task.golden.ts → task.golden.test.ts，新鲜度由 tools/console/tests/test_task_bytes.py 每次重编 C 比对
+选择：任务程序的跨语言金样本只走生成链：tools/console/tests/c/taskgen.c（链真 firmware/App/Svc/task_prog.c）→ tools/console/tests/fixtures/task.golden.json → tools/console/web/src/lib/task.golden.ts → task.golden.test.ts，新鲜度由 tools/console/tests/test_task_bytes.py 每次重编 C 比对
+放弃：两侧各手抄一份 278 字符十六进制字面量（t_task.c 的 kGoldenHex + task.test.ts 的 GOLDEN_HEX）—— 已删掉
+因为：手抄表是确定性漂移源：两边同时错就会一起绿，没人会发现（旧参数表就自己撒谎过一次）
+
+## 2026-10-03 — 任务程序解释器全非阻塞（TaskRun_Tick(now_ms) 每 5ms 推进，单拍最多 32 块），且「末尾必须是 跳到状态/结束/带超时的等待条件」这条规则只约束 body 序列，enter 序列允许空跑完
+选择：任务程序解释器全非阻塞（TaskRun_Tick(now_ms) 每 5ms 推进，单拍最多 32 块），且「末尾必须是 跳到状态/结束/带超时的等待条件」这条规则只约束 body 序列，enter 序列允许空跑完
+放弃：照搬旧 App/Svc/renwu.c 的流程（210 处 HAL_Delay + 36 处阻塞 Servo_Move，跑起来会卡死遥测与看门狗）
+因为：任务要和 5ms 控制环、链路看门狗共存；第一版把末尾规则套在 enter 上，t_task 挂了 42 处
+
+## 2026-10-03 — 任务程序存储区定页 60..62（0x0801E800..0x0801F7FF，6KB），页 63 继续留给 nvram
+选择：任务程序存储区定页 60..62（0x0801E800..0x0801F7FF，6KB），页 63 继续留给 nvram
+放弃：挤链接脚本剩的 ~13.6KB 或整片擦 Flash
+因为：tools/flash.ps1 默认按镜像范围擦、不整片擦，所以页 60..62 掉电保留且升级固件不会清掉已存的任务（实现还没做）
+
 ## 2026-10-03 — IMU 页 3D 车模型用纯手写 CSS 3D（preserve-3d 叠长方体），不引 three.js、不用 Canvas 等轴测、不加模型文件
 选择：IMU 页 3D 车模型用纯手写 CSS 3D（preserve-3d 叠长方体），不引 three.js、不用 Canvas 等轴测、不加模型文件
 放弃：three.js——多一个运行时依赖且仍然截图不了；Canvas 自己画等轴测——要手写投影，还丢了 CSS 3D 的透视/背面剔除

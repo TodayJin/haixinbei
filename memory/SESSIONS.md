@@ -14,6 +14,16 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：#/tasks 任务/状态机编辑器整条落地：web/src/lib/taskedit.ts（块库 10 种 + 条件 9 种、拖拽插入/移动/跨状态、状态增删复制与跳转改道、名字按 32 字节截断、localStorage hxb.tasks.v1 读写、compileInfo 算 len/CRC16(覆盖 [12,len))/占用%)、web/src/pages/Tasks.tsx（三栏：任务列表 / 状态机卡片 / 块库；编译与烧写卡含红错黄警、烧写后回读逐字节比对、开始-停车-500ms 运行监视）、web/src/lib/taskapi.ts（/api/tasks* 客户端，404/501 或文案匹配不支持时切提示态）、接线 router.ts(PageId+PAGES 10 页)/App.tsx/Shell.tsx 图标 Workflow/render.test.tsx/ssrPreview.test.tsx。另建反向对拍链 tests/c/taskcheck.c + taskentry.ts + emit_tasks.mjs + tests/test_task_firmware_e2e.py（8 项）：上位机 encodeTask 编的镜像交给真 firmware/App/Svc/task_prog.c 校验并逐字段比对。mock/server.mjs 按 API.md §3.6 实现了全部 /api/tasks* 端点（内存假 Flash，commit 校验 magic/版本/状态数/CRC）。验证：npx tsc --noEmit 干净；npm test 16 文件 155 passed（含 contract.test.ts 里一条走真 HTTP 的烧写→回读→运行→错 CRC 必须被拦→删除闭环）；pytest tools/console/tests -q 77 passed；firmware/test/run_tests.ps1 12/12；npm run build 干净 dist/assets/index-B3ScAoku.js 335.35 kB(gzip 115.55) + index-WB_aXEht.css 36.92 kB；SSR out/console/ssr/tasks.html 含 状态机/块库/编译与烧写/任务列表/data-dropline×11，无 NaN。
+未完成：真桥（tools/console/bridge/server.py）还没有 /api/tasks* 端点，页面在真桥上是提示态；固件还没有 T_TASK_* 帧（0x60–0x69）与 task_store.c 页 60..62 存储。
+下一步：父代理按 API.md §3.6 在桥里转发 /api/tasks*（T_TASK_GET/PUT/COMMIT/RUN/STOP/STATUS），并做 App/Svc/task_store.c 存页 60..62。
+
+## 2026-10-03
+完成：车上任务程序第 1~2 步落地并提交（3ec77b7，18 文件 +2985）：firmware/App/Svc/task_prog.{h,c}（magic 'TK'、ver 1、12B 头+8B 状态表+10B 块+名字区、CRC16/CCITT-FALSE、Validate 的末尾块规则只约束 body）、firmware/App/Svc/task_run.{h,c}（非阻塞解释器：enter+body、主页、GOTO、9 类等待条件判据与超时改道、里程按 dt 积分、横线上升沿、单拍 32 块防自环、运行中拒换程序）、firmware/Core/Src/main_app.c 在 renwu 不跑时 TaskRun_Tick()、firmware/test/t_task.c 130 项、tools/console/web/src/lib/task.ts 上位机镜像 + 生成式金样本链（tests/c/taskgen.c → tests/fixtures/task.golden.json → task.golden.ts → task.golden.test.ts）+ tests/test_task_bytes.py 新鲜度对拍、docs/任务编程.md。验证：make -C firmware 干净（text 116344/data 364/bss 17752）、主机测试 12/12 通过、4 个变异各被 1/2/1/8 处断言抓住、check_static 0 error、check_warnings 待处理 0、npx tsc --noEmit 干净、vitest 的 task/金样本用例全过、pytest test_task_bytes.py 5 项通过、重编真 task_prog.c 与 fixture/TS 逐字节一致
+未完成：存储/协议/桥/界面未做。另：同一工作树里还有正在被别人写的 tools/console/web/src/lib/taskedit.ts + taskedit.test.ts（13:45 新建，我未提交），其中 2 项用例红：sanitizeBlock({op:SET_SPEED,p0:99999}).p0 期望 7200 实得 65535；compileInfo 对「body 没收尾块」期望 warnings 里有'没有'但只有 errors 里有'最后一块'
+下一步：第 3 步：新建 App/Svc/task_store.c 把任务程序存进页 60..62（0x0801E800..0x0801F7FF，6KB），带自己的 magic/CRC 与掉电保护；随后是 T_TASK_* 协议帧（0x60..0x69）、bridge 端点、#/tasks 拖拽界面
+
+## 2026-10-03
 完成：IMU 页按用户 m17387/m17401 的要求换成「手写 CSS 3D 车模型 + 偏航/俯仰/横滚三张波形」，朝向滑块保留原样。验证：npx tsc --noEmit 干净；npm test 12 文件 78 passed（含新 lib/attitude3d.test.ts 10 项）；pytest 64 passed；npm run build 干净（dist/assets/index-DOmEJl8X.js 298.60 kB/gzip 102.09、index-CEiZztkN.css 35.15 kB）；SSR out/console/ssr/imu.html 含车姿态（3D）/三张波形卡/car3d-scene + 66 个 car3d-face + 4 个 rosa 刻度标签，无 NaN/undefined，旧 AttitudeGauge 已消失。变异验证：把 carTransform 的偏航符号取反 ⇒ 10 项里 3 项失败；把 stageTransform 的 el 符号取反 ⇒ 10 项里 2 项失败；还原后全绿。commit 7adbdaf。
 未完成：3D 的车长相本机无法像素自证（headless Chrome 仍然不产出 PNG），只能靠用户肉眼；目标轮仍 paused（revision 3）
 下一步：真车到手后核对三轴方向（+偏航=左转、+俯仰=抬头、+横滚=向左倾），哪个反了就改 web/src/lib/attitude3d.ts 里一行符号
@@ -1155,14 +1165,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：用户电源图未改（U7 分压仍为 3.4V）；电源文件不在仓库
 下一步：等用户改完电源图再核；或出布局分区草图
 
-## 2026-09-14
-完成：按用户要求把陀螺仪从板载 ICM-42688-P 改回**外接 JY61P**：串口重排（USART3→JY61P J10；UART4→无线下载器 J8；LPUART1→备用串口 J9 + J6 灰度串口 15/16）；删除板载 IMU 的 SPI2/INT 接线，释放 PB12–PB15、PE0/PE1，富余脚增至 7 个（+PA12）；更新 BOM（去掉 ICM-42688-P，陀螺仪改为外购 JY61P 模块）、框图、关键电路（JY61P 布线/减震）、CubeMX 核对项（去掉 PE0/PE1）。文档共 20+ 处编辑。
-未完成：电源设计待用户完成；CubeMX 两项待核对
-下一步：等电源设计复核，或出布局分区草图/走线宽度/DRV 散热估算
-
-## 2026-09-14
-完成：把**所有接口定稿**并写入文档 v0.7：第 5 节引脚表改为定稿版（含网络名、每个信号的复用/上拉/默认电平、PA10/PA11 预留舵机、PB5=INA226_ALERT、PA12 为空余）；第 7 节新增 J1–J12 接插件逐 pin 网络定义、板上器件网络 U1–U7、上拉/默认电平/保护表（关键：DRV_nRESET 10k 下拉，上电默认关断电机输出）；第 10 节改为下一步。
-未完成：CubeMX 三项待用户核对；电源设计待用户完成
-下一步：等用户电源设计来复核，或出布局分区草图/走线宽度/DRV 散热估算
-
-> 更早的会话条目已归档到 168 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 170 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。

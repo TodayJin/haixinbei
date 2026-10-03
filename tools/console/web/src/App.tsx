@@ -8,6 +8,7 @@ import { ImuPage } from './pages/Imu'
 import { SensorsPage } from './pages/Sensors'
 import { ServoPage } from './pages/Servo'
 import { ParamsPage } from './pages/Params'
+import { TasksPage } from './pages/Tasks'
 import { ScopePage } from './pages/Scope'
 import { ControlPage } from './pages/Control'
 import { SettingsPage } from './pages/Settings'
@@ -23,6 +24,7 @@ export default function App() {
         {page === 'sensors' && <SensorsPage />}
         {page === 'servo' && <ServoPage />}
         {page === 'params' && <ParamsPage />}
+        {page === 'tasks' && <TasksPage />}
         {page === 'scope' && <ScopePage />}
         {page === 'control' && <ControlPage />}
         {page === 'settings' && <SettingsPage />}

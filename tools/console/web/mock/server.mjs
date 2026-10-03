@@ -158,10 +158,18 @@ function ack(req, ok = true, status = 0, text = 'OK') {
   return item
 }
 
+/** CRC16/CCITT-FALSE。字符串按 UTF-16 码元（老行为，ASCII 等价）、Uint8Array/Buffer 按原始字节。 */
 function crc16(bytes) {
   let crc = 0xffff
-  for (const ch of String(bytes)) {
-    crc ^= ch.charCodeAt(0) << 8
+  if (typeof bytes === 'string') {
+    for (const ch of bytes) {
+      crc ^= ch.charCodeAt(0) << 8
+      for (let i = 0; i < 8; i++) crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff
+    }
+    return crc
+  }
+  for (const b of bytes) {
+    crc ^= b << 8
     for (let i = 0; i < 8; i++) crc = crc & 0x8000 ? ((crc << 1) ^ 0x1021) & 0xffff : (crc << 1) & 0xffff
   }
   return crc
@@ -331,6 +339,25 @@ async function readBody(req) {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'))
   } catch {
     return null
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 任务页（契约 tools/console/docs/API.md §3.6）—— 假后端也存一份，好让 #/tasks 页能整条走通
+// ---------------------------------------------------------------------------
+const tasks = new Map()      // id -> { name, buf: Buffer }
+const staging = new Map()    // id -> Buffer（put 上来还没 commit 的）
+let taskRun = { id: 0, running: false, state: 0, block: 0, nStates: 1, nBody: 1, t0: 0, flags: 0 }
+
+function taskStatus() {
+  if (!taskRun.running) return { id: taskRun.id, state: 0, running: 0, block: 0, elapsed_ms: 0, flags: 0 }
+  const elapsed = Date.now() - taskRun.t0
+  // 让监视画面动起来：每 400ms 走一块，走到序列尾就换下一个状态
+  const step = Math.floor(elapsed / 400)
+  const state = (taskRun.state + Math.floor(step / Math.max(1, taskRun.nBody))) % Math.max(1, taskRun.nStates)
+  return {
+    id: taskRun.id, state, running: 1, block: step % Math.max(1, taskRun.nBody),
+    elapsed_ms: elapsed, flags: 0,
   }
 }
 
@@ -623,6 +650,98 @@ const server = http.createServer(async (req, res) => {
       })
     }
 
+    // ---- 任务页（真桥还没实现，假后端先按契约演一遍）----
+    if (path === '/api/tasks' && req.method === 'GET') {
+      const items = [...tasks.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([id, t]) => ({ id, name: t.name, len: t.buf.length, crc: crc16(t.buf.subarray(12)), flags: 0 }))
+      return json(res, 200, { ok: true, supported: true, items })
+    }
+
+    if (path === '/api/tasks/get' && req.method === 'GET') {
+      const id = Number(url.searchParams.get('id') ?? 0)
+      const t = tasks.get(id)
+      if (!t) return fail(res, 404, `车上没有任务 ${id}`, 'not_found')
+      return json(res, 200, { ok: true, hex: t.buf.toString('hex') })
+    }
+
+    if (path === '/api/tasks/put' && req.method === 'POST') {
+      const body = (await readBody(req)) || {}
+      const id = Number(body.id)
+      const off = Number(body.offset)
+      const hex = String(body.hex ?? '')
+      if (!Number.isInteger(id) || id < 0 || id > 15) return fail(res, 400, 'id 必须是 0..15', 'bad_param')
+      if (!Number.isInteger(off) || off < 0) return fail(res, 400, 'offset 必须是非负整数', 'bad_param')
+      if (hex.length % 2 !== 0 || !/^[0-9a-fA-F]*$/.test(hex)) return fail(res, 400, 'hex 必须是偶数长度的十六进制', 'bad_param')
+      if (hex.length > 240) return fail(res, 400, `一帧最多 120 字节（现在 ${hex.length / 2}）`, 'out_of_range')
+      const data = Buffer.from(hex, 'hex')
+      const cur = staging.get(id) ?? Buffer.alloc(0)
+      const need = off + data.length
+      if (need > 6144) return fail(res, 400, `超出程序区（最多 6144 字节，写到 ${need}）`, 'out_of_range')
+      const next = Buffer.alloc(Math.max(cur.length, need), 0xff)
+      cur.copy(next)
+      data.copy(next, off)
+      staging.set(id, next)
+      return json(res, 200, { ok: true, written: data.length, offset: off })
+    }
+
+    if (path === '/api/tasks/commit' && req.method === 'POST') {
+      const body = (await readBody(req)) || {}
+      const id = Number(body.id)
+      const buf = staging.get(id)
+      if (!buf) return fail(res, 400, `任务 ${id} 还没收到任何数据`, 'bad_param')
+      const len = Number(body.len)
+      if (!Number.isInteger(len) || len < 12 || len > buf.length) return fail(res, 400, `len 不合法：${body.len}`, 'bad_param')
+      const mine = crc16(buf.subarray(12, len))
+      if (mine !== Number(body.crc)) {
+        return fail(res, 400, `CRC 不对（车上算 0x${mine.toString(16).toUpperCase()}，上位机给 ${body.crc}）`, 'crc')
+      }
+      if (buf[2] !== 1) return fail(res, 400, `版本不支持：${buf[2]}`, 'bad_param')
+      if (buf[3] === 0 || buf[3] > 16) return fail(res, 400, `状态数越界：${buf[3]}`, 'bad_param')
+      tasks.set(id, { name: String(body.name ?? ''), buf: Buffer.from(buf.subarray(0, len)) })
+      staging.delete(id)
+      log('info', `任务 ${id} 已写入假 Flash（${len} 字节）`)
+      ack('tasks/commit')
+      return json(res, 200, { ok: true, id, len })
+    }
+
+    if (path === '/api/tasks/delete' && req.method === 'POST') {
+      const body = (await readBody(req)) || {}
+      const id = Number(body.id)
+      if (!tasks.has(id)) return fail(res, 404, `车上没有任务 ${id}`, 'not_found')
+      tasks.delete(id)
+      staging.delete(id)
+      if (taskRun.id === id) taskRun = { ...taskRun, running: false }
+      return json(res, 200, { ok: true })
+    }
+
+    if (path === '/api/tasks/run' && req.method === 'POST') {
+      const body = (await readBody(req)) || {}
+      const id = Number(body.id)
+      const t = tasks.get(id)
+      if (!t) return fail(res, 404, `车上没有任务 ${id}`, 'not_found')
+      if (t.buf.subarray(0, 2).toString('latin1') !== 'TK' && t.buf.readUInt16LE(0) !== 0x4b54) {
+        return fail(res, 400, 'magic 不对', 'bad_param')
+      }
+      const main = t.buf[4]
+      const nStates = t.buf[3]
+      const stOff = 12 + main * 8
+      const nBody = t.buf[stOff + 7] || 1
+      taskRun = { id, running: true, state: main, block: 0, nStates, nBody, t0: Date.now(), flags: 0 }
+      log('info', `任务 ${id} 开始跑（${nStates} 状态，主页 ${main}）`)
+      return json(res, 200, { ok: true, status: taskStatus() })
+    }
+
+    if (path === '/api/tasks/stop' && req.method === 'POST') {
+      taskRun = { ...taskRun, running: false }
+      log('info', '任务已停')
+      return json(res, 200, { ok: true, status: taskStatus() })
+    }
+
+    if (path === '/api/tasks/status' && req.method === 'GET') {
+      return json(res, 200, { ok: true, status: taskStatus() })
+    }
+
     if (path === '/api/stream') {
       res.writeHead(200, {
         'content-type': 'text/event-stream; charset=utf-8',
@@ -671,5 +790,5 @@ startTimers()
 server.listen(PORT, HOST, () => {
   console.log(`[mock] 假后端已启动：http://${HOST}:${PORT}`)
   console.log(`[mock] 静态目录：${DIST}`)
-  console.log('[mock] 端点：/api/health /link /ports /params* /actions* /servo* /drive /cmd /log /cal /presets* /record /recordings /stream')
+  console.log('[mock] 端点：/api/health /link /ports /params* /actions* /servo* /drive /cmd /log /cal /presets* /record /recordings /tasks* /stream')
 })
