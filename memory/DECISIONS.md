@@ -12,6 +12,26 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-03 — 用「把真固件协议层编成字节管道进程（firmware/test/pipe_hostlink.c）+ bridge/protocol.py 直接对话」来验协议一致性
+选择：用「把真固件协议层编成字节管道进程（firmware/test/pipe_hostlink.c）+ bridge/protocol.py 直接对话」来验协议一致性
+放弃：再写一份字段对照文档、或只做源码解析（解析到的是源码文本，不是运行时字节）
+因为：C 侧 t_hostlink.c 与 Python 侧 test_protocol.py 各自手抄了一份 T_TELEM2/ACK/DRIVE_REPORT 偏移，没有任何测试证明两份抄写一致；管道对拍用的是真二进制，能抓出源码解析抓不到的字节序/帧交错/magic 问题
+
+## 2026-10-03 — 管道构建用 -DHOST_PIPE_REAL_SERVO 链真 firmware/App/Bsp/servo.c，桩里的假舵机表与假 Servo_*、假 Servo_Task 用 #ifndef 关掉
+选择：管道构建用 -DHOST_PIPE_REAL_SERVO 链真 firmware/App/Bsp/servo.c，桩里的假舵机表与假 Servo_*、假 Servo_Task 用 #ifndef 关掉
+放弃：把桩的 k_def[] 改成出厂值去追平（桩仍是第二个真值来源，迟早再漂）
+因为：host_appstub.c 的 k_def[] 是旧台架值 ≠ servo.c 的 k_action_default[]，用桩测永远测不出「固件运行值 == 源码出厂表」
+
+## 2026-10-03 — 给假 HAL 头 firmware/test/stub/stm32g4xx_hal.h 补 __HAL_TIM_SET_COMPARE 与旧拼法 __HAL_TIM_SetCompare/__HAL_TIM_GetCompare
+选择：给假 HAL 头 firmware/test/stub/stm32g4xx_hal.h 补 __HAL_TIM_SET_COMPARE 与旧拼法 __HAL_TIM_SetCompare/__HAL_TIM_GetCompare
+放弃：改真 servo.c 去迁就桩、或用 -D 命令行宏映射（要在每个 TU 可见，更脏）
+因为：真 ST HAL 的 stm32_hal_legacy.h 就提供旧拼法，本工程 servo.c/motor.c 用的也是旧拼法；假头缺这组宏属于假 HAL 不忠实，补上是纯新增、对既有 10 个主机测试无行为影响（已回归）
+
+## 2026-10-03 — 在 tools/console/bridge/protocol.py 新增 param_table_crc(items)，按调用者给的顺序打包 <u16 id><f32 def> 算 CRC16
+选择：在 tools/console/bridge/protocol.py 新增 param_table_crc(items)，按调用者给的顺序打包 <u16 id><f32 def> 算 CRC16
+放弃：删掉固件的注释/把校准值写成常量（那样表一改就静默失配）
+因为：固件 T_HELLO 一直在报这个 CRC、host_link.c 的注释也声称「与上位机 protocol.py 的 param_table_crc 同构」，但上位机侧从来没实现；补上才能发现参数表不一致，且它顺序敏感（固件按 SPECS[]，界面 PARAMS 顺序不同 ⇒ 必须按固件 dump 顺序传）
+
 ## 2026-10-03 — 把「回放录制」做成真正可用的功能（设置页选 data/logs/rec_*.jsonl + 倍速播放），而不是把 replay 从契约里删掉
 选择：把「回放录制」做成真正可用的功能（设置页选 data/logs/rec_*.jsonl + 倍速播放），而不是把 replay 从契约里删掉
 放弃：从契约里删掉 replay（省事但丢掉已有能力，且 SSR/mock 已经把它当既有特性）

@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：真固件源码与上位机编解码器的字节级对拍落地并提交 9717fa0：新增 firmware/test/pipe_hostlink.c（stdin 每字节喂真 host_link.c，推进 5ms 假时钟，回帧从 stdout 出）、firmware/test/stub/host_pipestub.c、tools/console/tests/test_firmware_pipe.py（9 项）、protocol.py 的 param_table_crc(items)，以及让管道构建链真 servo.c 的配套 ifdef 与假 HAL 头补齐（__HAL_TIM_SET_COMPARE + 旧拼法）。验证方式：C:\Python314\python.exe -m pytest tools/console/tests -q ⇒ 60 passed；pwsh -File firmware/test/run_tests.ps1 ⇒ 通过 10 / 失败 0。硬证据：参数 dump 43 项 id 集合与默认值全部等于 bridge/params.py、按 dump 顺序复算的 param_crc == 固件 HELLO 报的 577（按界面 PARAMS 顺序算得 30734，证明顺序敏感）、动作表运行值 == servo.c 的 k_action_default、角度 >180 与中位偏差 ±999 被协议层回 ST_OUT_OF_RANGE 且不落表、驾驶静默 960ms 触发看门狗自动停车。
+未完成：真车只读链路仍待硬件（用户决定）；本机拿不到像素级截图，只能用 out/console/ssr/ 的 SSR 快照替代。桩 host_appstub.c 里的 k_def[] 仍是旧台架值，t_hostext 测的是桩自己的动作表（出厂表由 test_firmware_pipe.py 覆盖）。
+下一步：把这一轮结果告诉用户（怎么自己复核：pytest tools/console/tests/test_firmware_pipe.py -q；没装 gcc 的机器会自动 skip），然后按目标清单找下一个还没自主验证的缺口。
+
+## 2026-10-03
 完成：回放录制闭环做完并验证：设置页新增「回放录制」卡（文件下拉/倍速 0.25–8×/刷新/播放），桥新增 GET /api/recordings 与 /api/link/connect 的 replay/speed 转发，switch() 改成先建新链再停旧链（失败保留原链路）。修掉一个真 bug：tools/console/bridge/link.py 的 ReplayLink.poll() 绕回时写 self.t0=now_ms，而录制 jsonl 的 t_host 是绝对 epoch 毫秒 ⇒ 第二遍永远不出帧（波形放完就静止）；改成 self.t0 = now_ms - rows[0].t_host/speed。验证：pytest 51 passed（新增 test_recordings_and_replay 端到端 + test_replay_link.py 绕圈）、vitest 40 passed（新增 lib/replay.test.ts）、npm run build 干净、真仿真桥手测 connect replay speed=4 ⇒ frames_seen 57→122 且可切回 sim。提交 4d3a2d2。
 未完成：真车只读串口链路待硬件（用户选定「先放着」）；像素级截图在本机拿不到（Edge headless 各种模式都不出 PNG），以 out/console/ssr/ 的 SSR HTML 快照替代。
 下一步：用户机器上打开 http://127.0.0.1:8793（仿真桥在跑）按代看清单过一遍：控制页点「开始记录」→ 设置页「回放录制」选文件 + 倍速 → 播放，看波形/仪表是否连续循环。
@@ -1162,9 +1167,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：第 10 节：驱动型号、灰度总线、板尺寸、保留外设
 下一步：确认后出完整原理图连接表（网络表）
 
-## 2026-09-14
-完成：确认电机 45:1/150RPM@12V、舵机 LDX-218，更新选型文档到 v0.3：舵机改为独立可调电源轨（SY8205FCC，默认按 6.0/7.4V 标定，5V 版可跳线并用 5V）；5V 逻辑改 MP2315 3A；补充编码器计数 11PPR×4×45=1980/圈、PID 节拍改用 TIM6/TIM7。尝试查 LDX-218 官方 datasheet 未成功（robotshop/PDF 被拦截），已在文档与 DECISIONS 标注电压待用户确认。
-未完成：第 10 节待拍板点；原理图网络表未做
-下一步：用户确认 LDX-218 电压/舵机数量/接法后出原理图连接表
-
-> 更早的会话条目已归档到 159 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 160 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
