@@ -1,0 +1,203 @@
+"""参数表元数据（上位机侧的"哪个 id 叫什么/单位/几位小数"）。
+
+**单一真值来源是固件**：`firmware/App/Svc/host_link.c` 的 `SPECS[]` + `host_link.h` 的
+`HP_*` 宏。这里只是给 UI 用的展示信息（key/label/group/unit/decimals/step/note）；
+默认值/范围也照抄一份，用于"还没连上小车"时也能显示（`source="local"`）。
+
+`tools/console/tests/test_params.py` 会直接解析 host_link.c/host_link.h，断言：
+  * 两边的 id 集合完全一致（不多不少）；
+  * default/min/max 逐项相同。
+所以任何一边改了参数表而另一边没跟，测试就会红。
+
+group 取值（冻结契约 docs/API.md §3.2）：
+  速度环 / 角度环 / 循迹环 / 串级 / 机械/车辆 / 电源 / 任务
+"""
+from __future__ import annotations
+
+GROUPS = ["速度环", "角度环", "循迹环", "串级", "机械/车辆", "电源", "任务"]
+
+# (id, key, label, group, unit, default, min, max, decimals, step, note)
+_SPECS = [
+    # ---- 循迹环（重心 PID）----
+    (0x0201, "line_kp", "循迹 Kp", "循迹环", "", 2700.0, 0.0, 5000.0, 1, 10, "循迹外环比例"),
+    (0x0202, "line_ki", "循迹 Ki", "循迹环", "", 10.8, 0.0, 200.0, 2, 0.5, "循迹外环积分"),
+    (0x0203, "line_kd", "循迹 Kd", "循迹环", "", 360.0, 0.0, 1000.0, 1, 10, "循迹外环微分"),
+    (0x0204, "line_ilimit", "循迹积分限幅", "循迹环", "", 50.0, 0.0, 10000.0, 1, 10, "误差量纲的积分上限"),
+    (0x0301, "base_speed", "循迹基准速度", "循迹环", "刻度", 6480.0, 0.0, 7200.0, 0, 60,
+     "PWM 满量程 7200 刻度；0 = 原地转圈（pivot）"),
+    (0x0302, "base_speed_slow", "循迹慢速档", "循迹环", "刻度", 2500.0, 0.0, 7200.0, 0, 60,
+     "静摩擦起步死区下沿约 2500~2900"),
+    (0x0304, "task_speed", "任务基准速度", "任务", "刻度", 6480.0, 0.0, 7200.0, 0, 60,
+     "比赛流程巡线用的基准速度"),
+    (0x0207, "pivot_kp", "原地转圈 Kp", "循迹环", "", 900.0, 0.0, 20000.0, 1, 10,
+     "base=0（左右轮反向对转）时的循迹环比例"),
+    (0x0208, "pivot_ki", "原地转圈 Ki", "循迹环", "", 0.0, 0.0, 200.0, 2, 0.5,
+     "实测 0 最好：积分会被静摩擦喂成常驻推力"),
+    (0x0209, "pivot_kd", "原地转圈 Kd", "循迹环", "", 405.0, 0.0, 20000.0, 1, 10,
+     "原地转圈微分"),
+    # ---- 速度环 ----
+    (0x0601, "speed_kp", "速度环 Kp", "速度环", "", 20.0, 0.0, 2000.0, 1, 1, "轮速 → PWM"),
+    (0x0602, "speed_ki", "速度环 Ki", "速度环", "", 2.0, 0.0, 200.0, 2, 0.5, "轮速积分"),
+    (0x0603, "speed_kd", "速度环 Kd", "速度环", "", 0.0, 0.0, 500.0, 1, 1, "默认 0"),
+    (0x0604, "speed_ilimit", "速度环积分限幅", "速度环", "", 3000.0, 0.0, 20000.0, 0, 100, ""),
+    (0x0605, "speed_ff_slope", "速度前馈斜率", "速度环", "", 0.662, 0.0, 2.0, 3, 0.01,
+     "台架实测拟合的摩擦前馈（PWM/(mm/s)），默认 = 固件 host_link.h 的 SPEED_FF_SLOPE"),
+    (0x0606, "speed_ff_fric", "速度前馈截距", "速度环", "", 2327.0, 0.0, 5000.0, 1, 10,
+     "静摩擦补偿（PWM 刻度），默认 = 固件 host_link.h 的 SPEED_FF_FRIC"),
+    # ---- 角度环（陀螺）----
+    (0x0101, "gyro_kp", "角度环 Kp", "角度环", "", 150.0, 0.0, 2000.0, 1, 10,
+     "旧刻度换算值 720 会自激，实测选定 150"),
+    (0x0102, "gyro_ki", "角度环 Ki", "角度环", "", 0.0, 0.0, 200.0, 2, 0.5,
+     "默认 0：积分会被静摩擦喂成常驻推力"),
+    (0x0103, "gyro_kd", "角度环 Kd", "角度环", "", 15.0, 0.0, 500.0, 1, 1, "≈Kp/10，压过冲"),
+    (0x0104, "gyro_ilimit", "角度环积分限幅", "角度环", "", 1000.0, 0.0, 20000.0, 0, 100, ""),
+    (0x0105, "turn_angle_offset", "转弯前馈角", "角度环", "°", 90.0, 1.0, 180.0, 1, 5,
+     "Toggle_Gyro_Control 每次转的基准角"),
+    (0x0401, "turn_tolerance", "转弯到位容差", "角度环", "°", 2.0, 0.1, 20.0, 1, 0.5, ""),
+    (0x0402, "turn_timeout", "转弯超时", "角度环", "ms", 1500.0, 100.0, 10000.0, 0, 100, ""),
+    (0x0403, "yaw_rate_damp", "航向速率阻尼", "角度环", "", 1.0, 0.0, 20.0, 1, 0.5, ""),
+    (0x010A, "gyro_ang_kp", "角度环外环 Kp", "角度环", "(°/s)/°", 3.5, 1.0, 20.0, 2, 0.1,
+     "角度误差 → 期望角速度"),
+    (0x010B, "gyro_rate_kp", "角度环速率环 Kp", "角度环", "", 250.0, 10.0, 2000.0, 0, 10,
+     "角速度误差 → 修正量"),
+    (0x010C, "gyro_rate_kd", "角度环速率环 Kd", "角度环", "", 4.0, 0.0, 100.0, 2, 0.5,
+     "law3 的阻尼项"),
+    (0x010D, "gyro_rate_max", "期望角速度上限", "角度环", "°/s", 110.0, 10.0, 300.0, 0, 5, ""),
+    (0x010E, "gyro_corr_limit", "修正量限幅", "角度环", "刻度", 2000.0, 200.0, 7200.0, 0, 100,
+     "PWM 刻度；静摩擦起步需要 ~2000 以上"),
+    (0x010F, "gyro_corr_slew", "修正量斜率限幅", "角度环", "刻度/s", 300000.0, 1000.0, 2000000.0, 0, 5000, ""),
+    (0x0110, "gyro_settle_deg", "停车带半宽", "角度环", "°", 2.0, 0.2, 10.0, 1, 0.2, ""),
+    (0x0111, "gyro_settle_ms", "到位锁存时长", "角度环", "ms", 150.0, 0.0, 2000.0, 0, 10, ""),
+    # ---- 串级（循迹 → 角度 → 速度）----
+    (0x0205, "trace_angle_per_unit", "串级 重心→航向", "串级", "°/格", 10.0, 0.5, 60.0, 1, 0.5,
+     "台架受控阶梯实测：10 最好（4/6 收不干净，12~20 与 10 等价）"),
+    (0x0206, "trace_angle_max", "串级 航向限幅", "串级", "°", 35.0, 1.0, 90.0, 0, 1,
+     "≈ 传感器杆半宽"),
+    # ---- 机械/车辆 ----
+    (0x0305, "counts_per_rev", "编码器每圈计数", "机械/车辆", "count", 1980.0, 1.0, 100000.0, 0, 10, ""),
+    (0x0306, "wheel_dia", "轮径", "机械/车辆", "mm", 65.0, 10.0, 300.0, 1, 0.5, ""),
+    (0x0307, "wheel_base", "轮距", "机械/车辆", "mm", 150.0, 10.0, 500.0, 1, 1, ""),
+    (0x0303, "pwm_max", "PWM 满量程", "机械/车辆", "刻度", 7200.0, 100.0, 7200.0, 0, 100,
+     "本板比旧板 ×7.2（旧板 1000）"),
+    (0x0404, "marker_hold", "标记保持", "任务", "", 3.0, 1.0, 50.0, 1, 1, ""),
+    (0x0405, "marker_min_gap", "标记最小间隔", "任务", "", 50.0, 0.0, 5000.0, 0, 10, ""),
+    # ---- 电源 ----
+    (0x0501, "vbat_nominal", "标称电压", "电源", "mV", 12000.0, 3000.0, 30000.0, 0, 100, ""),
+    (0x0502, "stall_current", "堵转电流", "电源", "mA", 2500.0, 100.0, 20000.0, 0, 50, ""),
+    (0x0503, "vbat_low", "低压报警", "电源", "mV", 10500.0, 3000.0, 30000.0, 0, 100, ""),
+]
+
+
+class ParamSpec:
+    __slots__ = ("id", "key", "label", "group", "unit", "default", "min", "max",
+                 "decimals", "step", "note")
+
+    def __init__(self, id, key, label, group, unit, default, lo, hi, decimals, step, note):
+        self.id = id
+        self.key = key
+        self.label = label
+        self.group = group
+        self.unit = unit
+        self.default = default
+        self.min = lo
+        self.max = hi
+        self.decimals = decimals
+        self.step = step
+        self.note = note
+
+    def item(self, value: float | None = None, dirty: bool = False, source: str = "fw") -> dict:
+        v = self.default if value is None else value
+        return {
+            "id": self.id, "key": self.key, "label": self.label, "group": self.group,
+            "unit": self.unit, "value": v, "default": self.default,
+            "min": self.min, "max": self.max, "decimals": self.decimals,
+            "step": self.step, "dirty": bool(dirty), "note": self.note, "source": source,
+        }
+
+
+PARAMS = [ParamSpec(*s) for s in _SPECS]
+BY_ID = {p.id: p for p in PARAMS}
+BY_KEY = {p.key: p for p in PARAMS}
+
+
+def by_id_or_key(x) -> ParamSpec | None:
+    """`/api/params/set` 允许传 id 或 key。"""
+    if isinstance(x, str):
+        if x in BY_KEY:
+            return BY_KEY[x]
+        try:
+            x = int(x, 0)
+        except ValueError:
+            return None
+    if isinstance(x, bool):
+        return None
+    if isinstance(x, int):
+        return BY_ID.get(x)
+    return None
+
+
+DEFAULTS = {p.id: p.default for p in PARAMS}
+
+
+def clamp(p: ParamSpec, v: float) -> float:
+    """夹到范围里；NaN 直接判非法（和固件一样用取反形式比较）。"""
+    if not (v == v):                      # NaN
+        raise ValueError("数值非法")
+    if not (v >= p.min and v <= p.max):
+        raise ValueError("超出范围：%s 允许 %g..%g" % (p.label, p.min, p.max))
+    return float(v)
+
+# ------------------------------------------------------------------ 动作表
+# 名称与出厂角度是 firmware/App/Bsp/servo.c 的 k_action_name[] / k_action_default[][] 的镜像；
+# tools/console/tests/test_params_spec.py 会解析那份固件源文件逐项比对，防止两张表漂移。
+ACTION_NAMES = ["收回", "打下准备", "打下1", "打下2", "台阶2收回", "大坡1", "三级12",
+                "三级2收回", "三级3打", "高台", "高台下", "收回2",
+                "打下1(另一路)", "打下准备(另一路)"]
+ACTION_FACTORY = [[0, 0], [60, 120], [105, 120], [135, 150], [80, 170], [100, 120],
+                  [95, 120], [40, 10], [100, 80], [115, 120], [85, 120], [40, 0],
+                  [90, 60], [30, 60]]
+ACTION_COUNT = len(ACTION_NAMES)
+# 复合动作（固件 Servo_Move 里有中间延时步骤，play 会走完整过程）
+ACTION_COMPOUND = {
+    5: "135/170 →0.4s→ 90 →0.1s→ 80",
+    9: "70/10 →0.2s→ 100/50 →0.1s→ 100/80",
+}
+
+
+def _clamp_deg(v) -> int:
+    """舵机角度一律夹到 0..180 —— 和固件 Servo_SetActionPose() 的夹法一致。
+
+    页面上是 0..180 的滑杆，车上万一因为 Flash 损坏报出 999/-5，夹一下比原样显示安全；
+    夹过之后仍然参与 dirty 比较（也就是"和出厂值/本机预设不一样"照样能看出来）。
+    """
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        return 0
+    return 0 if v < 0 else (180 if v > 180 else v)
+
+
+def action_items(values, preset=None) -> list[dict]:
+    """把车上读到的 14 对角度拼成契约里的动作项。
+
+    `values`/`preset` 都是 14 个 `[a1, a2]`；`preset` 缺省 = 固件出厂表。
+    `dirty` = 车上值与本机预设（或出厂值）不同，也就是"改了还没固化"。
+    """
+    src = preset or ACTION_FACTORY
+    out = []
+    for i in range(ACTION_COUNT):
+        n = i + 1
+        try:
+            a1, a2 = _clamp_deg(values[i][0]), _clamp_deg(values[i][1])
+        except (IndexError, TypeError):
+            a1, a2 = int(ACTION_FACTORY[i][0]), int(ACTION_FACTORY[i][1])
+        try:
+            p1, p2 = _clamp_deg(src[i][0]), _clamp_deg(src[i][1])
+        except (IndexError, TypeError):
+            p1, p2 = int(ACTION_FACTORY[i][0]), int(ACTION_FACTORY[i][1])
+        out.append({"n": n, "name": ACTION_NAMES[i], "a1": a1, "a2": a2,
+                    "preset_a1": p1, "preset_a2": p2,
+                    "dirty": (a1 != p1 or a2 != p2),
+                    "compound": n in ACTION_COMPOUND,
+                    "steps": ACTION_COMPOUND.get(n)})
+    return out

@@ -1,0 +1,92 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-ink-800 text-slate-200 font-sans antialiased;
+    background-image:
+      radial-gradient(1200px 600px at 12% -10%, rgba(34, 211, 238, 0.13), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, rgba(167, 139, 250, 0.12), transparent 55%),
+      radial-gradient(700px 500px at 50% 120%, rgba(52, 211, 153, 0.08), transparent 60%);
+    background-attachment: fixed;
+  }
+
+  /* 等宽数字：仪表读数不跳动 */
+  .num {
+    @apply font-mono tabular-nums;
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.25);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 0.45);
+    background-clip: content-box;
+  }
+}
+
+@layer components {
+  /* 玻璃拟态卡片（契约 §5 指定的视觉语言） */
+  .glass {
+    @apply rounded-card bg-white/5 backdrop-blur-md ring-1 ring-white/10 shadow-card;
+  }
+
+  .glass-hover {
+    @apply transition hover:bg-white/[0.07] hover:ring-white/20;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ring-1 ring-inset;
+  }
+
+  .btn {
+    @apply inline-flex select-none items-center justify-center gap-1.5 rounded-xl px-3 py-1.5 text-sm
+      ring-1 ring-white/10 transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-ghost {
+    @apply btn bg-white/5 hover:bg-white/10;
+  }
+  .btn-primary {
+    @apply btn bg-neon-cyan/15 text-neon-cyan ring-neon-cyan/30 hover:bg-neon-cyan/25;
+  }
+  .btn-danger {
+    @apply btn bg-neon-rose/15 text-neon-rose ring-neon-rose/30 hover:bg-neon-rose/25;
+  }
+  .btn-warn {
+    @apply btn bg-neon-amber/15 text-neon-amber ring-neon-amber/30 hover:bg-neon-amber/25;
+  }
+
+  .field {
+    @apply w-full rounded-lg bg-ink-900/70 px-2 py-1 text-sm ring-1 ring-white/10 outline-none
+      focus:ring-neon-cyan/50 num;
+  }
+
+  .seg {
+    @apply rounded-lg px-2.5 py-1 text-xs ring-1 ring-white/10 transition hover:bg-white/10;
+  }
+  .seg-on {
+    @apply bg-neon-cyan/20 text-neon-cyan ring-neon-cyan/40;
+  }
+}

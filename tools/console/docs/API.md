@@ -1,0 +1,163 @@
+# 上位机（tools/console）后端 API 契约 —— 冻结版 v1
+
+> 前端（`tools/console/web/`）与 Python 桥（`tools/console/bridge/`）之间**唯一的约定**。
+> 双方都不得单方面改动；要改先改本文件并在提交信息里写明。
+> 数据方向：小车 ──(LPUART1 115200, 帧协议)──> 桥 ──(HTTP + SSE, localhost)──> 浏览器。
+
+## 0. 运行形态
+
+- 桥只依赖 **Python 3.11+ 标准库 + pyserial**；`python -m bridge.main --port COM26`（或 `--sim`）。
+- 静态前端：桥直接托管 `tools/console/web/dist/`（`GET /` → `index.html`，其余按文件返回）。
+  开发期可用 `npm run dev`（Vite 5173）并把 `/api` 代理到桥的 8770 端口。
+- 默认端口 **8770**，只监听 `127.0.0.1`。
+- 三种链路模式：`serial`（真车，串口）/ `sim`（内置仿真信号源，无车可用）/ `replay`（回放 CSV）。
+
+## 1. 通用
+
+- 所有请求/响应 `Content-Type: application/json; charset=utf-8`（SSE 除外）。
+- 错误统一：HTTP 4xx/5xx + `{"ok":false,"error":"人话错误","code":"bad_param"}`。
+- 成功写操作统一：`{"ok":true, ...}`，通常回带受影响对象的新状态。
+- 数值单位一律显式：`_mv` 毫伏、`_ma` 毫安、`_us` 微秒、`_mmps` mm/s、`_ms` 毫秒、角度 `_deg`（度）、`pwm` 为固件 PWM 刻度（±7200）。
+
+## 2. 端点一览
+
+| 方法 | 路径 | 作用 |
+|---|---|---|
+| GET | `/api/health` | 版本/运行时长/是否仿真 |
+| GET | `/api/link` | 链路状态 + 固件握手信息 |
+| POST | `/api/link/connect` | `{mode,port?,baud?}` 连接（切换模式也用它） |
+| POST | `/api/link/disconnect` | 断开 |
+| GET | `/api/ports` | 可用串口列表 |
+| GET | `/api/params` | 全部参数（本地值 + 默认/范围 + 脏标记） |
+| POST | `/api/params/set` | `{id\|key, value}` 改一条（本地缓存，不自动下发） |
+| POST | `/api/params/push` | `{ids?, keys?}` 下发到小车（省略 = 全部脏的） |
+| POST | `/api/params/save` | 让小车把当前参数写进 Flash（掉电保存） |
+| POST | `/api/params/reload` | 从车上全表读回（覆盖本地） |
+| POST | `/api/params/defaults` | `{ids?}` 恢复默认（只改本地，等 push） |
+| GET | `/api/actions` | 14 个舵机动作姿态 |
+| POST | `/api/actions/set` | `{n, a1, a2}` 改一个动作（下发到小车 RAM，舵机立刻到位） |
+| POST | `/api/actions/save` | 让小车把动作表写进 Flash |
+| POST | `/api/actions/play` | `{n}` 完整播放一个动作（含复合动作的中间步骤与延时） |
+| POST | `/api/servo` | `{ch:1\|2, angle:0..180}` 直接摆一路舵机 |
+| POST | `/api/servo/center` | 两路回 0°（收回位） |
+| POST | `/api/servo/deviation` | `{ch, dev_us}` 中位偏差微调（±100µs） |
+| POST | `/api/drive` | `{mode:"off"\|"wheels"\|"base_turn", vl?,vr?,base?,turn?}` |
+| POST | `/api/cmd` | `{cmd, arg?}`：`stop/start_a/start_b/start_c/clear_fault/reset/telem_hz` |
+| GET | `/api/stream` | **SSE**：实时数据流（见 §4） |
+| GET | `/api/log?limit=200` | 最近的文本日志 |
+| GET | `/api/cal` | 灰度标定数据（8 路黑白阈值/抖动/有效性） |
+| GET | `/api/presets` | 本机预设列表 |
+| POST | `/api/presets` | `{name, kind, data?}` 保存（`data` 省略 = 抓当前） |
+| POST | `/api/presets/apply` | `{name, targets:["actions","params","servo"]}` 应用 |
+| DELETE | `/api/presets?name=x` | 删除 |
+| POST | `/api/record` | `{action:"start"\|"stop"}` CSV 录制到 `tools/console/data/recordings/` |
+| GET | `/api/record` | 录制状态 + 文件路径 |
+
+## 3. 数据模型
+
+### 3.1 `/api/link`
+```json
+{
+  "ok": true,
+  "mode": "sim",                  // sim | serial | replay
+  "port": "COM26", "baud": 115200,
+  "connected": true,
+  "stats": {"rx": 0, "tx": 0, "crc": 0, "resync": 0, "drops": 0},
+  "telem_hz": 50,
+  "last_rx_ms": 1234,             // 距上次收到小车帧的毫秒数
+  "rtt_ms": 1.2,                  // 测得的往返时延（无则 null）
+  "fw": {                          // 未握手时 null
+    "name": "quandi-car", "version": "0.0.2", "proto": 2,
+    "param_crc": 41321, "telem_hz": 50, "caps": 127
+  }
+}
+```
+`caps` 位（与固件一致）：bit0 TELEM2、bit1 动作表、bit2 舵机、bit3 驾驶、bit4 标定、bit5 Flash 保存、bit6 看门狗。
+
+### 3.2 `/api/params`
+```json
+{"ok":true,"param_crc":41321,"source":"fw",   // fw=车上读过 | local=未读，用内置默认
+ "items":[
+  {"id":513,"key":"line_kp","label":"循迹 Kp","group":"循迹环","unit":"",
+   "value":2700,"default":2700,"min":0,"max":20000,"decimals":1,"step":10,
+   "dirty":true,"note":"循迹外环比例"}
+ ]}
+```
+`group` 取值固定为：`速度环` `角度环` `循迹环` `串级` `机械/车辆` `电源` `任务`。
+
+### 3.3 `/api/actions`
+```json
+{"ok":true,"items":[
+  {"n":1,"name":"收回","a1":0,"a2":0,"preset_a1":0,"preset_a2":0,"dirty":false,"compound":false},
+  {"n":5,"name":"台阶2收回","a1":80,"a2":170,"preset_a1":80,"preset_a2":170,"dirty":false,"compound":true,"steps":"135/170 →0.4s→ 90 →0.1s→ 80"}
+]}
+```
+`a1/a2` = 小车上当前 RAM 值；`preset_*` = 本机预设文件里的值（没有则 null）；`dirty` = 两者不同；`compound=true` 的动作 `play` 会走完整过程。
+
+### 3.4 `/api/cal`
+```json
+{"ok":true,"active_set":0,"quality":8,
+ "ch":[{"i":0,"blk":3820,"wht":910,"thr":2365,"jitter":12,"pol":0,"ok":true,"reason":0,
+        "level":18,"thr_level":128}, ...8 项]}
+```
+
+### 3.5 预设
+```json
+{"ok":true,"items":[{"name":"默认调试","kind":"mixed","updated_ms":1728000000000,
+                     "keys":["actions","params"],"note":""}]}
+```
+`kind`：`actions` | `params` | `servo` | `mixed`。文件落在 `tools/console/data/presets/*.json`。
+
+## 4. SSE 事件（`GET /api/stream`）
+
+连接后**第一帧**发 `state`（完整快照，见下），之后按事件推进；服务端 15s 没数据发 `: ping`。
+每帧格式：`event: <名字>\ndata: <JSON>\n\n`。
+
+| event | 频率 | data |
+|---|---|---|
+| `state` | 连接时 1 次 | `{"link":…,"params":…,"actions":…,"presets":[…],"cal":…}` |
+| `telem` | ≤ 小车遥测频率（默认 50Hz） | 见下 |
+| `stats` | 1 Hz | `{"stats":…,"telem_hz":50,"last_rx_ms":3,"busy_pct":12.3}` |
+| `log` | 事件驱动 | `{"ts_ms":…,"level":"rx"\|"tx"\|"info"\|"warn"\|"error","text":"…"}` |
+| `ack` | 事件驱动 | `{"seq":12,"req":"params.set","status":0,"ok":true,"text":"…"}` |
+| `actions` | 改动/读回时 | `{"items":[…同 §3.3…]}` |
+| `params` | 读回/保存后 | 同 §3.2 |
+| `cal` | 读回时 | 同 §3.4 |
+| `error` | 事件驱动 | `{"text":"串口被拔出"}` |
+
+`telem` 字段（**未做的量一律给真实默认值、不假装**）：
+```json
+{"t":1728000000123,"t_host":1728000000130,
+ "yaw":-64.7,"pitch":5.8,"roll":4.7,
+ "vl":0,"vr":0,"pwm_l":1200,"pwm_r":-1200,
+ "vbat_mv":12010,"ibat_ma":330,
+ "servo1_us":1500,"servo2_us":1500,"servo1_deg":90,"servo2_deg":90,
+ "line":[0,0,1,1,1,0,0,0],"gray":[12,34,180,220,190,30,10,8],
+ "state_id":23,"loop_us":412,"mode":0,"renwu":0,"action":3,
+ "trace":{"pos":0.52,"pid":300},
+ "angle":{"err":0.12,"rate_ref":0.0,"corr":0.0},
+ "flags":{"lost":false,"slope":false,"gyro_ok":true,"motor":false,
+          "host_drive":false,"logging":false,"flash":false,"fault":false},
+ "nvram":0}
+```
+- `mode`：0 空闲 / 1 陀螺 / 2 循迹 / 3 串级；`renwu`：0 停 / 1 任务A / 2 任务B / 3 任务C。
+- `nvram`：0 空闲 / 1 待保存 / 2 保存中 / 3 已保存 / 4 失败。
+- `gray` 0..255（255=最黑）；`line` 为 0/1。
+
+## 5. 前端要求（给 web/ 的实现约束）
+
+- 技术栈：**Vite + React 18 + TypeScript + Tailwind CSS 3.4 + uPlot**（图标用 `lucide-react`，其余不引入 UI 库）。禁止 Qt/tkinter/electron。
+- 语言：界面中文；数字用等宽字体（`tabular-nums`）。
+- 设计：深色优先（`#0b1020` 级背景）、玻璃拟态卡片（`bg-white/5 + backdrop-blur + ring-1 ring-white/10`）、圆角 16px、青/紫霓虹强调色、切换 150ms 过渡、状态点脉冲动效；桌面三栏自适应，窄屏折叠侧栏。
+- 页面：**总览 / 驾驶 / IMU / 传感器 / 舵机与动作 / 调参 / 波形 / 控制与日志 / 设置**。
+- 数据：`EventSource('/api/stream')` + 本地环形缓冲（默认 30 000 点，可在设置里改）。断开自动重连并保留缓冲。
+- 波形页：每通道**独立量程泳道**（节约纵向空间）、可选 5/10/20/30 s 窗口、暂停/继续、游标读数、CSV 导出（前端生成）。
+- 每个写操作后给出 1 行反馈（成功/失败原因），失败要用后端返回的 `error` 原文。
+- 安全提示常驻：驾驶页顶部一行“真车模式下会真的让车轮转动 —— 先架空空转”。
+
+## 6. 后端开发/测试要求
+
+- `python -m pytest tools/console/tests -q` 全绿；协议编解码、参数表、CRC、SSE 分帧、动作表合并、预设读写都要有测试。
+- 无车测试：`--sim`（内置信号源，产生逼真的 yaw/pitch/roll/灰度/电压/电流/舵机波形 + 偶发丢线）。
+- 有车测试（J-Link 供电、轮子悬空）：**只读**（握手/读参数/读动作表/收遥测），不下发任何让电机或舵机动作的命令。
+- 桥必须能在**串口被拔掉/热插拔**时自愈（重连 + `error` 事件），不崩。

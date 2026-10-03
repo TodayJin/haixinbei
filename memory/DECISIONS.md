@@ -12,6 +12,11 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-03 — 上位机连真车走**无线下载器插 U12 后出现的虚拟串口**（板侧 = U12 脚 5 = LPUART1_RX/PC0、脚 6 = LPUART1_TX/PC1、脚 4 = GND），或临时用 USB-TTL 交叉接同样三根线
+选择：上位机连真车走**无线下载器插 U12 后出现的虚拟串口**（板侧 = U12 脚 5 = LPUART1_RX/PC0、脚 6 = LPUART1_TX/PC1、脚 4 = GND），或临时用 USB-TTL 交叉接同样三根线
+放弃：把 J-Link 自带的 "JLink CDC UART Port"(COM26) 当串口用 —— 被否决：实际测到 PC 侧发 3 帧、PC 收到 0 字节、车侧 rx/crc/resync 全 0，J-Link VCOM 的 UART 引脚根本不在去 U12 的那条排线上
+因为：板子没有任何板载 USB 串口桥（连接器只有 U12 一处引出 LPUART1），PC 与 PC0/PC1 之间必须有物理线
+
 ## 2026-10-03 — 「动作预设」做成同一项的 2 行高（上行标题+编号、下行动作名），滚动窗口按“行数”算（servo_view_rows/rows_before/view_first）
 选择：「动作预设」做成同一项的 2 行高（上行标题+编号、下行动作名），滚动窗口按“行数”算（servo_view_rows/rows_before/view_first）
 放弃：在列表里再插一个独立项显示名字（滚动时会与标题分离，正是用户反对的效果）

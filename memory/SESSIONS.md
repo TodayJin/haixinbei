@@ -14,6 +14,10 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：查清「上位机串口收不到数据」的原因，并证明固件侧无辜。SWD 读寄存器：LPUART1 CR1=0x0000002D（UE/RE/TE/RXNEIE 全 1）、BRR=0x0005C3B2（=170MHz/115200，误差 6e-7）、GPIOC PC0/PC1 MODER=AF、PUPDR=上拉、AFRL=0x88（AF8）、s_stats 的 tx_frames 以 ~50Hz 增长且 PC1 的 IDR 在 0/1 间跳（真的在发）；反向证据：清掉 LPUART1 ISR(ICR=0x1F) 后静置 1.5s、再让 PC 从 COM26 发 3 帧 HELLO_REQ，IDLE 位不再回来且 rx_frames/crc_errors/resyncs 恒为 0 ⇒ PC0 上从来没有过一个字节。PC 侧 COM26 = JLink CDC UART Port（VID:PID 1366:0105），写出去的帧自己也收不到。工具（可复用）：out/_linkstats.ps1（-Mode read|probe|idle，靠 arm-none-eabi-nm 解析 s_stats 地址后 mem32 读数）与 out/_linkprobe.py（用 tools/console 的 bridge.protocol.frame_hello_req 发帧、先静听 0.5s 再发再收 1s）。
+下一步：把无线下载器插到 U12（或 USB-TTL 接脚 5/6/4）后，用 out/_linkprobe.py <新COM口> 115200 3 复验（车侧 rx_frames 应 +N），再 python -m bridge.main --serial <新COM口> 跑真机。
+
+## 2026-10-03
 完成：第十一轮（用户点名）：模块测试里加「舵机测试」页（PAGE_CUSTOM_SERVO 17）——两路角度可调（1°/长按 2/5/10/20）、「收回」=0/0、14 号「动作预设」占两行（下行动作名）、返回保持角度；顺带揪出真 bug：bsp_servo_init()（firmware/App/Bsp/bsp_board.c:227）全工程无调用者 ⇒ htim1.Instance=NULL ⇒ Servo_Init() 的 HAL_TIM_PWM_Start 返回错误、__HAL_TIM_SetCompare 写空指针，舵机一直没动过（renwu.c 20+ 处 Servo_Move 也是空动作）；修法=servo.c 的 Servo_Init() 开头调 bsp_servo_init() + include bsp_board.h。验证：SWD 读 TIM1（0x40012C00=1 CEN、0x40012C20=0x1111 四路 CCxE、0x40012C2C=0x4E1F ARR=19999、0x40012C34/38=0x1F4 CCR=500µs、0x40012C44=0x8000 MOE）；make -C firmware 无新告警（text 111012/data 368/bss 15264）；check_warnings.ps1 待处理 0；run_tests.ps1 通过 9/失败 0；flash.ps1 回读一致 111388 字节；字模补字校验缺字 0（舵 74→75、作/预 75→77、动作名一起提交 79 字形）；out/servo_page_mock.py→out/servo_page_mock.png 用同一套坐标假渲染 6 种选中状态，断言“选中项完整可见、无行越界”。
 未完成：屏幕实际观感与动作语义未由我肉眼确认（几何自检+假渲染只能证明布局）；动作预设占两行后仍未在真实屏幕上看过
 下一步：等用户上板按号试 14 个动作，特别是 5 号/9 号的中键完整播放；有角度或方向不对就改 servo.c 的 k_action_pose 一张表

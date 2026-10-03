@@ -1,0 +1,49 @@
+/**
+ * 遥测通道定义：波形页、CSV 导出、总览页的迷你趋势图都从这里取。
+ * 新增通道只改这一个文件（`get` 从 §4 的 telem 里取值）。
+ */
+
+import type { Telem } from './types'
+
+export type ChannelGroup = '姿态' | '速度' | '控制' | '循迹' | '舵机' | '电源' | '系统'
+
+export interface ChannelDef {
+  key: string
+  label: string
+  unit: string
+  color: string
+  decimals: number
+  group: ChannelGroup
+  get: (t: Telem) => number
+}
+
+export const CHANNELS: ChannelDef[] = [
+  { key: 'yaw', label: '偏航', unit: '°', color: '#22d3ee', decimals: 1, group: '姿态', get: (t) => t.yaw },
+  { key: 'pitch', label: '俯仰', unit: '°', color: '#a78bfa', decimals: 1, group: '姿态', get: (t) => t.pitch },
+  { key: 'roll', label: '横滚', unit: '°', color: '#34d399', decimals: 1, group: '姿态', get: (t) => t.roll },
+  { key: 'vl', label: '左轮速', unit: 'mm/s', color: '#38bdf8', decimals: 0, group: '速度', get: (t) => t.vl },
+  { key: 'vr', label: '右轮速', unit: 'mm/s', color: '#f472b6', decimals: 0, group: '速度', get: (t) => t.vr },
+  { key: 'pwm_l', label: '左 PWM', unit: '', color: '#fbbf24', decimals: 0, group: '控制', get: (t) => t.pwm_l },
+  { key: 'pwm_r', label: '右 PWM', unit: '', color: '#fb7185', decimals: 0, group: '控制', get: (t) => t.pwm_r },
+  { key: 'trace_pos', label: '循迹偏差', unit: '', color: '#a3e635', decimals: 2, group: '循迹', get: (t) => t.trace.pos },
+  { key: 'trace_pid', label: '循迹 PID 输出', unit: '', color: '#facc15', decimals: 0, group: '循迹', get: (t) => t.trace.pid },
+  { key: 'angle_err', label: '角度环误差', unit: '°', color: '#c084fc', decimals: 2, group: '控制', get: (t) => t.angle.err },
+  { key: 'rate_ref', label: '期望角速度', unit: '°/s', color: '#2dd4bf', decimals: 1, group: '控制', get: (t) => t.angle.rate_ref },
+  { key: 'angle_corr', label: '角度环修正', unit: '', color: '#f0abfc', decimals: 0, group: '控制', get: (t) => t.angle.corr },
+  { key: 'servo1', label: '舵机1', unit: '°', color: '#22d3ee', decimals: 1, group: '舵机', get: (t) => t.servo1_deg },
+  { key: 'servo2', label: '舵机2', unit: '°', color: '#a78bfa', decimals: 1, group: '舵机', get: (t) => t.servo2_deg },
+  { key: 'vbat', label: '电池电压', unit: 'V', color: '#34d399', decimals: 2, group: '电源', get: (t) => t.vbat_mv / 1000 },
+  { key: 'ibat', label: '电流', unit: 'mA', color: '#fb7185', decimals: 0, group: '电源', get: (t) => t.ibat_ma },
+  { key: 'loop_us', label: '主循环耗时', unit: 'µs', color: '#94a3b8', decimals: 0, group: '系统', get: (t) => t.loop_us },
+  { key: 'gray_max', label: '灰度峰值', unit: '', color: '#e2e8f0', decimals: 0, group: '循迹', get: (t) => Math.max(...t.gray) },
+]
+
+export const CHANNEL_BY_KEY: Record<string, ChannelDef> = Object.fromEntries(
+  CHANNELS.map((c) => [c.key, c]),
+)
+
+export const DEFAULT_SCOPE_CHANNELS = ['yaw', 'pitch', 'roll', 'pwm_l', 'pwm_r']
+
+export function channelIndex(key: string): number {
+  return CHANNELS.findIndex((c) => c.key === key)
+}
