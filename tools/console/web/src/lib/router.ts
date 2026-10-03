@@ -25,7 +25,7 @@ export interface PageDef {
 
 export const PAGES: PageDef[] = [
   { id: 'overview', title: '总览', desc: '链路 / 状态 / 关键量' },
-  { id: 'drive', title: '驾驶', desc: '轮速与快捷指令' },
+  { id: 'drive', title: '操控', desc: '键盘 WASD 驾驶' },
   { id: 'imu', title: 'IMU', desc: '姿态仪表与曲线' },
   { id: 'sensors', title: '传感器', desc: '8 路灰度与循迹' },
   { id: 'servo', title: '舵机与动作', desc: '14 个动作的角度' },

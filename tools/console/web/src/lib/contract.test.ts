@@ -93,13 +93,24 @@ describe('契约自检（需要 mock 或桥在 127.0.0.1:8770）', () => {
     expect(r.body.items.length).toBeGreaterThan(0)
     for (const k of ['name', 'path', 'size', 'mtime_ms']) expect(r.body.items[0]).toHaveProperty(k)
 
-    // 回放不带文件 = 失败（mock 返回 400；桥返回 {ok:false,error}）
+    // mode 不对必须明说失败（这条与"上次连过什么"无关，是确定性的）
+    const bogus = await getJson('/api/link/connect', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'bogus' }),
+    })
+    expect(bogus.body.ok).toBe(false)
+
+    // 回放不带文件：mock/桥会复用"上次那个文件"（`lastReplay`），所以**不能**断言一定失败 ——
+    // 长跑的 mock 进程在上一次用例里刚连过回放时这里就是成功的。
+    // 要么明说是哪出了问题，要么真的连上回放，二者必居其一。
     const bad = await getJson('/api/link/connect', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ mode: 'replay' }),
     })
-    expect(bad.body.ok).toBe(false)
+    if (bad.body.ok) expect(bad.body.link.mode).toBe('replay')
+    else expect(String(bad.body.error)).toMatch(/回放|文件/)
 
     const ok = await getJson('/api/link/connect', {
       method: 'POST',

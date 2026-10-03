@@ -1,172 +1,204 @@
 import React from 'react'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, OctagonX, SlidersHorizontal } from 'lucide-react'
+import { OctagonX } from 'lucide-react'
 import { store, useStore } from '../lib/store'
-import { Badge, Card, NumberField, Slider, Stat, Toggle } from '../components/ui'
+import { Badge, Card, Slider, Stat, Toggle } from '../components/ui'
 import { MiniTrend } from '../components/Trend'
 import { fmt, fmtInt } from '../lib/format'
-import type { DriveMode } from '../lib/types'
+import { isTypingTarget, keyId, keyRoleById, rolesToDrive, type KeyRole } from '../lib/keys'
 
-const MODE_LABEL: Record<DriveMode, string> = {
-  off: '停（交回车）',
-  wheels: '左右轮分别给',
-  base_turn: '基准+转向',
+/** 键位盒子：`keys` 里只放"渲染用"的键（W/A/S/D 各一个盒子，方向键映射到同一个盒子）。 */
+function KeyBox({ label, on, sub }: { label: string; on: boolean; sub?: string }) {
+  return (
+    <div
+      className={`flex h-14 w-14 flex-col items-center justify-center rounded-xl text-[13px] font-semibold transition ${
+        on
+          ? 'bg-neon-cyan/25 text-neon-cyan ring-2 ring-neon-cyan/50'
+          : 'bg-ink-900/60 text-slate-400 ring-1 ring-white/10'
+      }`}
+    >
+      <span>{label}</span>
+      {sub && <span className="num text-[10px] font-normal text-slate-500">{sub}</span>}
+    </div>
+  )
 }
 
 export function DrivePage() {
   const { telem, settings } = useStore()
-  const [mode, setMode] = React.useState<DriveMode>('wheels')
-  const [vl, setVl] = React.useState(0)
-  const [vr, setVr] = React.useState(0)
-  const [base, setBase] = React.useState(0)
-  const [turn, setTurn] = React.useState(0)
-  const step = settings.driveStep
-
   const t = telem
   const driving = !!t?.flags.host_drive
 
-  const apply = (next?: Partial<{ vl: number; vr: number; base: number; turn: number; mode: DriveMode }>) => {
-    const m = next?.mode ?? mode
-    const body =
-      m === 'wheels'
-        ? { mode: m, vl: next?.vl ?? vl, vr: next?.vr ?? vr }
-        : m === 'base_turn'
-          ? { mode: m, base: next?.base ?? base, turn: next?.turn ?? turn }
-          : { mode: 'off' as DriveMode }
-    void store.drive(body)
-  }
+  // 速度：前进/后退的基准；转向：左右差（正 = 右转，与固件 T_DRIVE 的 b 同号）
+  const [speed, setSpeed] = React.useState(600)
+  const [turnRate, setTurnRate] = React.useState(500)
+  const [heldKeys, setHeldKeys] = React.useState<string[]>([])
+  const step = settings.driveStep
 
-  const quick = (kind: 'fwd' | 'back' | 'left' | 'right' | 'stop') => {
-    if (kind === 'stop') {
-      void store.drive({ mode: 'off' })
-      return
+  const roles = React.useMemo(() => {
+    const out: KeyRole[] = []
+    for (const k of heldKeys) {
+      const r = keyRoleById(k)
+      if (r) out.push(r)
     }
-    if (mode === 'wheels') {
-      const s = step
-      if (kind === 'fwd') apply({ vl: s, vr: s })
-      if (kind === 'back') apply({ vl: -s, vr: -s })
-      if (kind === 'left') apply({ vl: 0, vr: s })
-      if (kind === 'right') apply({ vl: s, vr: 0 })
-    } else {
-      const s = step
-      if (kind === 'fwd') apply({ base: s, turn: 0 })
-      if (kind === 'back') apply({ base: -s, turn: 0 })
-      if (kind === 'left') apply({ base: 0, turn: -s })
-      if (kind === 'right') apply({ base: 0, turn: s })
+    return out
+  }, [heldKeys])
+
+  const cmd = React.useMemo(() => rolesToDrive(roles, { speed, turn: turnRate }), [roles, speed, turnRate])
+  const on = React.useCallback((r: KeyRole) => roles.includes(r), [roles])
+
+  // 只在"指令变了"的时候下发一次；之后靠桥的 200ms 驾驶保活喂车上的 500ms 看门狗。
+  const lastSent = React.useRef<string>('')
+  React.useEffect(() => {
+    const sig = JSON.stringify([cmd.mode, cmd.base, cmd.turn])
+    if (sig === lastSent.current) return
+    lastSent.current = sig
+    if (cmd.mode === 'off') void store.drive({ mode: 'off' })
+    else void store.drive({ mode: 'base_turn', base: cmd.base, turn: cmd.turn })
+  }, [cmd.mode, cmd.base, cmd.turn])
+
+  // 离开这个页面就把驾驶交还车上（不然切页之后车还在按最后一条指令跑）。
+  React.useEffect(
+    () => () => {
+      if (lastSent.current && lastSent.current !== JSON.stringify(['off', 0, 0])) void store.drive({ mode: 'off' })
+    },
+    [],
+  )
+
+  React.useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.altKey || e.metaKey || e.isComposing) return
+      if (isTypingTarget(e.target)) return
+      const id = keyId(e)
+      if (!id) return
+      e.preventDefault()
+      setHeldKeys((prev) => (prev.includes(id) ? prev : [...prev, id]))
     }
-  }
+    const up = (e: KeyboardEvent) => {
+      const id = keyId(e)
+      if (!id) return
+      e.preventDefault()
+      setHeldKeys((prev) => prev.filter((k) => k !== id))
+    }
+    // 丢焦点（切窗口/点别处）就把所有键当松开：不能因为键盘事件没送到就一直开
+    const reset = () => setHeldKeys([])
+    const vis = () => {
+      if (document.hidden) reset()
+    }
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    window.addEventListener('blur', reset)
+    document.addEventListener('visibilitychange', vis)
+    return () => {
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up)
+      window.removeEventListener('blur', reset)
+      document.removeEventListener('visibilitychange', vis)
+    }
+  }, [])
+
+  const wheelL = cmd.base + cmd.turn
+  const wheelR = cmd.base - cmd.turn
 
   return (
     <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_380px]">
       <div className="grid gap-3">
         <Card
-          title="驾驶指令"
+          title="键盘操控"
           right={
             <Badge tone={driving ? 'mint' : 'slate'}>
               上位机驾驶 {driving ? '开' : '关'}
             </Badge>
           }
         >
-          <div className="mb-3 flex flex-wrap items-center gap-3">
-            <span className="text-[12px] text-slate-500">驾驶方式</span>
-            <div className="seg">
-              {(['wheels', 'base_turn', 'off'] as DriveMode[]).map((m) => (
-                <button key={m} className={`seg-item ${mode === m ? 'seg-on' : ''}`} onClick={() => setMode(m)}>
-                  {MODE_LABEL[m]}
-                </button>
-              ))}
+          <div className="flex flex-wrap items-start gap-6">
+            <div className="select-none">
+              <div className="grid grid-cols-3 gap-1.5">
+                <span />
+                <KeyBox label="W" sub="前进" on={on('fwd')} />
+                <span />
+                <KeyBox label="A" sub="左转" on={on('left')} />
+                <KeyBox label="S" sub="后退" on={on('back')} />
+                <KeyBox label="D" sub="右转" on={on('right')} />
+              </div>
+              <div className="mt-2 text-[11px] text-slate-500">
+                方向键 ↑↓←→ 与 WASD 等价 · <span className="text-slate-400">空格</span> = 急停
+              </div>
             </div>
-            <span className="text-[12px] text-slate-500">
-              都走车上正常的三环串级 PID，这里只改目标速度
-            </span>
+
+            <div className="min-w-[240px] flex-1">
+              <div className="mb-1 flex items-baseline gap-2">
+                <span className="text-[13px] text-slate-300">当前指令</span>
+                <span className="text-[13px] font-semibold text-neon-cyan">{cmd.label}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <Stat label="基准速度（前进量）" value={fmtInt(cmd.base)} unit="mm/s" tone={cmd.base ? 'mint' : undefined} />
+                <Stat label="转向（左右差）" value={fmtInt(cmd.turn)} unit="mm/s" tone={cmd.turn ? 'amber' : undefined} />
+                <Stat label="推算左轮" value={on('stop') ? '0' : fmtInt(wheelL)} unit="mm/s" />
+                <Stat label="推算右轮" value={on('stop') ? '0' : fmtInt(wheelR)} unit="mm/s" />
+              </div>
+            </div>
           </div>
 
-          {mode === 'wheels' ? (
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <div className="mb-1 flex items-center justify-between text-[13px]">
-                  <span className="text-slate-300">左轮目标</span>
-                  <NumberField value={vl} onChange={setVl} min={-3000} max={3000} step={step} unit="mm/s" />
-                </div>
-                <Slider value={vl} min={-3000} max={3000} step={step} onChange={setVl} />
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <div>
+              <div className="mb-1 flex items-center justify-between text-[13px]">
+                <span className="text-slate-300">前进 / 后退速度</span>
+                <span className="num text-slate-400">{speed} mm/s</span>
               </div>
-              <div>
-                <div className="mb-1 flex items-center justify-between text-[13px]">
-                  <span className="text-slate-300">右轮目标</span>
-                  <NumberField value={vr} onChange={setVr} min={-3000} max={3000} step={step} unit="mm/s" />
-                </div>
-                <Slider value={vr} min={-3000} max={3000} step={step} onChange={setVr} />
-              </div>
+              <Slider value={speed} min={0} max={3000} step={step} onChange={setSpeed} />
             </div>
-          ) : mode === 'base_turn' ? (
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <div className="mb-1 flex items-center justify-between text-[13px]">
-                  <span className="text-slate-300">基准速度（前进量）</span>
-                  <NumberField value={base} onChange={setBase} min={-3000} max={3000} step={step} unit="mm/s" />
-                </div>
-                <Slider value={base} min={-3000} max={3000} step={step} onChange={setBase} />
+            <div>
+              <div className="mb-1 flex items-center justify-between text-[13px]">
+                <span className="text-slate-300">转会速度（差速）</span>
+                <span className="num text-slate-400">{turnRate} mm/s</span>
               </div>
-              <div>
-                <div className="mb-1 flex items-center justify-between text-[13px]">
-                  <span className="text-slate-300">转向（左右差）</span>
-                  <NumberField value={turn} onChange={setTurn} min={-3000} max={3000} step={step} unit="mm/s" />
-                </div>
-                <Slider value={turn} min={-3000} max={3000} step={step} onChange={setTurn} />
-              </div>
+              <Slider value={turnRate} min={0} max={3000} step={step} onChange={setTurnRate} />
             </div>
-          ) : (
-            <div className="text-[13px] text-slate-400">已选「停」：点下面的下发把上位机驾驶交还车上的任务流程。</div>
-          )}
+          </div>
 
-          <div className="mt-4 flex flex-wrap gap-2">
-            <button className="btn-primary" onClick={() => apply()}>
-              下发
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <button className="btn-danger px-5 py-2 text-sm" onClick={() => void store.drive({ mode: 'off' })}>
+              <OctagonX size={16} /> 停车（空格）
             </button>
-            <button className="btn-danger" onClick={() => quick('stop')}>
-              <OctagonX size={14} /> 立刻停
-            </button>
-            <div className="ml-auto flex items-center gap-2">
-              <span className="text-[12px] text-slate-500">步长</span>
-              <NumberField
-                value={step}
-                onChange={(v) => store.patchSettings({ driveStep: Math.max(10, Math.round(v)) })}
-                min={10}
-                max={1000}
-                step={10}
-                unit="mm/s"
-              />
-            </div>
+            <span className="text-[12px] text-slate-500">
+              松开所有键 = 自动交还车上任务流程；只要还按着，指令会一直被保活喂给车。
+            </span>
           </div>
         </Card>
 
-        <Card title="快捷动作">
-          <div className="grid w-full max-w-[420px] grid-cols-3 gap-2">
-            <span />
-            <button className="btn h-14 flex-col" onClick={() => quick('fwd')}>
-              <ArrowUp size={18} /> 前进
-            </button>
-            <span />
-            <button className="btn h-14 flex-col" onClick={() => quick('left')}>
-              <ArrowLeft size={18} /> 左转
-            </button>
-            <button className="btn-danger h-14 flex-col" onClick={() => quick('stop')}>
-              <OctagonX size={18} /> 停
-            </button>
-            <button className="btn h-14 flex-col" onClick={() => quick('right')}>
-              <ArrowRight size={18} /> 右转
-            </button>
-            <span />
-            <button className="btn h-14 flex-col" onClick={() => quick('back')}>
-              <ArrowDown size={18} /> 后退
-            </button>
-            <span />
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {settings.drivePresets.map((s) => (
-              <button key={s} className="btn-ghost" onClick={() => apply({ vl: s, vr: s, base: s, turn: 0 })}>
-                {s} mm/s
-              </button>
-            ))}
+        <Card title="怎么按">
+          <div className="grid gap-2 text-[13px] md:grid-cols-2">
+            <div className="rounded-lg bg-ink-900/50 px-3 py-2">
+              <span className="num font-semibold text-slate-200">W</span>
+              <span className="ml-2 text-slate-400">直着往前</span>
+            </div>
+            <div className="rounded-lg bg-ink-900/50 px-3 py-2">
+              <span className="num font-semibold text-slate-200">S</span>
+              <span className="ml-2 text-slate-400">直着往后</span>
+            </div>
+            <div className="rounded-lg bg-ink-900/50 px-3 py-2">
+              <span className="num font-semibold text-slate-200">A</span>
+              <span className="ml-2 text-slate-400">原地左转（左轮反转）</span>
+            </div>
+            <div className="rounded-lg bg-ink-900/50 px-3 py-2">
+              <span className="num font-semibold text-slate-200">D</span>
+              <span className="ml-2 text-slate-400">原地右转</span>
+            </div>
+            <div className="rounded-lg bg-ink-900/50 px-3 py-2">
+              <span className="num font-semibold text-slate-200">W + A</span>
+              <span className="ml-2 text-slate-400">一边前进一边左转（斜着走）</span>
+            </div>
+            <div className="rounded-lg bg-ink-900/50 px-3 py-2">
+              <span className="num font-semibold text-slate-200">W + D</span>
+              <span className="ml-2 text-slate-400">一边前进一边右转</span>
+            </div>
+            <div className="rounded-lg bg-ink-900/50 px-3 py-2">
+              <span className="num font-semibold text-slate-200">A + D</span>
+              <span className="ml-2 text-slate-400">左右抵消 ⇒ 转向为 0（W 还按着就是直行）</span>
+            </div>
+            <div className="rounded-lg bg-ink-900/50 px-3 py-2">
+              <span className="num font-semibold text-slate-200">W + S</span>
+              <span className="ml-2 text-slate-400">前后抵消 ⇒ 不前进（A/D 还按着就原地转）</span>
+            </div>
           </div>
         </Card>
       </div>
@@ -192,15 +224,16 @@ export function DrivePage() {
         </Card>
         <Card title="提示">
           <ul className="list-disc space-y-1 pl-4 text-[12px] leading-relaxed text-slate-400">
-            <li>上位机驾驶只在「遥测里 host_drive 为开」时有效；车上的任务流程一启动就会把它顶掉。</li>
-            <li>桥有链路看门狗：真车模式下 0.5s 收不到上位机心跳会自动停车（防失联跑飞）。</li>
+            <li>按 W/S 走、A/D 转；组合键就是差速：左转时右轮加速、左轮减速，正好是车上的三环串级 PID 在跟这个目标。</li>
+            <li>只要这个页面开着并且按着键，桥每 200ms 会喂一次驾驶保活；真车模式下 0.5s 收不到会自动停车（防失联跑飞）。</li>
+            <li>切走页面 / 窗口失焦 / 松开所有键 ⇒ 立刻交还车上任务流程，不会自己接着跑。</li>
             <li>比赛规则不允许遥控干预，这套只用于调试与标定。</li>
           </ul>
           <div className="mt-3">
             <Toggle
               on={!settings.safetyBanner}
               onChange={(v) => store.patchSettings({ safetyBanner: !v })}
-              label="不再显示驾驶页安全提示"
+              label="不再显示操控页安全提示"
             />
           </div>
         </Card>

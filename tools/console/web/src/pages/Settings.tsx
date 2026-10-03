@@ -167,7 +167,7 @@ export function SettingsPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Toggle on={settings.safetyBanner} onChange={(v) => store.patchSettings({ safetyBanner: v })} label="驾驶页显示安全提示" />
+              <Toggle on={settings.safetyBanner} onChange={(v) => store.patchSettings({ safetyBanner: v })} label="操控页显示安全提示" />
             </div>
             <div className="flex gap-2">
               <button className="btn-ghost" onClick={() => store.clearBuffers()}>

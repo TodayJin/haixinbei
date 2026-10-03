@@ -36,7 +36,7 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 const OUT_DIR = resolve(HERE, '..', '..', '..', '..', '..', 'out', 'console', 'ssr')
 const TITLES: Record<string, string> = {
   overview: '总览',
-  drive: '驾驶',
+  drive: '操控',
   imu: 'IMU',
   sensors: '传感器',
   servo: '舵机与动作',
