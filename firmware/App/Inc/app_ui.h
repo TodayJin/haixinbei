@@ -13,37 +13,38 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/* ---- 页面 ID（1 起，routes[] 用 page-1 索引）---- */
+/* ---- 页面 ID（1 起，routes[] 用 page-1 索引）----
+ * 「任务A / 任务B」两个旧内置流程页已在 2026-10-03 删掉（用户 m19902 问"固件上怎么
+ * 还有 A B 两个任务，我又没上传"）：内置比赛流程 renwu.c 上一轮就删了，上位机的
+ * 启动命令 CMD_START_A/B 也废了，只剩这两个入口在屏上，按中键只翻一个没人再读的
+ * 标志位。现在只有一个「任务」页，显示**真解释器**在跑什么。 */
 #define PAGE_HOME            1
 #define PAGE_MENU_SETTINGS   2
 #define PAGE_INFO_ABOUT      3
 #define PAGE_CUSTOM_TRACE    4
-#define PAGE_CUSTOM_TASK_A   5
-#define PAGE_CUSTOM_TASK_B   6
-#define PAGE_CUSTOM_TEST     7
-#define PAGE_MENU_TASK       8
-#define PAGE_CUSTOM_GYRO     9
-#define PAGE_SPLASH         10
-#define PAGE_MENU_PID       11   /* PID 参数：二级菜单入口（速度环 / 角度环 / 循迹环） */
-#define PAGE_MENU_PID_SPEED 12   /* 速度环参数：控制电机转速 */
-#define PAGE_MENU_PID_ANGLE 13   /* 角度环参数：控制偏航角 */
-#define PAGE_MENU_PID_TRACE 14   /* 循迹环参数：灰度偏差 -> 目标角度 */
-#define PAGE_CUSTOM_POWER   15   /* 电流检测：INA226 测的电压 / 电流 / 功率 */
-#define PAGE_CUSTOM_MOTOR   16   /* 电机测试：左右轮各定方向，退出后继续转（用户 m01540） */
-#define PAGE_CUSTOM_SERVO   17   /* 舵机测试：两路舵机各定角度，退出后保持（用户 m13059） */
-#define PAGE_COUNT          17
+#define PAGE_CUSTOM_TASK     5   /* 任务：看解释器在跑哪个任务的第几块，中键停机 */
+#define PAGE_CUSTOM_TEST     6
+#define PAGE_MENU_PID        7   /* PID 参数：二级菜单入口（速度环 / 角度环 / 循迹环） */
+#define PAGE_MENU_PID_SPEED  8   /* 速度环参数：控制电机转速 */
+#define PAGE_MENU_PID_ANGLE  9   /* 角度环参数：控制偏航角 */
+#define PAGE_MENU_PID_TRACE 10   /* 循迹环参数：灰度偏差 -> 目标角度 */
+#define PAGE_CUSTOM_GYRO    11
+#define PAGE_SPLASH         12
+#define PAGE_CUSTOM_POWER   13   /* 电流检测：INA226 测的电压 / 电流 / 功率 */
+#define PAGE_CUSTOM_MOTOR   14   /* 电机测试：左右轮各定方向，退出后继续转（用户 m01540） */
+#define PAGE_CUSTOM_SERVO   15   /* 舵机测试：两路舵机各定角度，退出后保持（用户 m13059） */
+#define PAGE_COUNT          15
 
 /* ---- 自定义页在 custom 数组里的下标 ---- */
 #define CUSTOM_TRACE   0
-#define CUSTOM_TASK_A  1
-#define CUSTOM_TASK_B  2
-#define CUSTOM_TEST    3
-#define CUSTOM_GYRO    4
-#define CUSTOM_SPLASH  5
-#define CUSTOM_POWER   6
-#define CUSTOM_MOTOR   7
-#define CUSTOM_SERVO   8
-#define CUSTOM_COUNT   9
+#define CUSTOM_TASK    1
+#define CUSTOM_TEST    2
+#define CUSTOM_GYRO    3
+#define CUSTOM_SPLASH  4
+#define CUSTOM_POWER   5
+#define CUSTOM_MOTOR   6
+#define CUSTOM_SERVO   7
+#define CUSTOM_COUNT   8
 
 /* ---- 业务事件 ---- */
 #define EV_NONE        0
@@ -56,7 +57,6 @@ typedef struct {
     int32_t  yaw_x10;        /* 偏航角 ×10（0.1 度） */
     int32_t  pitch_x10;      /* 俯仰角 ×10 */
     int32_t  roll_x10;       /* 横滚角 ×10 */
-    uint8_t  task_state;     /* 0=待机 1=运行 */
     uint8_t  gyro_ok;        /* 陀螺仪是否有数据 */
     uint32_t sysclk_hz;      /* 供 STATUS 页显示 */
 } app_live_t;

@@ -12,6 +12,11 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-03 — 删掉固件屏上「任务A / 任务B」两个残留自定义页与「任务」二级菜单（k_task_items），首页「任务」直进 PAGE_CUSTOM_TASK，页上显示解释器真状态（TaskRun_IsRunning/Id/Block，空闲显示车上 N 个）；自定义页下标顺移（CUSTOM_COUNT 9→8）、PAGE_COUNT 17→15（舵机页 15）；删掉 app_live_t.task_state 字段
+选择：删掉固件屏上「任务A / 任务B」两个残留自定义页与「任务」二级菜单（k_task_items），首页「任务」直进 PAGE_CUSTOM_TASK，页上显示解释器真状态（TaskRun_IsRunning/Id/Block，空闲显示车上 N 个）；自定义页下标顺移（CUSTOM_COUNT 9→8）、PAGE_COUNT 17→15（舵机页 15）；删掉 app_live_t.task_state 字段
+放弃：保留那两页（用户已把它当成「车上有两条任务」的假象）；也否决让中键启动任务——误按一下车就按流程跑起来太危险，启动只走上位机 0x67 RUN 或开机自启
+因为：用户 m19865 直接问「为什么现在固件上还有AB两个任务，我不是没有上传吗」；g_live.task_state 全工程只有那两页读写（写 app_ui.c:2416 / 读 :1029），内置流程 renwu.c 已删、CMD_START_A/B/C 已回 ST_UNSUPPORTED，屏上那个「待机」是纯残留；车上「有几个任务」的唯一真值是 Flash 页 59 的目录
+
 ## 2026-10-03 — 单任务上限 2048 → 4096（`TASK_RUN_MAX_PROG` / `TASK_STORE_CAP` 两处 + 主机断言 + 桥 `TASK_SLOT_BYTES` + 假后端 + 文档）
 选择：单任务上限 2048 → 4096（`TASK_RUN_MAX_PROG` / `TASK_STORE_CAP` 两处 + 主机断言 + 桥 `TASK_SLOT_BYTES` + 假后端 + 文档）
 放弃：保持 2048，靠砍状态/瘦身把流程压进 2048 —— 会丢掉旧流程里的动作段，不忠实

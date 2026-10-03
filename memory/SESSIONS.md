@@ -13,6 +13,11 @@
 >
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
+## 2026-10-03 · KK_UI 界面
+完成：修掉用户 m19865 报的「固件上还有 A B 两个任务」：真因是固件菜单残留（k_task_items 的「任务A/任务B」两页，中键只翻 g_live.task_state 这个没人再读的标志位）。firmware/App/Inc/app_ui.h 删 PAGE_CUSTOM_TASK_A/B + PAGE_MENU_TASK、新增 PAGE_CUSTOM_TASK 5、PAGE_COUNT 17→15、CUSTOM_COUNT 9→8、删 app_live_t.task_state；firmware/App/Src/app_ui.c 删 k_task_items 与 k_menu_pages 的「任务」行、k_routes 顺移（PID 1/速度环 2/角度环 3/循迹环 4）、首页「任务」= PAGE_CUSTOM_TASK、draw_task_page(void) 画 TaskRun_IsRunning()/TaskRun_Id()/TaskRun_Block()（空闲数 TaskStore_Present() 报「车上 N 个」）、中键只调 TaskRun_Stop()。验证：make -B -j8 text 114292 / data 364 / bss 31040、bin 114664（118K 余 6168）、run_tests.ps1 通过 13 失败 0、check_static.ps1 52 文件 4 告警 0 error、check_warnings.ps1 待处理 0 条、check_charset 对 60 个候选字只缺「状 U+72B6 / 启 U+542F」（所以文案避开它们，没重生成字模）。
+未完成：屏上观感只有用户能看到（没接板、没烧这版）
+下一步：用户烧这版（& .\tools\flash.ps1）后看首页「任务」页；若还要在屏上启动任务，再单独加一次确认
+
 ## 2026-10-03
 完成：把 `53b5fc0` 里的 `renwu.c` 21 个可达段转成新任务格式 `tools/console/web/src/lib/tasks/renwu-lap.json`（15 状态 / 190 块 / 名字 95 B / 镜像 2127 B，名字「旧全程·12障碍」），单任务上限从 2048 提到 4096，「两轮直给」放回模式下拉；提交 `1af6824`。验证：`tools/console/web/src/lib/tasks/renwu-lap.test.ts`（7 项，含 2127 B 尺寸护栏与关键动作抽查）、`tools/console/tests/test_firmware_pipe.py::test_lap_program_is_accepted_by_the_real_firmware`（真固件 18 片 PUT → COMMIT → LIST → GET 逐字节回读）、真 HTTP 端到端 `out/_lap_http_e2e.py --leave`（8793 桥 + 假车，PUT/COMMIT/LIST/GET/RUN/STATUS/STOP 全绿，跑完故意不删，仿真车槽 0 上留着这条任务 flags=1）；三层回归 pytest 103 passed / vitest 17 文件 164 项 / run_tests 13 通过 / tsc 0 / `npm run build` / bin 114604 B / check_static 52 文件 4 告警 0 error。
 未完成：蜂鸣器/RGB 没有对应块（转换时丢弃）；角度环「左右基准速度分开」不可表达；角度环倒车不可表达（退化成两轮直给）；旧 `Load()` 是开环 PWM，新「两轮直给」走速度环闭环；旧默认循迹是两级 `motor_tracing_pid_speed`，新下拉只有三级串级。
@@ -1157,9 +1162,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：原理图待按此修改
 下一步：等第三版 netlist 复核
 
-## 2026-09-15
-完成：复核用户第二版 netlist（sha 4912201f，27329B，86 元件）。**上次的悬空全部修好**：I2C 已接上 OLED1.3/4 + INA226 SCL/SDA + 扩展座 U14(SH1.0-4P)/H3(2.54-4P)；循迹 huidu1–8 接到 H1(2.54 1x10) + U13(SH1.0-10P)；UART4 接到 H2(2.54 1x4) + U15(SH1.0-4P)；单节点网络为 0。新增 4×M3 螺丝孔(U16–U19)。串口分配与文档不同：**无线下载器 U12 走 LPUART1，灰度串口走 UART4**（功能等价）。**仍未改**：① I2C 无上拉电阻（4.7k 缺失，总线可能拉不起来）；② RGB/WS2812 完全删了（PC12 悬空）；③ INA226 ALERT(U5.3)/PB12 悬空；④ 保险丝 F2 仍 2A；⑤ 驱动输入/编码器无 100Ω/100k/RC；⑥ MCU 去耦仅 2×100nF+10µF；⑦ D5 仍串在 5V 输出；⑧ 无复位键/BOOT0 跳线/蜂鸣器续流管；⑨ I2C 插座供 VCC5V（MCU 3.3V 逻辑，需确认电平/上拉电压）。
-未完成：上拉、RGB、ALERT、保险丝等未改
-下一步：用户改完再复核；或按此清单出逐条修改表
-
-> 更早的会话条目已归档到 181 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 182 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。

@@ -13,6 +13,8 @@
 #include "speed_control.h" /* 电机测试页：读 20ms 窗口计数 + 把滑条写成速度环目标（闭环） */
 #include "host_link.h"
 #include "tracing.h"      /* trace_invert：界面「循迹反转」同步给循迹底层 */
+#include "task_run.h"     /* 任务页：读解释器真状态（在跑哪个任务的第几块）+ 中键停机 */
+#include "task_store.h"   /* 任务页：数一数车上 Flash 里存了几个任务 */
 #include "trace_cal.h"    /* 循迹标定向导 + 模拟量柱高/阈值线 */
 #include "nvram.h"        /* 设置存 Flash：锁按键 + "正在保存/保存成功"提示 */
 
@@ -216,16 +218,14 @@ static const KK_UI_PageRoute k_routes[PAGE_COUNT] = {
     [PAGE_MENU_SETTINGS - 1] = { KK_UI_PAGE_MENU,   0 },
     [PAGE_INFO_ABOUT - 1]    = { KK_UI_PAGE_INFO,   0 },
     [PAGE_CUSTOM_TRACE - 1]  = { KK_UI_PAGE_CUSTOM, CUSTOM_TRACE },
-    [PAGE_CUSTOM_TASK_A - 1] = { KK_UI_PAGE_CUSTOM, CUSTOM_TASK_A },
-    [PAGE_CUSTOM_TASK_B - 1] = { KK_UI_PAGE_CUSTOM, CUSTOM_TASK_B },
+    [PAGE_CUSTOM_TASK - 1]   = { KK_UI_PAGE_CUSTOM, CUSTOM_TASK },
     [PAGE_CUSTOM_TEST - 1]   = { KK_UI_PAGE_CUSTOM, CUSTOM_TEST },
-    [PAGE_MENU_TASK - 1]     = { KK_UI_PAGE_MENU,   1 },
     [PAGE_CUSTOM_GYRO - 1]   = { KK_UI_PAGE_CUSTOM, CUSTOM_GYRO },
     [PAGE_SPLASH - 1]        = { KK_UI_PAGE_CUSTOM, CUSTOM_SPLASH },
-    [PAGE_MENU_PID - 1]       = { KK_UI_PAGE_MENU,  2 },
-    [PAGE_MENU_PID_SPEED - 1] = { KK_UI_PAGE_MENU,  3 },
-    [PAGE_MENU_PID_ANGLE - 1] = { KK_UI_PAGE_MENU,  4 },
-    [PAGE_MENU_PID_TRACE - 1] = { KK_UI_PAGE_MENU,  5 },
+    [PAGE_MENU_PID - 1]       = { KK_UI_PAGE_MENU,  1 },
+    [PAGE_MENU_PID_SPEED - 1] = { KK_UI_PAGE_MENU,  2 },
+    [PAGE_MENU_PID_ANGLE - 1] = { KK_UI_PAGE_MENU,  3 },
+    [PAGE_MENU_PID_TRACE - 1] = { KK_UI_PAGE_MENU,  4 },
     [PAGE_CUSTOM_POWER - 1]   = { KK_UI_PAGE_CUSTOM, CUSTOM_POWER },
     [PAGE_CUSTOM_MOTOR - 1]   = { KK_UI_PAGE_CUSTOM, CUSTOM_MOTOR },
     [PAGE_CUSTOM_SERVO - 1]   = { KK_UI_PAGE_CUSTOM, CUSTOM_SERVO }
@@ -236,7 +236,7 @@ static const KK_UI_PageRoute k_routes[PAGE_COUNT] = {
  * 于是从表盘往左第一格是"设置"、第二格是"电流"
  * （用户要求：设置放在陀螺仪后面；PID 放在任务后面）。 */
 static const KK_UI_HomeItem k_home_items[] = {
-    { "任务",     kk_icon_task_a,   PAGE_MENU_TASK },
+    { "任务",     kk_icon_task_a,   PAGE_CUSTOM_TASK },
     { "PID",      kk_icon_pid,      PAGE_MENU_PID },
     { "循迹测试", kk_icon_track,    PAGE_CUSTOM_TRACE },
     { "模块测试", kk_icon_test,     PAGE_CUSTOM_TEST },
@@ -298,11 +298,8 @@ static const KK_UI_MenuItem k_settings_items[] = {
     { "循迹反转", KK_UI_MENU_BOOL,  1 },
     { "关于", KK_UI_MENU_PAGE,      PAGE_INFO_ABOUT }
 };
-/* 任务：二级菜单 */
-static const KK_UI_MenuItem k_task_items[] = {
-    { "任务A", KK_UI_MENU_PAGE, PAGE_CUSTOM_TASK_A },
-    { "任务B", KK_UI_MENU_PAGE, PAGE_CUSTOM_TASK_B }
-};
+/* 「任务」二级菜单已删（2026-10-03，用户 m19902）：它只有「任务A / 任务B」两个旧
+ * 内置流程入口，首页现在直接进唯一的任务状态页，跟"循迹测试/陀螺仪/电流"一致。 */
 /* PID：首页"PID" -> 这一页 -> 选环 -> 每一项都是一个 INT 编辑框。
  * 三层串级（用户定的结构）：
  *   速度环（HP_SPEED_*）目标转速 -> PWM，**环本身还没写**（缺编码器）
@@ -338,7 +335,6 @@ static const KK_UI_MenuItem k_pid_trace_items[] = {
 };
 static const KK_UI_MenuPage k_menu_pages[] = {
     { "设置",   k_settings_items,  NULL, APP_UI_ITEM_COUNT(k_settings_items) },
-    { "任务",   k_task_items,      NULL, APP_UI_ITEM_COUNT(k_task_items) },
     { "PID",    k_pid_items,       NULL, APP_UI_ITEM_COUNT(k_pid_items) },
     { "速度环", k_pid_speed_items, NULL, APP_UI_ITEM_COUNT(k_pid_speed_items) },
     { "角度环", k_pid_angle_items, NULL, APP_UI_ITEM_COUNT(k_pid_angle_items) },
@@ -409,7 +405,8 @@ static const KK_UI_App k_app = {
     .home_pages       = k_home_pages,
     .home_page_count  = 1,
     .menu_pages       = k_menu_pages,
-    .menu_page_count = 6,
+    /* 用宏而不是写字面量：删/加二级菜单忘了改这个数，菜单项就会索引越界/打不开 */
+    .menu_page_count  = APP_UI_ITEM_COUNT(k_menu_pages),
     .info_pages       = k_info_pages,
     .info_page_count  = 1,
     .custom_page_count = CUSTOM_COUNT,
@@ -1018,24 +1015,37 @@ static void draw_trace_page(void)
     }
 }
 
-static void draw_task_page(const char *title)
+/* 任务页（PAGE_CUSTOM_TASK）—— 用户 m19902 问「固件上怎么还有 A B 两个任务，我又
+ * 没上传」。旧样子是两页「任务A / 任务B」，画的是 g_live.task_state 这个标志位，
+ * 而它**只有本页中键会翻、全工程没有第二个读者**（内置流程 renwu.c 早删了），所以
+ * 屏上永远是「待机」，看着却像车上有两条任务。现在这页读真解释器：
+ *   运行中 = 在跑哪个任务（烧进 Flash 的槽号）+ 走到第几块（当前序列内的下标）+ 中键停机
+ *   待机   = 车上 Flash 里一共存了几个任务
+ * 中文全部在 kk_font_body 子集里（"状"没字形，所以不写「状态」而写「第 N 块」）。 */
+static void draw_task_page(void)
 {
     char buf[28];
-    int32_t broll, bpitch, byaw;
+    uint8_t running = TaskRun_IsRunning();
 
-    draw_title(title);
-    gyro_angles(&broll, &bpitch, &byaw);
-    (void)broll; (void)bpitch;
-    draw_text(4, 22, kk_font_body, g_live.task_state ? "运行" : "待机");
-    OLED_SetDrawMode(OLED_DRAW_SET);
-    fmt_x10(buf, sizeof(buf), byaw);
-    draw_text(4, 34, kk_font_body, "偏航");
-    draw_text(4, 46, kk_font_body, buf);
-    /* 提示行原来写在 y=64（屏外看不见）；挪到 y=52 后字底又压到屏沿那圈常驻圆角
-     * 白框上（框占第 0/63 行），被盖掉一行。现在整页上移：偏航值 (4,46)、提示
-     * (70,46) 与值同一行（4 个汉字 48px -> x70..118，值最宽也到不了 x70），
-     * 字底第 57 行，离外框还有 5px。 */
-    draw_text(70, 46, kk_font_body, "左键返回");
+    draw_title("任务");
+    draw_text(4, 22, kk_font_body, running ? "运行" : "待机");
+
+    if (running) {
+        snprintf(buf, sizeof(buf), "任务 %u", (unsigned)TaskRun_Id());
+        draw_text(4, 34, kk_font_body, buf);
+        /* 第几块是当前序列（进门 / 循环体）内的下标，不是状态号 */
+        snprintf(buf, sizeof(buf), "第 %u 块", (unsigned)TaskRun_Block());
+        draw_text(4, 46, kk_font_body, buf);
+        draw_text(70, 46, kk_font_body, "中键停");
+    } else {
+        uint8_t i, n = 0U;
+        for (i = 0U; i < TaskStore_SlotCount(); i++) {
+            if (TaskStore_Present(i)) n++;
+        }
+        snprintf(buf, sizeof(buf), "车上 %u 个", (unsigned)n);
+        draw_text(4, 34, kk_font_body, buf);
+        draw_text(4, 46, kk_font_body, "左键返回");
+    }
 }
 
 /* =====================================================================
@@ -2412,10 +2422,14 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
     }
 
     if (event.action == KK_UI_INPUT_OK && event.source != KK_UI_INPUT_ENCODER) {
-        if (page == PAGE_CUSTOM_TASK_A || page == PAGE_CUSTOM_TASK_B) {
-            g_live.task_state = (uint8_t)(g_live.task_state ? 0U : 1U);
-            /* 按键蜂鸣统一由 KK_UI_OnKeyPress() 处理，这里不再单独响。 */
-            KK_UI_Invalidate();
+        /* 任务页：中键**只停机**，不启动 —— 误按一下就让车按流程跑起来太危险
+         * （启动一律走上位机 0x67 RUN 或开机自启）。页面上没有选项框，左键返回
+         * 由上面的 UP 分支统一处理。 */
+        if (page == PAGE_CUSTOM_TASK) {
+            if (TaskRun_IsRunning()) {
+                TaskRun_Stop();
+                KK_UI_Invalidate();
+            }
         }
     }
 }
@@ -2520,8 +2534,7 @@ void KK_UI_CustomOnDraw(KK_UI_PageId page, int16_t x_offset,
 
     switch (page) {
     case PAGE_CUSTOM_TRACE:  draw_trace_page();  break;
-    case PAGE_CUSTOM_TASK_A: draw_task_page("任务A"); break;
-    case PAGE_CUSTOM_TASK_B: draw_task_page("任务B"); break;
+    case PAGE_CUSTOM_TASK:   draw_task_page(); break;
     case PAGE_CUSTOM_TEST:   draw_test_page(); break;
     case PAGE_CUSTOM_MOTOR:  draw_motor_page(); break;
     case PAGE_CUSTOM_SERVO:  draw_servo_page(); break;
