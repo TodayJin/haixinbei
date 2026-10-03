@@ -21,8 +21,13 @@
 #include "main.h"
 #include "board.h"
 #include "bsp_board.h"
+#include "host_ext.h"      /* v2：驾驶/动作/舵机/固化（业务都在这里，协议层不碰控制模块） */
 #include "jy61p.h"
 #include "kk_oled.h"
+#include "motion.h"        /* v2：驾驶状态回报用 Motion_GetMode */
+#include "nvram.h"         /* v2：T_PARAM_SAVE 真保存（nvram_touch） */
+#include "servo.h"         /* v2：动作表/舵机角度 */
+#include "trace_cal.h"     /* v2：T_CAL_GET 标定回读 */
 #include "tracing.h"
 #include "SEGGER_RTT.h"
 
@@ -106,6 +111,24 @@ static const param_spec_t SPECS[] = {
   { HP_VBAT_NOMINAL,    12000.0f,  3000.0f,    30000.0f },
   { HP_STALL_CURRENT,    2500.0f,   100.0f,    20000.0f },
   { HP_VBAT_LOW,        10500.0f,  3000.0f,    30000.0f },
+  /* ---- v2（用户 m13466 的新上位机）：控制环标定量全部进参数表 ----
+   * 这几项原来只活在控制模块的 `volatile float` 全局里（台架靠 SWD 直接改），
+   * 现在由各控制环每拍从参数表回读（见 gyro_control.c / pid.c / PID_tracing.c），
+   * 所以"上位机改参数 + 固化到 Flash"就能覆盖所有环，不必再烧固件。
+   * 默认值 = 2026-10 台架扫出来的那套（第十/十一轮，见 docs/自主优化记录.md）。 */
+  { HP_GYRO_ANG_KP,        3.5f,     1.0f,       20.0f },   /* 角度误差 → 期望角速度 (°/s)/° */
+  { HP_GYRO_RATE_KP,     250.0f,    10.0f,     2000.0f },   /* 速率环 P */
+  { HP_GYRO_RATE_KD,       4.0f,     0.0f,      100.0f },   /* 速率环 D（law3 阻尼） */
+  { HP_GYRO_RATE_MAX,    110.0f,    10.0f,      300.0f },   /* 期望角速度上限 °/s */
+  { HP_GYRO_CORR_LIMIT, 2000.0f,   200.0f,     7200.0f },   /* 修正量限幅（PWM 刻度） */
+  { HP_GYRO_CORR_SLEW, 300000.0f, 1000.0f,  2000000.0f },   /* 修正量斜率限幅 PWM/s */
+  { HP_GYRO_SETTLE_DEG,    2.0f,     0.2f,       10.0f },   /* 停车带宽 ° */
+  { HP_GYRO_SETTLE_MS,   150.0f,     0.0f,     2000.0f },   /* 到位锁存时长 ms */
+  { HP_TRACE_ANGLE_PER_UNIT, 10.0f,  0.5f,       60.0f },   /* 串级：重心误差 → 目标航向 °/格 */
+  { HP_TRACE_ANGLE_MAX,   35.0f,     1.0f,       90.0f },   /* 串级：目标航向限幅 ° */
+  { HP_PIVOT_KP,         900.0f,     0.0f,    20000.0f },   /* 原地转圈（base=0）循迹环 P */
+  { HP_PIVOT_KI,           0.0f,     0.0f,      200.0f },   /* 原地转圈 I（默认 0：积分会被静摩擦喂成常驻推力） */
+  { HP_PIVOT_KD,         405.0f,     0.0f,    20000.0f },   /* 原地转圈 D */
 };
 #define NSPEC (sizeof(SPECS) / sizeof(SPECS[0]))
 
@@ -118,6 +141,12 @@ static uint16_t s_dump_i;
 static uint8_t  s_dump_seq;
 static uint8_t  s_dump_busy;
 #define DUMP_PER_POLL 4u
+
+/* v2 遥测帧选择（T_CMD / CMD_SET_TELEM_MODE）：
+ *   0 = 只发老 32 字节 T_TELEM（带宽小）
+ *   1 = 只发 64 字节 T_TELEM2（默认：新上位机要灰度/重心/角度环/模式这些量）
+ *   2 = 两个都发（调试用，115200 下 50Hz 约占 37% 带宽） */
+static uint8_t s_telem_mode = 1u;
 
 static int spec_index(uint16_t id)
 {
@@ -188,18 +217,48 @@ void host_param_set_local(uint16_t id, float v)
 #define SOF1 0x5Au
 #define MAX_PAYLOAD 128u
 
-enum { T_TELEM = 0x01, T_PARAM_GET = 0x10, T_PARAM_SET = 0x11, T_PARAM_REPORT = 0x12,
-       T_PARAM_SAVE = 0x13, T_CMD = 0x20, T_ACK = 0x21, T_HELLO = 0x40,
-       T_HELLO_REQ = 0x41, T_TEXT = 0x50 };
+enum { T_TELEM = 0x01, T_TELEM2 = 0x03, T_PARAM_GET = 0x10, T_PARAM_SET = 0x11,
+       T_PARAM_REPORT = 0x12, T_PARAM_SAVE = 0x13, T_CAL_GET = 0x14, T_CAL_REPORT = 0x15,
+       T_ACTIONS_GET = 0x16, T_ACTIONS = 0x17, T_ACTION_SET = 0x18, T_ACTION_SAVE = 0x19,
+       T_SERVO_SET = 0x1A, T_SERVO_PLAY = 0x1B, T_DRIVE = 0x1C, T_DRIVE_REPORT = 0x1D,
+       T_SERVO_DEV = 0x1E,
+       T_CMD = 0x20, T_ACK = 0x21, T_HELLO = 0x40, T_HELLO_REQ = 0x41, T_TEXT = 0x50 };
 
 enum { ST_OK = 0x00, ST_UNKNOWN_TYPE = 0x02, ST_BAD_PARAM = 0x03,
-       ST_OUT_OF_RANGE = 0x04, ST_NOT_READY = 0x05, ST_BAD_CMD = 0x06 };
+       ST_OUT_OF_RANGE = 0x04, ST_NOT_READY = 0x05, ST_BAD_CMD = 0x06,
+       ST_BUSY = 0x07 };
 
 enum { CMD_STOP = 0x01, CMD_START_A = 0x02, CMD_START_B = 0x03, CMD_START_C = 0x04,
        CMD_CALIB_GYRO = 0x05, CMD_SAVE_PARAMS = 0x06, CMD_CLEAR_FAULT = 0x07,
-       CMD_SET_TELEM_HZ = 0x08, CMD_RESET = 0x09, CMD_SET_LOGGING = 0x0A };
+       CMD_SET_TELEM_HZ = 0x08, CMD_RESET = 0x09, CMD_SET_LOGGING = 0x0A,
+       CMD_SET_TELEM_MODE = 0x0F };
 
-#define TELEM_LEN 32u
+/* v2：能力位（T_HELLO 末尾 u32）——上位机据此决定页面显示什么，不靠猜版本号 */
+#define HOST_CAPS_ALL  ((uint32_t)(HOST_CAP_TELEM2 | HOST_CAP_ACTIONS | HOST_CAP_SERVO \
+                                 | HOST_CAP_DRIVE | HOST_CAP_CAL | HOST_CAP_FLASH \
+                                 | HOST_CAP_WATCHDOG))
+
+#define TELEM_LEN  32u
+#define TELEM2_LEN 64u
+/* T_TELEM2 相对 T_TELEM 新增的偏移（前 32 字节逐字节相同，上位机一套解析两用） */
+#define TELEM2_GRAY_OFF   32u   /* u8[8]  8 路灰度柱高 0..255 */
+#define TELEM2_POS_OFF    40u   /* i16   循迹重心 ×100 */
+#define TELEM2_PID_OFF    42u   /* i16   循迹环本拍转向偏置 */
+#define TELEM2_AERR_OFF   44u   /* i16   角度环误差 ×10 */
+#define TELEM2_ARATE_OFF  46u   /* i16   角度环期望角速度 ×10 */
+#define TELEM2_ACORR_OFF  48u   /* i16   角度环修正量 */
+#define TELEM2_MODE_OFF   50u   /* u8    0 空闲 1 陀螺 2 循迹 3 串级 */
+#define TELEM2_RENWU_OFF  51u   /* u8    0 停 1 A 2 B 3 C */
+#define TELEM2_S1_OFF     52u   /* u8    舵机1 角度 */
+#define TELEM2_S2_OFF     53u   /* u8    舵机2 角度 */
+#define TELEM2_ACT_OFF    54u   /* u8    当前动作号（最近一次下发的） */
+#define TELEM2_NVRAM_OFF  55u   /* u8    NVRAM_STATE_* */
+#define TELEM2_DRIVE_OFF  56u   /* u8    驾驶模式 0..3 */
+#define TELEM2_DEN_OFF    57u   /* u8    1 = 正在被上位机驾驶 */
+#define TELEM2_CROSS_OFF  58u   /* u8    1 = 检测到路口 */
+#define TELEM2_TRIPS_OFF  59u   /* u8    链路看门狗自动停车次数 */
+#define TELEM2_DEV1_OFF   60u   /* i16   舵机1 软件中位偏差 µs */
+#define TELEM2_DEV2_OFF   62u   /* i16   舵机2 软件中位偏差 µs */
 
 static uint8_t tx_buf[7u + MAX_PAYLOAD];
 
@@ -251,22 +310,32 @@ static void send_param_report(uint8_t seq, uint16_t id, float v)
   frame_send(T_PARAM_REPORT, seq, p, 6);
 }
 
+static void put_u16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
+static void put_u32(uint8_t *p, uint32_t v)
+{
+  p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
+  p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
+}
+static void put_i16(uint8_t *p, int16_t v) { put_u16(p, (uint16_t)v); }
+
 static void send_hello(uint8_t seq)
 {
-  uint8_t p[20];
+  uint8_t p[24];
   const char *name = "quandi-car";
   uint32_t crc = param_table_crc();
   uint16_t hz = s_stats.telem_hz;
   memset(p, 0, sizeof(p));
-  p[0] = 0x01; p[1] = 0x00;              /* fw version 0x0001 */
-  p[2] = 0x01;                           /* proto version */
-  p[3] = 0x00;                           /* reserved */
+  p[0] = (uint8_t)(HOST_FW_VERSION & 0xFFu);   /* fw version 0x0002 */
+  p[1] = (uint8_t)(HOST_FW_VERSION >> 8);
+  p[2] = (uint8_t)HOST_PROTO_VERSION;          /* proto version 2 */
+  p[3] = 0x00;                                 /* reserved */
   p[4] = (uint8_t)(crc & 0xFFu);
   p[5] = (uint8_t)(crc >> 8);
   p[6] = (uint8_t)(hz & 0xFFu);
   p[7] = (uint8_t)(hz >> 8);
   memcpy(&p[8], name, strlen(name) > 12u ? 12u : strlen(name));
-  frame_send(T_HELLO, seq, p, 20);
+  put_u32(&p[20], HOST_CAPS_ALL);              /* v2：能力位 */
+  frame_send(T_HELLO, seq, p, 24);
 }
 
 /* =====================================================================
@@ -297,23 +366,28 @@ static uint8_t line_mask(void)
   return m;
 }
 
-static void put_u16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
-static void put_u32(uint8_t *p, uint32_t v)
-{
-  p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8);
-  p[2] = (uint8_t)(v >> 16); p[3] = (uint8_t)(v >> 24);
-}
-static void put_i16(uint8_t *p, int16_t v) { put_u16(p, (uint16_t)v); }
+/* 遥测 flags 位（与 tools/console/docs/API.md 的 flags 一一对应） */
+#define FL_GYRO_OK    0x01u   /* 陀螺帧在动（500ms 内有新帧） */
+#define FL_LOST       0x02u   /* 循迹丢线 */
+#define FL_HOST_DRIVE 0x04u   /* 正在被上位机驾驶 */
+#define FL_SLOPE      0x08u   /* 坡道（pitch 粗判） */
+#define FL_MOTOR      0x10u   /* 速度环使能中（电机可能带电） */
+#define FL_LOGGING    0x20u   /* 车上记录（未实现，恒 0） */
+#define FL_FLASH      0x40u   /* 正在写 Flash */
+#define FL_FAULT      0x80u   /* 运动层故障 */
 
-static void send_telemetry(uint32_t loop_us)
+/* 前 32 字节 = 老 T_TELEM 的逐字节相同内容（上位机一套解析两用） */
+static void put_telemetry_base(uint8_t *p, uint32_t loop_us)
 {
-  uint8_t p[TELEM_LEN];
   static int32_t vbus_mv, ibat_ma;
   static uint32_t last_ina;
+  static uint32_t last_gyro_frames;
+  static uint32_t gyro_ok_ms;
   uint8_t  lm = line_mask();
   uint8_t  flags = 0;
   uint16_t v1, v2;
   uint32_t now = HAL_GetTick();
+  uint32_t frames = jy61p_frame_count();
 
   /* INA226 也在 I2C1 上，而 OLED 走异步中断/DMA 刷屏 —— 只在屏不忙时读，
      免得抢总线把显示刷挂。100ms 读一次就够。 */
@@ -324,12 +398,22 @@ static void send_telemetry(uint32_t loop_us)
     if (ina226_read_current_ma(&t) == HAL_OK)     ibat_ma = t;
   }
 
-  if (lm == 0u) flags |= 0x02u;                       /* 循迹丢线 */
-  if (Pitch > 8.0f || Pitch < -8.0f) flags |= 0x08u;  /* 坡道（用 pitch 粗判） */
-  /* TODO(编码器/陀螺在线检测): bit0 陀螺有效、bit5 车上记录 —— 等编码器与
-     黑匣子做完再补，现在不谎报。 */
+  /* 陀螺在线检测：不用"有没有配好"，直接看帧计数有没有在涨（台架规矩：
+   * 判陀螺活性只看 s_frames 增长 —— 见 docs/自主优化记录.md 第 16.8 节）。 */
+  if (frames != last_gyro_frames) {
+    last_gyro_frames = frames;
+    gyro_ok_ms = now;
+  }
+  if ((uint32_t)(now - gyro_ok_ms) < 500u) flags |= FL_GYRO_OK;
 
-  memset(p, 0, sizeof(p));
+  if (lm == 0u)                       flags |= FL_LOST;
+  if (Pitch > 8.0f || Pitch < -8.0f)  flags |= FL_SLOPE;
+  if (HostExt_DriveEnabled())         flags |= FL_HOST_DRIVE;
+  if (HostExt_MotorEnabled())         flags |= FL_MOTOR;
+  if (HostExt_MotionFault() != 0u)    flags |= FL_FAULT;
+  if (nvram_state() == NVRAM_STATE_BUSY) flags |= FL_FLASH;
+
+  memset(p, 0, TELEM_LEN);
   put_u32(&p[0], now);
   put_i16(&p[4], clamp_i16(Yaw * 10.0f));
   put_i16(&p[6], clamp_i16(Pitch * 10.0f));
@@ -351,7 +435,86 @@ static void send_telemetry(uint32_t loop_us)
   put_u16(&p[28], (uint16_t)(loop_us > 65535u ? 65535u : loop_us));
   p[30] = flags;
   p[31] = 0;
+}
+
+static void send_telemetry(uint32_t loop_us)
+{
+  uint8_t p[TELEM_LEN];
+  put_telemetry_base(p, loop_us);
   frame_send(T_TELEM, 0, p, TELEM_LEN);
+}
+
+/* v2 扩展遥测：老 32 字节 + 灰度柱高/重心/角度环/模式/动作/驾驶状态 */
+static void send_telemetry2(uint32_t loop_us)
+{
+  uint8_t p[TELEM2_LEN];
+  uint8_t gray[8];
+
+  put_telemetry_base(p, loop_us);
+  memset(&p[TELEM2_GRAY_OFF], 0, TELEM2_LEN - TELEM2_GRAY_OFF);
+  HostExt_GrayLevel(gray);
+  memcpy(&p[TELEM2_GRAY_OFF], gray, 8u);
+  put_i16(&p[TELEM2_POS_OFF],   clamp_i16(HostExt_TracePos() * 100.0f));
+  put_i16(&p[TELEM2_PID_OFF],   clamp_i16(HostExt_TracePid()));
+  put_i16(&p[TELEM2_AERR_OFF],  clamp_i16(HostExt_AngleErr() * 10.0f));
+  put_i16(&p[TELEM2_ARATE_OFF], clamp_i16(HostExt_AngleRateRef() * 10.0f));
+  put_i16(&p[TELEM2_ACORR_OFF], clamp_i16(HostExt_AngleCorr()));
+  p[TELEM2_MODE_OFF]  = HostExt_MotionMode();
+  p[TELEM2_RENWU_OFF] = HostExt_RenwuFlag();
+  p[TELEM2_S1_OFF]    = (uint8_t)(HostExt_ServoAngle(1) + 0.5f);
+  p[TELEM2_S2_OFF]    = (uint8_t)(HostExt_ServoAngle(2) + 0.5f);
+  p[TELEM2_ACT_OFF]   = HostExt_CurrentAction();
+  p[TELEM2_NVRAM_OFF] = HostExt_NvramState();
+  p[TELEM2_DRIVE_OFF] = HostExt_DriveMode();
+  p[TELEM2_DEN_OFF]   = HostExt_DriveEnabled();
+  p[TELEM2_CROSS_OFF] = (uint8_t)HostExt_TraceCross();
+  p[TELEM2_TRIPS_OFF] = HostExt_DriveWatchdogTrips();
+  put_i16(&p[TELEM2_DEV1_OFF], (int16_t)Servo_GetDeviation(1));
+  put_i16(&p[TELEM2_DEV2_OFF], (int16_t)Servo_GetDeviation(2));
+  frame_send(T_TELEM2, 0, p, TELEM2_LEN);
+}
+
+/* v2：14 个动作的终点角度（14 × {舵1,舵2}） */
+static void send_actions(uint8_t type, uint8_t seq)
+{
+  uint8_t p[SERVO_ACTION_N * 2u];
+  int n, a1, a2;
+  for (n = 1; n <= Servo_ActionCount(); n++) {
+    a1 = 0; a2 = 0;
+    (void)HostExt_ActionGet(n, &a1, &a2);
+    if (a1 < 0) a1 = 0;
+    if (a1 > 255) a1 = 255;
+    if (a2 < 0) a2 = 0;
+    if (a2 > 255) a2 = 255;
+    p[(n - 1) * 2]     = (uint8_t)a1;
+    p[(n - 1) * 2 + 1] = (uint8_t)a2;
+  }
+  frame_send(type, seq, p, (uint8_t)sizeof(p));
+}
+
+/* v2：8 路黑白标定原文（trace_cal_data_t，82 字节） */
+static void send_cal_report(uint8_t seq)
+{
+  trace_cal_data_t d;
+  trace_cal_get_data(&d);
+  frame_send(T_CAL_REPORT, seq, (const uint8_t *)&d, (uint8_t)sizeof(d));
+}
+
+/* v2：驾驶状态回报（改完/查询都回一帧，上位机不用等下一次遥测） */
+static void send_drive_report(uint8_t seq)
+{
+  uint8_t p[12];
+  int a = 0, b = 0;
+  (void)HostExt_DriveGet(&a, &b);
+  p[0] = HostExt_DriveMode();
+  p[1] = HostExt_DriveEnabled();
+  put_i16(&p[2], clamp_i16((float)a));
+  put_i16(&p[4], clamp_i16((float)b));
+  put_i16(&p[6], motor_pwm(TIM_CHANNEL_1, TIM_CHANNEL_2));
+  put_i16(&p[8], motor_pwm(TIM_CHANNEL_3, TIM_CHANNEL_4));
+  p[10] = (uint8_t)(HostExt_ServoAngle(1) + 0.5f);
+  p[11] = (uint8_t)(HostExt_ServoAngle(2) + 0.5f);
+  frame_send(T_DRIVE_REPORT, seq, p, 12);
 }
 
 /* =====================================================================
@@ -414,6 +577,10 @@ static void rx_byte(uint8_t b)
 
 static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t len)
 {
+  /* 任何一帧合法帧都算"链路还活着"：驾驶时靠它喂看门狗，500ms 收不到就自动停车
+   * （HostExt_Task 在 host_link_poll 里查，见 host_ext.c） */
+  HostExt_DriveKeepAlive(HAL_GetTick());
+
   switch (type) {
   case T_HELLO_REQ:
     send_hello(seq);
@@ -461,10 +628,12 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
   }
 
   case T_PARAM_SAVE:
-    /* TODO(掉电保存): 需要占用最后一个 Flash 页做参数区。先明确回"未就绪"，
-       不假装写成功 —— 否则上位机以为存住了。 */
-    send_ack(seq, ST_NOT_READY);
-    host_link_send_text("[fw] param save to flash: not implemented yet\r\n");
+    /* v2：真的固化（payload v5 已含菜单全部设置 + 控制环标定量 + 舵机动作表）。
+     * nvram_touch() 只是"立刻排一次保存"；真正擦写仍要等车停稳、屏不忙、
+     * 1.5s 防抖到期（nvram_poll 决定），所以这里回 OK 并说明是"排队中"。 */
+    (void)HostExt_SaveParams();
+    send_ack(seq, ST_OK);
+    host_link_send_text("[fw] param save queued (writes when idle)\r\n");
     break;
 
   case T_CMD: {
@@ -475,27 +644,120 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
                     | ((uint32_t)p[3] << 16) | ((uint32_t)p[4] << 24));
     }
     switch (cmd) {
-    case CMD_STOP:        renwu_flag = 0u; send_ack(seq, ST_OK); break;
+    case CMD_STOP:        renwu_flag = 0u; HostExt_DriveStop(); send_ack(seq, ST_OK); break;
     case CMD_START_A:     renwu_flag = 1u; send_ack(seq, ST_OK); break;
     case CMD_START_B:     renwu_flag = 2u; send_ack(seq, ST_OK); break;
     case CMD_START_C:     renwu_flag = 3u; send_ack(seq, ST_OK); break;
-    case CMD_CLEAR_FAULT: send_ack(seq, ST_OK); break;
+    case CMD_CLEAR_FAULT: Motion_ClearFault(); send_ack(seq, ST_OK); break;
+    case CMD_SAVE_PARAMS: (void)HostExt_SaveParams(); send_ack(seq, ST_OK); break;
     case CMD_SET_TELEM_HZ:
       if (arg < 1) arg = 1;
       if (arg > 200) arg = 200;
       s_stats.telem_hz = (uint16_t)arg;
       send_ack(seq, ST_OK);
       break;
+    case CMD_SET_TELEM_MODE:
+      if (arg < 0) arg = 0;
+      if (arg > 2) arg = 2;
+      s_telem_mode = (uint8_t)arg;
+      send_ack(seq, ST_OK);
+      break;
     case CMD_RESET:       send_ack(seq, ST_OK); HAL_Delay(5); NVIC_SystemReset(); break;
     /* 下面几个还没实现，明确回"未就绪"，不假装成功 */
     case CMD_CALIB_GYRO:
-    case CMD_SAVE_PARAMS:
     case CMD_SET_LOGGING:
     default:
-      send_ack(seq, (cmd == CMD_CALIB_GYRO || cmd == CMD_SAVE_PARAMS
-                     || cmd == CMD_SET_LOGGING) ? ST_NOT_READY : ST_BAD_CMD);
+      send_ack(seq, (cmd == CMD_CALIB_GYRO || cmd == CMD_SET_LOGGING)
+                     ? ST_NOT_READY : ST_BAD_CMD);
       break;
     }
+    break;
+  }
+
+  case T_CAL_GET:
+    send_cal_report(seq);
+    break;
+
+  case T_ACTIONS_GET:
+    send_actions(T_ACTIONS, seq);
+    break;
+
+  case T_ACTION_SET: {
+    int n, a1, a2;
+    if (len < 3u) { send_ack(seq, ST_BAD_PARAM); break; }
+    n  = (int)p[0];
+    a1 = (int)p[1];
+    a2 = (int)p[2];
+    if (n < 1 || n > Servo_ActionCount()) { send_ack(seq, ST_OUT_OF_RANGE); break; }
+    if (a1 > 180 || a2 > 180) { send_ack(seq, ST_OUT_OF_RANGE); break; }
+    (void)HostExt_ActionSet(n, a1, a2);
+    /* 改完就掰到该动作的终点：用户在台架上要"眼看着角度变"（m13466 的场景） */
+    (void)HostExt_ActionPlay(n);
+    send_ack(seq, ST_OK);
+    send_actions(T_ACTIONS, seq);
+    break;
+  }
+
+  case T_ACTION_SAVE:
+    (void)HostExt_ActionSave();
+    send_ack(seq, ST_OK);
+    break;
+
+  case T_SERVO_SET: {
+    int ch, deg;
+    if (len < 3u) { send_ack(seq, ST_BAD_PARAM); break; }
+    ch  = (int)p[0];
+    deg = (int)(int16_t)((uint16_t)p[1] | ((uint16_t)p[2] << 8));
+    if (ch < 1 || ch > 2) { send_ack(seq, ST_BAD_PARAM); break; }
+    if (deg < 0 || deg > 180) { send_ack(seq, ST_OUT_OF_RANGE); break; }
+    (void)HostExt_ServoSet(ch, deg);
+    send_ack(seq, ST_OK);
+    break;
+  }
+
+  case T_SERVO_PLAY: {
+    int n = (len >= 1u) ? (int)p[0] : 0;
+    if (n == 0) { (void)HostExt_ServoCenter(); send_ack(seq, ST_OK); break; }
+    if (HostExt_ActionPlay(n) == 0) { send_ack(seq, ST_OUT_OF_RANGE); break; }
+    send_ack(seq, ST_OK);
+    break;
+  }
+
+  case T_DRIVE: {
+    uint8_t mode;
+    int a, b, rc;
+    if (len < 5u) { send_ack(seq, ST_BAD_PARAM); break; }
+    mode = p[0];
+    a = (int)(int16_t)((uint16_t)p[1] | ((uint16_t)p[2] << 8));
+    b = (int)(int16_t)((uint16_t)p[3] | ((uint16_t)p[4] << 8));
+    rc = HostExt_DriveSet(mode, a, b);
+    if (rc == -2) {
+      /* 任务流程在跑：抢电机会出事故，明确拒绝 */
+      send_ack(seq, ST_NOT_READY);
+      host_link_send_text("[fw] drive refused: task running\r\n");
+    } else if (rc < 0) {
+      send_ack(seq, ST_BAD_PARAM);
+    } else {
+      send_ack(seq, ST_OK);
+    }
+    send_drive_report(seq);
+    break;
+  }
+
+  case T_DRIVE_REPORT:
+    send_drive_report(seq);
+    break;
+
+  case T_SERVO_DEV: {
+    /* 舵机软件中位偏差：调装配误差用，范围 ±100µs（Servo_SetDeviation 自己也会夹） */
+    int ch, dev;
+    if (len < 3u) { send_ack(seq, ST_BAD_PARAM); break; }
+    ch  = (int)p[0];
+    dev = (int)(int16_t)((uint16_t)p[1] | ((uint16_t)p[2] << 8));
+    if (ch < 1 || ch > 2) { send_ack(seq, ST_BAD_PARAM); break; }
+    if (dev < -100 || dev > 100) { send_ack(seq, ST_OUT_OF_RANGE); break; }
+    (void)HostExt_ServoDeviation(ch, dev);
+    send_ack(seq, ST_OK);
     break;
   }
 
@@ -514,6 +776,8 @@ void host_link_init(void)
   for (i = 0; i < NSPEC; i++) s_param[i] = SPECS[i].def;
   memset(&s_stats, 0, sizeof(s_stats));
   s_stats.telem_hz = 50u;
+  s_telem_mode = 1u;          /* 默认发 64 字节 T_TELEM2（新上位机要扩展量） */
+  HostExt_Init();
 
   rx_reset();
   (void)board_dl_init();
@@ -529,9 +793,13 @@ void host_link_poll(uint32_t loop_us)
 
   while (board_dl_get_byte(&b)) rx_byte(b);
 
+  /* 驾驶看门狗：上位机/串口断了就把车停下（500ms 没有合法帧） */
+  HostExt_Task(now);
+
   if (s_stats.telem_hz && (int32_t)(now - next_tx) >= 0) {
     next_tx = now + (1000u / s_stats.telem_hz);
-    send_telemetry(loop_us);
+    if (s_telem_mode != 0u) send_telemetry2(loop_us);
+    if (s_telem_mode != 1u) send_telemetry(loop_us);
   }
 
   /* 全表参数 dump 的剩余部分：每拍发几帧，避免一次性阻塞主循环几十毫秒 */
@@ -559,3 +827,43 @@ void host_link_tick_1hz(void)
 }
 
 const host_link_stats_t *host_link_stats(void) { return &s_stats; }
+
+/* =====================================================================
+ *  v2：给上位机/固化用的参数表元数据与驾驶状态查询
+ *  （上位机自己也有一份"哪个 id 叫什么/单位/小数位"的表，两边靠 HELLO 里的
+ *   param_crc 对齐；tools/console/tests 会解析本文件的 SPECS[] 断言 id 不漂）
+ * ===================================================================== */
+uint16_t host_param_count(void)
+{
+  return (uint16_t)NSPEC;
+}
+
+uint16_t host_param_id_at(uint16_t idx)
+{
+  return (idx < NSPEC) ? SPECS[idx].id : 0u;
+}
+
+int host_param_bounds(uint16_t id, float *def, float *min, float *max)
+{
+  int i = spec_index(id);
+  if (i < 0) return 0;
+  if (def != 0) *def = SPECS[i].def;
+  if (min != 0) *min = SPECS[i].min;
+  if (max != 0) *max = SPECS[i].max;
+  return 1;
+}
+
+uint16_t host_param_table_crc(void)
+{
+  return (uint16_t)param_table_crc();
+}
+
+uint8_t host_drive_mode(void)
+{
+  return HostExt_DriveMode();
+}
+
+uint8_t host_drive_is_enabled(void)
+{
+  return HostExt_DriveEnabled();
+}

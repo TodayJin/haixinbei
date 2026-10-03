@@ -25,6 +25,9 @@ uint8_t GyroControl_IsEnabled(void);
 void  GyroControl_SetTargetAngle(float deg);
 float GyroControl_GetTargetAngle(void);
 float GyroControl_HeadingError(void);            /* 目标 - 实际，已折算到 ±180 */
+/* 遥测只读快照（上位机 angle 组）：本拍内部用的期望角速度 / 最终修正量 */
+float GyroControl_DebugRateRef(void);
+float GyroControl_DebugCorr(void);
 void  GyroControl_AimRelative(float delta_deg);  /* 在当前目标上叠加 */
 
 /* 转到某个航向：可查是否到位（用 HP_TURN_TOLERANCE / HP_TURN_TIMEOUT 判定） */

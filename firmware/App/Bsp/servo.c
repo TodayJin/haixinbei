@@ -152,6 +152,9 @@ void Servo_Init(void)
      * 所以原先这里那两句 `HAL_TIM_PWM_Start(&htim1, ...)` 是多余的，一起去掉。 */
     bsp_servo_init();
 
+    /* 动作表先装出厂值（随后 nvram 载入时可能被 Flash 里的值覆盖） */
+    Servo_ResetActionPoses();
+
     /* 上电摆到 0°（旧板行为：收回姿态），同时把 s_cur[] 记成 0 保持一致 */
     Servo_Control(1, 0);
     Servo_Control(2, 0);
@@ -165,8 +168,11 @@ void Servo_Init(void)
  * （界面实时预览用，只下发终点）都从这里取，**只有一个真值来源**。
  * 每一行是 { 舵机1角度, 舵机2角度 }，行号 = `Servo_Move(n)` 的 n - 1。
  * 5 号与 9 号是复合动作，这里记的是它们**最后**写下去的那一对角度。
+ *
+ * 这张表是**出厂默认值**（const，不改）。上位机可改的那一份是下面的
+ * `s_action_pose[]`（RAM），可保存进 Flash（nvram v5 的 `action_pose` 字段）。
  */
-static const uint8_t k_action_pose[SERVO_ACTION_N][2] = {
+static const uint8_t k_action_default[SERVO_ACTION_N][2] = {
     /*  1 收回            */ {  0,   0 },
     /*  2 打下准备        */ { 60, 120 },
     /*  3 打下1           */ {105, 120 },
@@ -188,8 +194,51 @@ int Servo_ActionCount(void)
     return SERVO_ACTION_N;
 }
 
+/* ---- RAM 动作表（上位机可改、可固化）-------------------------------------
+ * 用户 m13466 的要求：上位机上把某个动作的角度改了 → 能存到小车 Flash，
+ * 下次上电还是这个角度。所以动作表不能是 const，运行期这份放 RAM。
+ * `s_action_ready == 0` 表示还没从出厂表拷贝过（防止 Servo_Init 之前被调用）。
+ */
+static uint8_t s_action_pose[SERVO_ACTION_N][2];
+static uint8_t s_action_ready;
+
+static void action_pose_ensure(void)
+{
+    if (s_action_ready == 0U) {
+        for (int i = 0; i < SERVO_ACTION_N; i++) {
+            s_action_pose[i][0] = k_action_default[i][0];
+            s_action_pose[i][1] = k_action_default[i][1];
+        }
+        s_action_ready = 1U;
+    }
+}
+
+/** @brief 把 RAM 动作表恢复成出厂表（上位机「恢复默认」用；不动舵机姿态） */
+void Servo_ResetActionPoses(void)
+{
+    s_action_ready = 0U;
+    action_pose_ensure();
+}
+
 /**
- * @brief 动作名（给舵机测试页的「动作预设」第二行显示；与 k_action_pose 同序）
+ * @brief 改某个动作的终点角度（RAM，只有调 nvram 保存才会进 Flash）
+ * @return 1 = 成功，0 = 动作号非法（不改动任何东西）
+ */
+int Servo_SetActionPose(int x, int a1, int a2)
+{
+    if (x < 1 || x > SERVO_ACTION_N) return 0;
+    if (a1 < 0) a1 = 0;
+    if (a1 > (int)SERVO_ANGLE_MAX) a1 = (int)SERVO_ANGLE_MAX;
+    if (a2 < 0) a2 = 0;
+    if (a2 > (int)SERVO_ANGLE_MAX) a2 = (int)SERVO_ANGLE_MAX;
+    action_pose_ensure();
+    s_action_pose[x - 1][0] = (uint8_t)a1;
+    s_action_pose[x - 1][1] = (uint8_t)a2;
+    return 1;
+}
+
+/**
+ * @brief 动作名（给舵机测试页的「动作预设」第二行显示；与动作表同序）
  *        用户 m13356 要求这一项占两行：上行是"动作预设 n/14"，下行是动作名。
  *        字模里缺的字用 `node tools/font/gen_font.mjs ... "…"` 补（已补过 作/预）。
  */
@@ -212,8 +261,9 @@ void Servo_ActionPose(int x, int *a1, int *a2)
         if (a2 != 0) *a2 = 0;
         return;
     }
-    if (a1 != 0) *a1 = (int)k_action_pose[x - 1][0];
-    if (a2 != 0) *a2 = (int)k_action_pose[x - 1][1];
+    action_pose_ensure();
+    if (a1 != 0) *a1 = (int)s_action_pose[x - 1][0];
+    if (a2 != 0) *a2 = (int)s_action_pose[x - 1][1];
 }
 
 /**
@@ -239,7 +289,7 @@ float Servo_GetAngle(int x)
 
 /**
  * @brief 比赛动作表（沿用旧板标定的角度，只把驱动换成新板）
- *        1..14 号的动作终点都在 k_action_pose 里；只有 5/9 号需要中间的
+ *        1..14 号的动作终点都在 s_action_pose[]（RAM 表，出厂值 k_action_default[]）里；只有 5/9 号需要中间的
  *        过渡步骤，仍按旧代码原样写在这里（中间延时会阻塞调用者，比赛流程
  *        本来就是顺序执行的，保持原行为不动）。
  */
@@ -247,27 +297,32 @@ void Servo_Move(int x)
 {
     if (x < 1 || x > SERVO_ACTION_N) return;
 
-    /* 5 号：2 级台阶 2 收回 —— 135/170 停 400ms，再 90，停 100ms，再 80 */
+    /* 5 号：2 级台阶 2 收回 —— 135/170 停 400ms，再 90，停 100ms，再走表里的终点 */
     if (x == 5) {
+        int a1, a2;
         Servo_Control(1, 135);
         Servo_Control(2, 170);
         HAL_Delay(400);
         Servo_Control(1, 90);
         HAL_Delay(100);
-        Servo_Control(1, 80);
+        Servo_ActionPose(x, &a1, &a2);
+        Servo_Control(1, (uint8_t)a1);
+        Servo_Control(2, (uint8_t)a2);
         return;
     }
 
-    /* 9 号：3 级 3 打 —— 70/10 停 200ms，再 100/50，停 100ms，再 100/80 */
+    /* 9 号：3 级 3 打 —— 70/10 停 200ms，再 100/50，停 100ms，再走表里的终点 */
     if (x == 9) {
+        int a1, a2;
         Servo_Control(1, 70);
         Servo_Control(2, 10);
         HAL_Delay(200);
         Servo_Control(1, 100);
         Servo_Control(2, 50);
         HAL_Delay(100);
-        Servo_Control(1, 100);
-        Servo_Control(2, 80);
+        Servo_ActionPose(x, &a1, &a2);
+        Servo_Control(1, (uint8_t)a1);
+        Servo_Control(2, (uint8_t)a2);
         return;
     }
 

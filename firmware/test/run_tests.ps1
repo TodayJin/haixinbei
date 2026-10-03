@@ -35,7 +35,10 @@ $deps = @{
   't_jy61p'    = @('App/Svc/jy61p.c')
   't_pid'      = @('App/Svc/pid.c')
   't_tracing'  = @('App/Svc/tracing.c')
-  't_hostlink' = @('App/Svc/host_link.c', 'App/Svc/jy61p.c')
+  # host_link.c 只调 HostExt_*（真业务在 host_ext.c），所以协议层测试用 host_extstub.c 顶替
+  't_hostlink' = @('App/Svc/host_link.c', 'App/Svc/jy61p.c', 'test/stub/host_extstub.c')
+  # 反过来，host_ext.c 的控制模块依赖用 host_appstub.c 顶替
+  't_hostext'  = @('App/Svc/host_ext.c', 'test/stub/host_appstub.c')
   't_tracecal' = @('App/Svc/trace_cal.c', 'App/Svc/tracing.c')
 't_speedctrl' = @('App/Svc/speed_control.c')
 't_gyrotest'  = @('App/Svc/gyro_control.c')

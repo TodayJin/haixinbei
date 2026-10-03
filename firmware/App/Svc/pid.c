@@ -73,9 +73,11 @@ float PID_Compute(float setpoint, float current_value)
     // 注意：这套值是从旧代码抄来的、单位与硬件都变了，用户已明确说"不能再当基准"，
     // 前进循迹的增益要等能直行时重新标；原地 pivot 用下面那组实测值。
     if (s_pivot) {
-        Kp = PID_PIVOT_KP;
-        Ki = PID_PIVOT_KI;
-        Kd = PID_PIVOT_KD;
+        /* pivot 增益也进了参数表（上位机「调参 → 循迹环」下能改、能固化），
+         * 表里的值坏掉时回落到上面实测出来的兜底值。 */
+        Kp = host_param_get(HP_PIVOT_KP, PID_PIVOT_KP);
+        Ki = host_param_get(HP_PIVOT_KI, PID_PIVOT_KI);
+        Kd = host_param_get(HP_PIVOT_KD, PID_PIVOT_KD);
     } else {
         Kp = host_param_get(HP_LINE_KP, 2700.0f); // 比例系数（旧 375.0 ×7.2）
         Ki = host_param_get(HP_LINE_KI,   10.8f); // 积分系数（旧   1.5 ×7.2）

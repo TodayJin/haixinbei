@@ -54,6 +54,10 @@ void nvram_poll(void);
 
 uint8_t nvram_state(void);
 
+/* "现在就存"：跳过 1.5s 防抖，立刻请求一次保存（上位机的一键固化用）。
+ * 真正写不写由 nvram_poll() 比对决定（已一致就不写）、车在动仍然不写。 */
+void nvram_touch(void);
+
 /* 主循环每轮调，且要放在 app_ui_tick() **之后**：界面先把"正在保存"画
  * 上屏（并吃掉按键），这里才真去擦写 Flash —— 擦写会把 CPU 停住约 30ms，
  * 不能抢在提示上屏之前（用户 m03944）。 */

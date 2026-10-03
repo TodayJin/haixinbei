@@ -162,6 +162,10 @@ static float s_v_prev      = 0.0f;
 static float s_a_f         = 0.0f;
 /* s_law=3：误差连续待在停车带里的拍数（到位锁存判据） */
 static uint16_t s_settle_cnt   = 0;
+/* 遥测用只读快照（给上位机的 angle.rate_ref / angle.corr）：一拍更新一次，
+ * 不参与任何控制判断，只是把本拍内部量暴露出去。 */
+static float s_dbg_rate_ref = 0.0f;
+static float s_dbg_corr     = 0.0f;
 
 /**
  * @brief 陀螺读数消毒：NaN / ±Inf / 离谱值一律当 0
@@ -352,6 +356,22 @@ float GyroControl_HeadingError(void)
 }
 
 /**
+ * @brief 遥测专用只读快照（给上位机的 angle 组）
+ *
+ * 都不是分析控制必需的量，只是把**本拍**内部用到的期望角速度与最终修正量
+ * 暴露出来，让上位机能看见"环里现在在算什么"，调参时不用猜。
+ */
+float GyroControl_DebugRateRef(void)
+{
+    return s_dbg_rate_ref;
+}
+
+float GyroControl_DebugCorr(void)
+{
+    return s_dbg_corr;
+}
+
+/**
  * @brief 在当前目标上叠加一个角度（正 = 向左）
  */
 void GyroControl_AimRelative(float delta_deg)
@@ -434,6 +454,21 @@ void GyroControl_Task(void)
     gyro_pid.kp = host_param_get(HP_GYRO_KP, GYRO_KP_FALLBACK);
     gyro_pid.ki = host_param_get(HP_GYRO_KI, GYRO_KI_FALLBACK);
     gyro_pid.kd = host_param_get(HP_GYRO_KD, GYRO_KD_FALLBACK);
+
+    /* 角度环自己的标定量也进参数表（上位机「调参 → 角度环」要能显示/改/固化）。
+     * 这里把 volatile 变量同步成"参数表的镜像"：兜底值就是变量当前值，所以
+     * 参数表里没有这些 id 时行为不变。台架要在线改这几个量，改参数表的槽位
+     * （s_param[]），直接写这些变量会在下一拍被覆盖。 */
+    s_ang_kp     = host_param_get(HP_GYRO_ANG_KP,     s_ang_kp);
+    s_rate_kp    = host_param_get(HP_GYRO_RATE_KP,    s_rate_kp);
+    s_rate_kd    = host_param_get(HP_GYRO_RATE_KD,    s_rate_kd);
+    s_rate_max   = host_param_get(HP_GYRO_RATE_MAX,   s_rate_max);
+    s_corr_limit = host_param_get(HP_GYRO_CORR_LIMIT, s_corr_limit);
+    s_corr_slew  = host_param_get(HP_GYRO_CORR_SLEW,  s_corr_slew);
+    s_settle_deg = host_param_get(HP_GYRO_SETTLE_DEG, s_settle_deg);
+    s_settle_ms  = host_param_get(HP_GYRO_SETTLE_MS,  s_settle_ms);
+
+    s_dbg_rate_ref = 0.0f;
 
     actual_angle = NormalizeAngle(Yaw);
 
@@ -625,6 +660,7 @@ void GyroControl_Task(void)
                     rate_ref = (rate_ref >= 0.0f) ? s_v_floor : -s_v_floor;  /* 可选下限，默认关 */
                 }
             }
+            s_dbg_rate_ref = rate_ref;      /* 只给遥测看 */
             correction = s_rate_kp * (rate_ref - v);
             /* 速率微分阻尼（PD）：对"角速度正在变化"这件事加阻尼。
              * 用它是因为这台车的执行器是继电器性质的（低于起转阈值完全不动，
@@ -725,6 +761,7 @@ void GyroControl_Task(void)
     /* 最后一道安全网：把修正量夹到一个有限范围再转 int。
      * 任何一个参数被写坏成 NaN/Inf 都不会跑到 (int) 强转那里去。 */
     if (!(correction >= -1.0e6f && correction <= 1.0e6f)) correction = 0.0f;
+    s_dbg_corr = correction;                  /* 只给遥测看 */
 
     // 根据PID输出调整左右轮速度
     left_speed  = base_speed_left  - (int)correction;

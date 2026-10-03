@@ -32,13 +32,14 @@
 #define TRACE_ANGLE_MAX_LIMIT_MIN     1.0f
 #define TRACE_ANGLE_MAX_LIMIT_MAX    90.0f
 
-/* 串级外环（重心 -> 目标航向）的两个标定量。做成**可改的变量**而不是宏，是为了能
- * 在线标定：三级串级是"灰度 → 目标航向 → 角度环 → 速度环"，这两个数决定"重心偏
- * 1 格要求车头转多少度"。台架实测几何（重心 1 单位 ≈ 5~7° 车身角，细区，见
- * docs/自主优化记录.md 第 12/15 节）说明 10°/格 大约过量 1.5~2 倍，需要重标；
- * 标定时用 SWD 直接写这两个变量，不用反复重编烧录。 */
-static float s_angle_per_unit = TRACE_ANGLE_PER_UNIT_DEFAULT;
-static float s_angle_max      = TRACE_ANGLE_MAX_DEFAULT;
+/* 串级外环（重心 -> 目标航向）的两个标定量：**真值在 host_link 的参数表里**
+ * （HP_TRACE_ANGLE_PER_UNIT / HP_TRACE_ANGLE_MAX），上位机「调参 → 串级」页能改、
+ * 能固化进 Flash；下面的 DEFAULT 只是出厂值/坏值兜底。
+ *
+ * 这两个数决定"重心偏 1 格要求车头转多少度"。台架实测几何（重心 1 单位 ≈ 5~7° 车身角，
+ * 细区，见 docs/自主优化记录.md 第 12/15 节）曾让人推测 10°/格 过量 1.5~2 倍，但第十轮
+ * 受控阶梯实测（4/6/8/10/12/15/20，见第 16 节）结论是 **10.0f 最好**：外环还要对抗内环
+ * 滞后与静摩擦死区，增益大反而有利。所以出厂默认保持 10.0f。 */
 #define TRACE_CROSS_MIN      4       /* ≥4 路同时压线 = 路口（说明书第七章，按线宽可改） */
 #define TRACE_LOST_MS        300U    /* 丢线超过这么久就减速找线 */
 #define TRACE_LOST_DECAY_MS  500U    /* 丢线超时后，再把"保持的满舵"线性收到 0 的时间 */
@@ -335,31 +336,25 @@ void motor_tracing_pid_speed(int base_speed)
 /**
  * @brief 设置三级串级的外环标定量（重心偏 1 格 -> 目标航向偏多少度）
  *
- * 默认 10°/格 是从旧板代码抄下来的，而台架实测几何是"重心 1 单位 ≈ 5~7° 车身角"
- * （细区，见 docs/自主优化记录.md 第 12/15 节）⇒ 10 大约过量 1.5~2 倍，需要重标。
- * 做成"可写变量 + 这个 setter"是为了能在线标定：用 SWD 直接写 s_angle_per_unit /
- * s_angle_max 扫参，不用每改一个数就重编烧录。写进来的值一律夹到安全范围。
+ * 这两个量的真值现在放在 host_link 的参数表里（HP_TRACE_ANGLE_PER_UNIT / _MAX），
+ * 所以这个 setter 就是"写参数表"；超范围的写不进（参数表自己带上下限）。
+ * 参数表的兜底出厂值是 10°/格、±35°，来自第十轮受控阶梯实测（第 16 节）：
+ * 4/6 收不干净，10/12/15/20 等价，10 最优。
  */
 void PID_Tracing_SetCascadeGains(float deg_per_unit, float aim_max_deg)
 {
     if (deg_per_unit >= TRACE_ANGLE_PER_UNIT_MIN && deg_per_unit <= TRACE_ANGLE_PER_UNIT_MAX) {
-        s_angle_per_unit = deg_per_unit;
+        host_param_set_local(HP_TRACE_ANGLE_PER_UNIT, deg_per_unit);
     }
     if (aim_max_deg >= TRACE_ANGLE_MAX_LIMIT_MIN && aim_max_deg <= TRACE_ANGLE_MAX_LIMIT_MAX) {
-        s_angle_max = aim_max_deg;
+        host_param_set_local(HP_TRACE_ANGLE_MAX, aim_max_deg);
     }
 }
 
-void PID_Tracing_GetCascadeGains(float *deg_per_unit, float *aim_max_deg)
-{
-    if (deg_per_unit != 0) { *deg_per_unit = s_angle_per_unit; }
-    if (aim_max_deg  != 0) { *aim_max_deg  = s_angle_max; }
-}
-
-/* 读值时兜一层：万一有人用 SWD 直接把变量写成 0/NaN/巨大值，也不会把车带飞 */
+/* 读值时兜一层：参数表里是 0/NaN/巨大值时用出厂值，绝不把车带飞 */
 static float cascade_per_unit(void)
 {
-    float v = s_angle_per_unit;
+    float v = host_param_get(HP_TRACE_ANGLE_PER_UNIT, TRACE_ANGLE_PER_UNIT_DEFAULT);
     if (!(v >= TRACE_ANGLE_PER_UNIT_MIN && v <= TRACE_ANGLE_PER_UNIT_MAX)) {
         v = TRACE_ANGLE_PER_UNIT_DEFAULT;
     }
@@ -368,11 +363,17 @@ static float cascade_per_unit(void)
 
 static float cascade_aim_max(void)
 {
-    float v = s_angle_max;
+    float v = host_param_get(HP_TRACE_ANGLE_MAX, TRACE_ANGLE_MAX_DEFAULT);
     if (!(v >= TRACE_ANGLE_MAX_LIMIT_MIN && v <= TRACE_ANGLE_MAX_LIMIT_MAX)) {
         v = TRACE_ANGLE_MAX_DEFAULT;
     }
     return v;
+}
+
+void PID_Tracing_GetCascadeGains(float *deg_per_unit, float *aim_max_deg)
+{
+    if (deg_per_unit != 0) { *deg_per_unit = cascade_per_unit(); }
+    if (aim_max_deg  != 0) { *aim_max_deg  = cascade_aim_max(); }
 }
 
 /**
@@ -454,6 +455,21 @@ void motor_tracing_pid(float target)
 {
     s_setpoint = target;
     motor_tracing_pid_speed(trace_base_pwm());
+}
+
+/**
+ * @brief 遥测只读快照（给上位机的 trace 组）
+ *        `data` = 本拍重心（1..8，车在正中 4.5），`last_pid_output` = 循迹环本拍
+ *        给左右轮的转向偏置。都不参与控制，只是让上位机看见环里在算什么。
+ */
+float PID_Tracing_TracePos(void)
+{
+    return data;
+}
+
+float PID_Tracing_PidOutput(void)
+{
+    return last_pid_output;
 }
 
 void motor_tracing_pid_0(float target)

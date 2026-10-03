@@ -10,9 +10,10 @@
 #include "app_ui.h"
 #include "board.h"
 #include "gyro_control.h"   /* GyroControl_IsEnabled：运动中就别动 Flash */
-#include "host_link.h"      /* host_param_get + SPEED_FF_* 默认值（v1 记录升级时用） */
+#include "host_link.h"      /* host_param_* + HP_* 参数 id（v5：控制环标定量进参数表） */
 #include "kk_oled.h"
 #include "motion.h"         /* Motion_GetMode / MOTION_IDLE */
+#include "servo.h"          /* v5：舵机动作表（14 个动作的终点角度） */
 #include "speed_control.h"  /* SpeedControl_IsEnabled */
 #include "trace_cal.h"
 
@@ -20,7 +21,7 @@
 #include <stddef.h>
 
 #define NVRAM_MAGIC      0x31425848UL   /* "HXB1"（小端存下来是 48 58 42 31） */
-#define NVRAM_VERSION    4U             /* v4：payload 末尾追加了第二套标定 + 当前套号 */
+#define NVRAM_VERSION    5U             /* v5：payload 末尾追加控制环标定量 + 舵机动作表 */
 #define NVRAM_VERSION_MIN 1U            /* 能读的最老版本（靠"字段只往末尾追加"兼容升级：
                                          * 比当前版本短的记录，缺的那些字段取当前默认值）*/
 
@@ -61,6 +62,26 @@ typedef struct {
     trace_cal_data_t cal_b;          /* 第 1 套（亚克力路段） */
     uint8_t  cal_set;                /* 当前用第几套 0/1 */
     uint8_t  pad4[3];
+    /* ---- v5 新增：控制环标定量 + 舵机动作表（用户 m13466 要求上位机改完能固化）----
+     * 控制环那 13 个量**同时活在参数表 s_param[] 里**（控制环每拍从参数表读），
+     * Flash 里这份只是参数表的镜像 ⇒ snapshot/apply 全部走 host_param_*，
+     * 不另开一套真值来源（否则两边会漂）。缩放与已有 *_x100 一致：
+     * 增益 ×100，速度/角度 ×10，限幅/斜率/毫秒 ×1。 */
+    int32_t  gyro_ang_kp_x100;
+    int32_t  gyro_rate_kp_x100;
+    int32_t  gyro_rate_kd_x100;
+    int32_t  gyro_rate_max_x10;
+    int32_t  gyro_corr_limit;
+    int32_t  gyro_corr_slew;
+    int32_t  gyro_settle_deg_x10;
+    int32_t  gyro_settle_ms;
+    int32_t  trace_per_unit_x100;
+    int32_t  trace_aim_max_x10;
+    int32_t  pivot_kp;
+    int32_t  pivot_ki_x100;
+    int32_t  pivot_kd;
+    uint8_t  action_pose[SERVO_ACTION_N][2];   /* 14 个动作的终点角度 {舵1,舵2} */
+    uint8_t  pad5[10];                         /* 补到 8 的整数倍（见下面的编译期断言） */
 } nvram_payload_t;
 
 typedef struct {
@@ -71,6 +92,11 @@ typedef struct {
     nvram_payload_t data;
     uint8_t         pad[4];      /* 补齐成 8 的整数倍，好按双字写 */
 } nvram_record_t;
+
+/* 编译期断言：整个记录必须是 8 字节的整数倍。s_stage 按 64 位（双字）写 Flash，
+ * `words[sizeof(...) / 8U]` 一旦除不尽，尾部那几个字节就永远写不进去 ——
+ * 加字段（尤其奇数长度的 uint8_t 数组）时必须同步调 pad，这里替我们挡住。 */
+typedef char nvram_record_size_must_be_8x[(sizeof(nvram_record_t) % 8U == 0U) ? 1 : -1];
 
 /* 按 64 位写 Flash，所以暂存要 8 字节对齐 */
 static union {
@@ -106,8 +132,32 @@ static uint32_t crc32(const uint8_t *p, uint32_t n)
 
 /* -------------------------------------------------------------- 现场快照 */
 
+/**
+ * @brief 参数表的值 ×scale 存成整数 / 反变换
+ *
+ * 兜底值取**参数表自己的出厂默认**（host_param_bounds），这样 Flash 里那份和
+ * 参数表不会出现两套默认值；缩放约定与已有字段一致：增益 ×100、速度/角度 ×10、
+ * 限幅/斜率/毫秒 ×1。正数加 0.5 取整（这些量实际都是非负的）。
+ */
+static int32_t snap_param_scaled(uint16_t id, float scale)
+{
+    float def = 0.0f;
+    float v;
+
+    (void)host_param_bounds(id, &def, NULL, NULL);
+    v = host_param_get(id, def) * scale;
+    return (int32_t)((v >= 0.0f) ? (v + 0.5f) : (v - 0.5f));
+}
+
+static void apply_param_scaled(uint16_t id, int32_t raw, float scale)
+{
+    host_param_set_local(id, (float)raw / scale);
+}
+
 static void snapshot(nvram_payload_t *p)
 {
+    int i;
+
     memset(p, 0, sizeof(*p));
 
     p->trace_speed   = g_cfg.trace_speed;
@@ -149,10 +199,34 @@ static void snapshot(nvram_payload_t *p)
 
     /* v3：「自动判线」（单帧自适应）。存的是 g_cfg 里那一项（菜单直接改它） */
     p->trace_adapt = (uint8_t)(g_cfg.trace_adapt ? 1U : 0U);
+
+    /* v5：控制环标定量（参数表镜像）+ 舵机动作表 */
+    p->gyro_ang_kp_x100    = snap_param_scaled(HP_GYRO_ANG_KP,        100.0f);
+    p->gyro_rate_kp_x100   = snap_param_scaled(HP_GYRO_RATE_KP,       100.0f);
+    p->gyro_rate_kd_x100   = snap_param_scaled(HP_GYRO_RATE_KD,       100.0f);
+    p->gyro_rate_max_x10   = snap_param_scaled(HP_GYRO_RATE_MAX,       10.0f);
+    p->gyro_corr_limit     = snap_param_scaled(HP_GYRO_CORR_LIMIT,      1.0f);
+    p->gyro_corr_slew      = snap_param_scaled(HP_GYRO_CORR_SLEW,       1.0f);
+    p->gyro_settle_deg_x10 = snap_param_scaled(HP_GYRO_SETTLE_DEG,     10.0f);
+    p->gyro_settle_ms      = snap_param_scaled(HP_GYRO_SETTLE_MS,       1.0f);
+    p->trace_per_unit_x100 = snap_param_scaled(HP_TRACE_ANGLE_PER_UNIT, 100.0f);
+    p->trace_aim_max_x10   = snap_param_scaled(HP_TRACE_ANGLE_MAX,      10.0f);
+    p->pivot_kp            = snap_param_scaled(HP_PIVOT_KP,              1.0f);
+    p->pivot_ki_x100       = snap_param_scaled(HP_PIVOT_KI,            100.0f);
+    p->pivot_kd            = snap_param_scaled(HP_PIVOT_KD,              1.0f);
+
+    for (i = 0; i < SERVO_ACTION_N; i++) {
+        int a1 = 0;
+        int a2 = 0;
+        Servo_ActionPose(i + 1, &a1, &a2);
+        p->action_pose[i][0] = (uint8_t)a1;
+        p->action_pose[i][1] = (uint8_t)a2;
+    }
 }
 
 static void apply(const nvram_payload_t *p)
 {
+    int i;
     g_cfg.trace_speed   = p->trace_speed;
     g_cfg.speed_kp_x100 = p->speed_kp_x100;
     g_cfg.speed_ki_x100 = p->speed_ki_x100;
@@ -185,6 +259,27 @@ static void apply(const nvram_payload_t *p)
     /* v4：两套标定一起恢复（cal=第0套 / cal_b=第1套），并把 active 那套设为当前 */
     g_cfg.trace_cal_set = (int32_t)(p->cal_set & 1U);
     trace_cal_import(&p->cal, &p->cal_b, (uint8_t)(p->cal_set & 1U));
+
+    /* v5：控制环标定量（写回参数表 —— 控制环每拍从参数表读，所以这里写完就生效）
+     * + 舵机动作表（写进 servo.c 的 RAM 表；只改表、不掰舵机，避免载入时甩一下） */
+    apply_param_scaled(HP_GYRO_ANG_KP,         p->gyro_ang_kp_x100,    100.0f);
+    apply_param_scaled(HP_GYRO_RATE_KP,        p->gyro_rate_kp_x100,   100.0f);
+    apply_param_scaled(HP_GYRO_RATE_KD,        p->gyro_rate_kd_x100,   100.0f);
+    apply_param_scaled(HP_GYRO_RATE_MAX,       p->gyro_rate_max_x10,    10.0f);
+    apply_param_scaled(HP_GYRO_CORR_LIMIT,     p->gyro_corr_limit,       1.0f);
+    apply_param_scaled(HP_GYRO_CORR_SLEW,      p->gyro_corr_slew,        1.0f);
+    apply_param_scaled(HP_GYRO_SETTLE_DEG,     p->gyro_settle_deg_x10,  10.0f);
+    apply_param_scaled(HP_GYRO_SETTLE_MS,      p->gyro_settle_ms,        1.0f);
+    apply_param_scaled(HP_TRACE_ANGLE_PER_UNIT, p->trace_per_unit_x100, 100.0f);
+    apply_param_scaled(HP_TRACE_ANGLE_MAX,     p->trace_aim_max_x10,    10.0f);
+    apply_param_scaled(HP_PIVOT_KP,            p->pivot_kp,              1.0f);
+    apply_param_scaled(HP_PIVOT_KI,            p->pivot_ki_x100,       100.0f);
+    apply_param_scaled(HP_PIVOT_KD,            p->pivot_kd,              1.0f);
+
+    for (i = 0; i < SERVO_ACTION_N; i++) {
+        (void)Servo_SetActionPose(i + 1, (int)p->action_pose[i][0], (int)p->action_pose[i][1]);
+    }
+
     /* 让应用把刚恢复的东西推给控制环/循迹层（PID 参数表、灰度通讯方式） */
     app_ui_settings_loaded();
 }
@@ -311,29 +406,15 @@ void nvram_init(void)
           rec->length <= (uint16_t)sizeof(nvram_payload_t))) &&
         rec->crc == crc32((const uint8_t *)&rec->data,
                           (uint32_t)rec->length)) {
-        /* 老记录（v1/v2）：字段全在当前结构的前缀里，末尾只多加了字段。
-         * 前缀原样搬过来（**保住用户标定好的 8 路黑白阈值**），没写进来的字段
-         * 取当前默认值 —— 判据是"字段末尾是否落在记录长度里"，用 offsetof 表达，
-         * 以后再加字段只用在上面加一段、这里不用动。**不能无条件覆盖已有的字段**
-         * （v2 记录里已经有前馈两项，无条件覆盖会把用户调好的前馈吃掉）。
+        /* 老记录（v1..v4）：字段全在当前结构的前缀里，末尾只多加了字段。
+         * 做法：先按**当前默认值**铺一份 `up`，再把记录里那 `length` 个字节盖上去 ——
+         * 记录里有的字段（含用户标定好的 8 路黑白阈值、调好的前馈）原样保留，
+         * 记录里没有的字段就保持当前默认值。以后再加字段这里一行都不用动。
          * 不升 version 就地读，是为了不因为加了参数就让用户重标一次。 */
         nvram_payload_t up;
-        memset(&up, 0, sizeof(up));
+        snapshot(&up);
         (void)memcpy(&up, &rec->data, (size_t)rec->length);
 
-        if ((uint32_t)rec->length < (uint32_t)offsetof(nvram_payload_t, speed_ff_slope_x1000) +
-                                    (uint32_t)sizeof(up.speed_ff_slope_x1000)) {
-            up.speed_ff_slope_x1000 =
-                (int32_t)(host_param_get(HP_SPEED_FF_SLOPE, SPEED_FF_SLOPE) * 1000.0f + 0.5f);
-        }
-        if ((uint32_t)rec->length < (uint32_t)offsetof(nvram_payload_t, speed_ff_fric) +
-                                    (uint32_t)sizeof(up.speed_ff_fric)) {
-            up.speed_ff_fric =
-                (int32_t)host_param_get(HP_SPEED_FF_FRIC, SPEED_FF_FRIC);
-        }
-        if ((uint32_t)rec->length < (uint32_t)offsetof(nvram_payload_t, trace_adapt) + 1U) {
-            up.trace_adapt = 1U;     /* 「自动判线」默认开，与 g_cfg 初值一致 */
-        }
         /* v4：老记录只有一套标定 —— 把它同时当成第 0/第 1 套（用户切到"亚克力"
          * 也不会切到一份空标定而让 span=0），当前套默认 0（普通）。 */
         if ((uint32_t)rec->length <
@@ -432,6 +513,24 @@ void nvram_poll(void)
 uint8_t nvram_state(void)
 {
     return s_state;
+}
+
+/**
+ * @brief "现在就存"（不走 1.5s 防抖）
+ *
+ * 给上位机的 /api/params/save 与 CMD_SAVE_PARAMS 用（用户 m13466：改完动作
+ * 角度/PID 要能一键固化到小车 Flash）。做法只是把"最后改动时刻"往前推、
+ * 刷新一次现场快照 —— **真正写不写仍由 nvram_poll() 用 snapshot() 比对决定**：
+ * 和 Flash 里那份已经一样就什么都不做（调用方照样收到 OK），
+ * 而且"车在动绝不擦写"这条铁律仍然由 nvram_poll() 把关（返回 OK ≠ 已写完）。
+ */
+void nvram_touch(void)
+{
+    uint32_t now = HAL_GetTick();
+
+    snapshot(&s_live);
+    s_change_ms = now - NVRAM_SAVE_DELAY_MS;
+    s_check_ms  = now - NVRAM_CHECK_PERIOD_MS;
 }
 
 void nvram_service(void)

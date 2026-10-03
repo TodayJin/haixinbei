@@ -26,13 +26,18 @@ void Servo_Move(int x);                              /* 旧接口：按动作编
 
 /* 动作表接口（用户 m13303：舵机测试页要能按号选动作）
  * 动作编号 1..SERVO_ACTION_N，与旧代码 Servo_Move() 的 case 一一对应；
- * 终点姿态只有一处真值来源（servo.c 的 k_action_pose[]）。 */
+ * 终点姿态的**出厂默认值**在 servo.c 的 k_action_default[]，运行期真值在
+ * RAM 表 s_action_pose[]（上位机可改，用户 m13466 要求能固化进 Flash）。 */
 #define SERVO_ACTION_N 14
 int   Servo_ActionCount(void);                       /* = SERVO_ACTION_N */
 void  Servo_ActionPose(int x, int *a1, int *a2);      /* 取第 x 个动作的终点姿态（不动舵机） */
 void  Servo_ApplyAction(int x);                      /* 只下发终点姿态（不含 5/9 号的中间延时） */
 const char *Servo_ActionName(int x);                 /* 动作名（给界面显示） */
 float Servo_GetAngle(int x);                         /* 当前角度档（1/2 号），用于界面回读同步 */
+
+/* 运行期动作表（上位机用）：改 RAM；要进 Flash 得再走 nvram 保存 */
+int   Servo_SetActionPose(int x, int a1, int a2);    /* 1 = 成功，0 = 动作号非法（角度夹 0..180） */
+void  Servo_ResetActionPoses(void);                  /* 恢复出厂动作表（不动舵机姿态） */
 
 void Servo_SetPulse(int x, int pulse_us, int dev_us);/* 直接给脉宽（内部会限幅到 500..2500） */
 void Servo_SetAngleDev(int x, float angle, int dev_us);

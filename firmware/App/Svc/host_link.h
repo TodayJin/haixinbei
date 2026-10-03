@@ -58,6 +58,38 @@
 #define HP_STALL_CURRENT     0x0502u
 #define HP_VBAT_LOW          0x0503u
 
+/* ---------------- v2 追加参数：以前硬编码在控制代码里的标定量 ----------------
+ * 加这些是因为用户 m13466 要求"PID 页面每个环的参数都能显示、能调、能保存、能固化到
+ * 小车 Flash"。这些量的真值从此都在参数表里，控制代码用 host_param_get(id, 兜底)
+ * 取；兜底值 = 之前硬编码的实测值，所以不接上位机时行为完全不变。 */
+#define HP_GYRO_ANG_KP       0x010Au  /* 角度环外环：角度误差 -> 期望角速度 */
+#define HP_GYRO_RATE_KP      0x010Bu  /* 角度环内环：角速度误差 -> 修正量 */
+#define HP_GYRO_RATE_KD      0x010Cu  /* 角度环内环微分阻尼 */
+#define HP_GYRO_RATE_MAX     0x010Du  /* 期望角速度上限 °/s */
+#define HP_GYRO_CORR_LIMIT   0x010Eu  /* 修正量限幅（PWM 刻度） */
+#define HP_GYRO_CORR_SLEW    0x010Fu  /* 修正量斜率限幅（PWM/s） */
+#define HP_GYRO_SETTLE_DEG   0x0110u  /* 停车带半宽 °（|err| 内认为到位） */
+#define HP_GYRO_SETTLE_MS    0x0111u  /* 待在停车带里多久算到位 ms */
+#define HP_TRACE_ANGLE_PER_UNIT 0x0205u /* 串级外环：重心偏 1 格 -> 目标航向度数 */
+#define HP_TRACE_ANGLE_MAX   0x0206u  /* 串级外环：目标航向偏移上限 ° */
+#define HP_PIVOT_KP          0x0207u  /* 原地 pivot（base=0）循迹 PID：比例 */
+#define HP_PIVOT_KI          0x0208u  /* 原地 pivot：积分（实测 0 最好，防 windup） */
+#define HP_PIVOT_KD          0x0209u  /* 原地 pivot：微分 */
+
+/* ---------------- 能力位（HELLO 报给上位机，与 tools/console/docs/API.md 一致） ---- */
+#define HOST_CAP_TELEM2      (1u << 0)
+#define HOST_CAP_ACTIONS     (1u << 1)
+#define HOST_CAP_SERVO       (1u << 2)
+#define HOST_CAP_DRIVE       (1u << 3)
+#define HOST_CAP_CAL         (1u << 4)
+#define HOST_CAP_FLASH       (1u << 5)
+#define HOST_CAP_WATCHDOG    (1u << 6)
+#define HOST_CAP_ALL         (HOST_CAP_TELEM2 | HOST_CAP_ACTIONS | HOST_CAP_SERVO | \
+                              HOST_CAP_DRIVE | HOST_CAP_CAL | HOST_CAP_FLASH | HOST_CAP_WATCHDOG)
+
+#define HOST_PROTO_VERSION   2u      /* 协议版本：v2 加了扩展帧/动作表/驾驶/看门狗 */
+#define HOST_FW_VERSION      0x0002u /* 固件版本 0.0.2 */
+
 /* ---------------- 生命周期 ---------------- */
 void host_link_init(void);                 /* 初始化 LPUART1 + 参数表，发一条启动横幅 */
 void host_link_poll(uint32_t loop_us);     /* 主循环里调用：收帧处理 + 按频率发遥测 */
@@ -69,6 +101,16 @@ uint32_t host_param_u32(uint16_t id, uint32_t fallback);
 void    host_param_set_local(uint16_t id, float v);    /* 本地改参（不经串口） */
 void    host_link_send_text(const char *s);            /* 调试文本转发到上位机 */
 void    host_link_tick_1hz(void);                      /* 每秒报一次链路统计（RTT） */
+
+/* 参数表自省（给上位机 /api/params 用；控制代码用不到） */
+uint16_t host_param_count(void);
+uint16_t host_param_id_at(uint16_t index);
+int      host_param_bounds(uint16_t id, float *def, float *lo, float *hi);
+uint16_t host_param_table_crc(void);                   /* 与 HELLO 里报的是同一个值 */
+
+/* 驾驶（上位机远程控制车轮）状态，给遥测/UI 用 */
+uint8_t host_drive_mode(void);                         /* 0 关 1 左右轮 2 基准+转向 3 循迹 */
+uint8_t host_drive_is_enabled(void);
 
 /* ---------------- 统计（RTT/调试用） ---------------- */
 typedef struct {

@@ -24,6 +24,10 @@ void motor_tracing_reset_cascade(void);
 void PID_Tracing_SetCascadeGains(float deg_per_unit, float aim_max_deg);
 void PID_Tracing_GetCascadeGains(float *deg_per_unit, float *aim_max_deg);
 
+/* 遥测只读快照（上位机 trace 组）：本拍重心 / 循迹环本拍转向偏置 */
+float PID_Tracing_TracePos(void);
+float PID_Tracing_PidOutput(void);
+
 /* 路口检测（说明书第七章：N 路灯同时压线 + 消抖） */
 uint8_t tracing_cross(void);
 void    tracing_cross_clear(void);
