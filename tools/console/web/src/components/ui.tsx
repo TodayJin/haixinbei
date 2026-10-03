@@ -222,30 +222,63 @@ export function Slider({
   )
 }
 
-/** 8 路灰度阵列（总览/传感器页）：line = 压线标志，gray = 原始值 0..255 */
-export function GrayArray({ line, gray, height = 96 }: { line: number[]; gray: number[]; height?: number }) {
+/**
+ * 8 路灰度阵列（总览/传感器页）：`line` = 压线标志，`gray` = 原始值 0..255（255 = 最黑）。
+ *
+ * 柱高就是原始值本身，所以**没黑到满量程时柱顶会留一段深色**——那是"到 255 还差多少"的
+ * 余量，不是另一个元素（一度被当成 bug 问过）。加 `hint` 时在下面画一行图例把这件事写清楚。
+ */
+export function GrayArray({
+  line,
+  gray,
+  height = 96,
+  hint = false,
+}: {
+  line: number[]
+  gray: number[]
+  height?: number
+  hint?: boolean
+}) {
   return (
-    <div className="flex items-stretch gap-1.5" style={{ height }}>
-      {Array.from({ length: 8 }, (_, i) => {
-        const v = gray[i] ?? 0
-        const active = (line[i] ?? 0) !== 0
-        const ink = clamp(v / 255, 0, 1)
-        return (
-          <div key={i} className="flex flex-1 flex-col items-center gap-1">
-            <div className="relative w-full flex-1 overflow-hidden rounded-lg bg-ink-900/80 ring-1 ring-white/10">
+    <div>
+      <div className="flex items-stretch gap-1.5" style={{ height }}>
+        {Array.from({ length: 8 }, (_, i) => {
+          const v = gray[i] ?? 0
+          const active = (line[i] ?? 0) !== 0
+          const ink = clamp(v / 255, 0, 1)
+          return (
+            <div key={i} className="flex flex-1 flex-col items-center gap-1">
               <div
-                className={`absolute bottom-0 left-0 w-full transition-[height] duration-150 ${
-                  active ? 'bg-neon-mint/80' : 'bg-slate-500/35'
+                className={`relative w-full flex-1 overflow-hidden rounded-lg bg-ink-900/80 ring-1 ${
+                  active ? 'ring-neon-mint/40' : 'ring-white/10'
                 }`}
-                style={{ height: `${Math.max(3, ink * 100)}%` }}
-              />
-              {active && <div className="absolute inset-x-0 top-0 h-0.5 bg-neon-mint" />}
+              >
+                <div
+                  className={`absolute bottom-0 left-0 w-full transition-[height] duration-150 ${
+                    active ? 'bg-neon-mint/80' : 'bg-slate-500/35'
+                  }`}
+                  style={{ height: `${Math.max(3, ink * 100)}%` }}
+                >
+                  {/* 亮边画在**填充顶部**（柱头），不要画在轨道顶部 */}
+                  <div className={`absolute inset-x-0 top-0 h-0.5 ${active ? 'bg-neon-mint' : 'bg-slate-400/50'}`} />
+                </div>
+              </div>
+              <span className={`num text-[10px] ${active ? 'text-neon-mint' : 'text-slate-500'}`}>{i}</span>
+              <span className="num text-[10px] text-slate-400">{Math.round(v)}</span>
             </div>
-            <span className={`num text-[10px] ${active ? 'text-neon-mint' : 'text-slate-500'}`}>{i}</span>
-            <span className="num text-[10px] text-slate-400">{Math.round(v)}</span>
-          </div>
-        )
-      })}
+          )
+        })}
+      </div>
+      {hint && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500">
+          <span>柱高 = 灰度原始值 0..255（越高越黑）</span>
+          <span className="flex items-center gap-1">
+            <i className="inline-block h-2.5 w-2.5 rounded-sm bg-neon-mint/80 align-middle" />
+            绿色 = 该路判为压线
+          </span>
+          <span>柱顶深色的一段 = 到满量程 255 还差的余量</span>
+        </div>
+      )}
     </div>
   )
 }

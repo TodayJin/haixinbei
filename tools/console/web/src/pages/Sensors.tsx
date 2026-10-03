@@ -61,7 +61,7 @@ export function SensorsPage() {
             </div>
           }
         >
-          <GrayArray line={line} gray={gray} height={140} />
+          <GrayArray line={line} gray={gray} height={140} hint />
           <div className="mt-3 grid grid-cols-2 gap-3 md:grid-cols-4">
             <Stat label="重心偏差" value={fmt(t?.trace.pos, 3)} hint="相对 4.5（车正中）" />
             <Stat label="循迹 PID 输出" value={fmtInt(t?.trace.pid)} tone="amber" />

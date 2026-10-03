@@ -12,7 +12,7 @@
  */
 
 import { useSyncExternalStore } from 'react'
-import { api, openStream } from './api'
+import { api, normalizePresets, openStream } from './api'
 import { CHANNELS } from './channels'
 import { SeriesRing } from './ring'
 import type {
@@ -238,7 +238,7 @@ class ConsoleStore {
           link: p.link ?? this.snap.link,
           params: p.params ?? this.snap.params,
           actions: p.actions ?? this.snap.actions,
-          presets: p.presets ?? this.snap.presets,
+          presets: p.presets ? normalizePresets(p.presets) : this.snap.presets,
           cal: p.cal ?? this.snap.cal,
         }
         this.emit()

@@ -219,11 +219,12 @@ function makeTelem() {
   for (let i = 0; i < 8; i++) {
     const d = Math.abs(i - sim.linePos)
     const ink = Math.max(0, 1 - d / 1.6)
-    gray.push(Math.round(3150 - ink * 2600 + (Math.random() - 0.5) * 60))
+    // 固件口径：u8 0..255，越高越黑（255 = 压黑线）—— host_ext.h:80 trace_cal_level()
+    gray.push(Math.round(30 + ink * 195 + (Math.random() - 0.5) * 14))
     line.push(ink > 0.5 ? 1 : 0)
   }
   const lost = Math.random() < 0.004
-  if (lost) for (let i = 0; i < 8; i++) { gray[i] = 3080; line[i] = 0 }
+  if (lost) for (let i = 0; i < 8; i++) { gray[i] = 6 + Math.round(Math.random() * 10); line[i] = 0 }
 
   sim.vbat = Math.max(10200, sim.vbat - 0.35)
   const ibat = Math.round(Math.max(0, (Math.abs(sim.pwm_l) + Math.abs(sim.pwm_r)) * 0.09) + 120 + (Math.random() - 0.5) * 40)

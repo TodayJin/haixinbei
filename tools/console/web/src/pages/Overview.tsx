@@ -119,7 +119,7 @@ export function OverviewPage() {
 
       {/* 传感器 */}
       <Card title="循迹传感器" className="xl:col-span-2">
-        <GrayArray line={t?.line ?? Array(8).fill(0)} gray={t?.gray ?? Array(8).fill(0)} />
+        <GrayArray line={t?.line ?? Array(8).fill(0)} gray={t?.gray ?? Array(8).fill(0)} hint />
         <div className="mt-3 grid grid-cols-3 gap-3">
           <Stat label="重心偏差" value={fmt(t?.trace.pos, 2)} />
           <Stat label="循迹 PID 输出" value={fmtInt(t?.trace.pid)} tone="amber" />

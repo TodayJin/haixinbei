@@ -538,6 +538,52 @@ class Console:
             pass
 
     # ------------------------------------------------------------------ 预设
+    @staticmethod
+    def _normalize_preset(o) -> dict:
+        """把磁盘上的预设文件归一成契约形状（`tools/console/docs/API.md` 的 PresetItem）。
+
+        `preset_dir` 里住着两种 json：`preset_save()` 写的 {name,kind,keys,values}，
+        以及 `_save_action_preset()` 写的动作表存档 {actions:[[a1,a2]…]}（**没有 kind/keys**）。
+        旧版 `preset_list()` 把后者原样吐给前端 ⇒ 舵机页/设置页读 `p.keys.length` 抛
+        TypeError、React 卸掉整棵树 ⇒ 浏览器里整页空白（2026-10-03 实测）。
+        这里按内容把缺的 kind/keys 推断出来，并把顶层 `actions` 列表转成
+        `values.actions = {"1": [a1,a2], …}`，顺带让「应用预设」对动作表存档也能用。
+        """
+        o = dict(o) if isinstance(o, dict) else {}
+        vals = o.get("values")
+        vals = dict(vals) if isinstance(vals, dict) else {}
+        acts = o.get("actions")
+        if isinstance(acts, list) and not vals.get("actions"):
+            pairs = {}
+            for i, v in enumerate(acts):
+                if isinstance(v, (list, tuple)) and len(v) >= 2:
+                    try:
+                        pairs[str(i + 1)] = [int(v[0]), int(v[1])]
+                    except (TypeError, ValueError):
+                        pass
+            if pairs:
+                vals["actions"] = pairs
+        filled = [k for k in ("actions", "params", "servo", "cal") if vals.get(k)]
+        kind = o.get("kind")
+        if not isinstance(kind, str) or not kind:
+            kind = filled[0] if len(filled) == 1 else "mixed"
+        keys = o.get("keys")
+        if not isinstance(keys, list) or not keys:
+            # 空数组也要按内容补：旧版 preset_save() 不带 targets 时存出来就是空 keys，
+            # 界面上会显示「0 项」（明明带着一整张参数表），比崩掉轻、但同样是错的。
+            keys = filled
+        upd = o.get("updated_ms")
+        note = o.get("note")
+        name = o.get("name")
+        return {
+            "name": name if isinstance(name, str) else "",
+            "kind": kind,
+            "updated_ms": upd if isinstance(upd, (int, float)) else 0,
+            "keys": [k for k in keys if isinstance(k, str)],
+            "note": note if isinstance(note, str) else "",
+            "values": vals,
+        }
+
     def preset_list(self) -> list[dict]:
         out = []
         if not os.path.isdir(self.preset_dir):
@@ -548,10 +594,11 @@ class Console:
             try:
                 with open(os.path.join(self.preset_dir, name), "r", encoding="utf-8") as fh:
                     o = json.load(fh)
-                o.setdefault("name", name[:-5])
-                out.append(o)
             except Exception:
                 continue
+            item = self._normalize_preset(o)
+            item["name"] = item["name"] or name[:-5]
+            out.append(item)
         return out
 
     def preset_save(self, name: str, kind: str, keys=None, note: str = "",
@@ -585,6 +632,7 @@ class Console:
             return {"ok": False, "error": f"没有预设 {name}"}
         with open(path, "r", encoding="utf-8") as fh:
             o = json.load(fh)
+        o = self._normalize_preset(o)            # 动作表存档 actions.json 也走这条路
         kind = o.get("kind")
         want = set(targets) if targets else set()
         res = {"ok": True, "name": name, "kind": kind, "sent": 0, "results": []}

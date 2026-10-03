@@ -83,10 +83,17 @@
       focus:ring-neon-cyan/50 num;
   }
 
+  /* 分段选择器：`.seg` 是容器，`.seg-item` 是其中一格（驾驶方式 / 波形窗口 / 设置页窗口都用它）。
+     注意：`seg-item` 一度只写在 JSX 里、CSS 漏了定义 ⇒ 三个按钮被 Tailwind 的 preflight
+     清成裸 <button>（无边框无底色），看上去就是一行黏在一起的字。 */
   .seg {
-    @apply rounded-lg px-2.5 py-1 text-xs ring-1 ring-white/10 transition hover:bg-white/10;
+    @apply inline-flex items-center gap-1 rounded-xl bg-ink-900/60 p-1 ring-1 ring-white/10;
+  }
+  .seg-item {
+    @apply select-none rounded-lg px-2.5 py-1 text-xs text-slate-400 transition
+      hover:bg-white/10 hover:text-slate-200 active:scale-[0.98];
   }
   .seg-on {
-    @apply bg-neon-cyan/20 text-neon-cyan ring-neon-cyan/40;
+    @apply bg-neon-cyan/20 text-neon-cyan ring-1 ring-neon-cyan/40 hover:bg-neon-cyan/25 hover:text-neon-cyan;
   }
 }

@@ -76,6 +76,30 @@ function post<T>(path: string, payload?: unknown): Promise<T> {
   return request<T>(path, { method: 'POST', body: JSON.stringify(payload ?? {}) })
 }
 
+/**
+ * 把后端给的预设列表归一成 `PresetItem`。
+ *
+ * 预设目录里不只住着 `preset_save()` 写的预设，还有动作表存档 `actions.json`
+ * （形状 `{"actions":[[a1,a2]…]}`，**没有 kind/keys**）。缺 `keys` 时页面读
+ * `p.keys.length` 会抛 TypeError，React 会把整棵树卸掉 ⇒ 浏览器里就是一片空白。
+ * 桥侧已按契约归一（`bridge/state.py` 的 `_normalize_preset`），这里再兜一层：
+ * 手写的 / 旧版本的 json 也不该能把某个页面整个打黑。
+ */
+export function normalizePresets(items: unknown): PresetItem[] {
+  if (!Array.isArray(items)) return []
+  return items.map((raw, i) => {
+    const o = (raw ?? {}) as Partial<PresetItem>
+    const kind = o.kind
+    return {
+      name: typeof o.name === 'string' && o.name ? o.name : `preset-${i + 1}`,
+      kind: kind === 'actions' || kind === 'params' || kind === 'servo' || kind === 'mixed' ? kind : 'mixed',
+      updated_ms: typeof o.updated_ms === 'number' ? o.updated_ms : 0,
+      keys: Array.isArray(o.keys) ? o.keys.filter((k): k is string => typeof k === 'string') : [],
+      note: typeof o.note === 'string' ? o.note : '',
+    }
+  })
+}
+
 export const api = {
   health: () => request<HealthInfo>('/api/health'),
   link: () => request<LinkInfo>('/api/link'),
@@ -109,7 +133,10 @@ export const api = {
   log: (limit = 200) => request<{ ok: true; items: LogItem[] }>(`/api/log${qs({ limit })}`),
   cal: () => request<CalResponse>('/api/cal'),
 
-  presets: () => request<{ ok: true; items: PresetItem[] }>('/api/presets'),
+  presets: async () => {
+    const r = await request<{ ok: true; items: PresetItem[] }>('/api/presets')
+    return { ...r, items: normalizePresets(r.items) }
+  },
   presetSave: (name: string, targets: string[], note?: string) =>
     post<{ ok: true }>('/api/presets', { name, targets, note }),
   presetApply: (name: string, targets: string[]) => post<{ ok: true }>('/api/presets/apply', { name, targets }),

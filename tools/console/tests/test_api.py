@@ -238,6 +238,46 @@ def test_presets_roundtrip(live):
     assert "测试预设" not in [p["name"] for p in GET(base + "/api/presets")[1]["items"]]
 
 
+def test_action_table_archive_is_listed_as_a_preset(live):
+    """回归（用户 2026-10-03 报的「舵机界面空的,设置页面也是空的」）。
+
+    预设目录里除了 `preset_save()` 写的预设，还住着动作表存档 `actions.json`
+    （形状 `{"actions":[[a1,a2]…]}`，**没有 kind/keys**）。以前 `preset_list()`
+    原样吐给前端 ⇒ 页面读 `p.keys.length` 抛 TypeError ⇒ React 卸掉整棵树、整页空白。
+    这里钉死：列出来必须是契约形状（kind/keys 齐），并且「应用预设」真能下发动作。
+    """
+    base, bridge, _ = live
+    path = os.path.join(bridge.preset_dir, "actions.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({"actions": [[0, 0], [60, 120]], "updated_ms": 1790990454087}, fh)
+    try:
+        code, j, _ = GET(base + "/api/presets")
+        assert code == 200
+        item = next(p for p in j["items"] if p["name"] == "actions")
+        for key in ("name", "kind", "updated_ms", "keys"):
+            assert key in item, f"预设项缺 {key}：{item}"
+        assert item["kind"] == "actions", item
+        assert item["keys"] == ["actions"], item
+        # 顶层 actions 列表要被归一成 values.actions，应用预设才会真下发
+        code, j2, _ = POST(base + "/api/presets/apply", {"name": "actions"})
+        assert code == 200 and j2["kind"] == "actions", j2
+        assert len(j2["results"]) == 2, j2
+        assert j2["ok"] is True, j2
+        # 旧版 preset_save() 不带 targets 时存出来的 keys 是空数组 ⇒ 界面显示「0 项」。
+        # 空 keys 也要按内容补，否则用户看到「0 项」的预设里其实躺着一整张参数表。
+        stale = os.path.join(bridge.preset_dir, "stale.json")
+        with open(stale, "w", encoding="utf-8") as fh:
+            json.dump({"name": "stale", "keys": [], "values": {"params": {"line_kp": 1.0}}}, fh)
+        code, j3, _ = GET(base + "/api/presets")
+        assert code == 200
+        it3 = next(p for p in j3["items"] if p["name"] == "stale")
+        assert it3["kind"] == "params", it3
+        assert it3["keys"] == ["params"], it3
+        os.remove(stale)
+    finally:
+        os.remove(path)
+
+
 def test_record_endpoint(live):
     base, _, _ = live
     code, j, _ = POST(base + "/api/record", {"on": True})

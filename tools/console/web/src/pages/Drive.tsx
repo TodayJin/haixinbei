@@ -7,9 +7,9 @@ import { fmt, fmtInt } from '../lib/format'
 import type { DriveMode } from '../lib/types'
 
 const MODE_LABEL: Record<DriveMode, string> = {
-  off: '停（交回车自己）',
-  wheels: '左右轮速直给',
-  base_turn: '基准速度 + 转向',
+  off: '停（交回车）',
+  wheels: '左右轮分别给',
+  base_turn: '基准+转向',
 }
 
 export function DrivePage() {
@@ -67,6 +67,7 @@ export function DrivePage() {
           }
         >
           <div className="mb-3 flex flex-wrap items-center gap-3">
+            <span className="text-[12px] text-slate-500">驾驶方式</span>
             <div className="seg">
               {(['wheels', 'base_turn', 'off'] as DriveMode[]).map((m) => (
                 <button key={m} className={`seg-item ${mode === m ? 'seg-on' : ''}`} onClick={() => setMode(m)}>

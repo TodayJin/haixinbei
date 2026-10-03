@@ -16,6 +16,7 @@ import { PAGES, navigateTo, usePage, type PageId } from '../lib/router'
 import { store, useStore } from '../lib/store'
 import { Badge, StatusDot } from './ui'
 import { ErrorBanner } from './Toasts'
+import { PageBoundary } from './PageBoundary'
 import { fmt } from '../lib/format'
 import { MODE_TEXT, RENWU_TEXT } from '../lib/types'
 
@@ -169,7 +170,10 @@ export function Shell({ children }: { children: React.ReactNode }) {
               与本地桥的实时通道断了（后端没起来？）。正在自动重连…
             </div>
           )}
-          {children}
+          {/* key={page}：一个页面炸了，切到别的页面要能恢复（否则错误状态会黏住） */}
+          <PageBoundary key={page} title={cur?.title}>
+            {children}
+          </PageBoundary>
         </div>
       </main>
     </div>
