@@ -901,8 +901,8 @@ int main(void)
             if (a) CHECK_EQ_I(a[6], 0x00);
             CHECK_EQ_I(TaskStore_StageLen(), 80);
         }
-        /* 越过程序区上限（2008）：off=2007 + 120 字节 ⇒ ST_OUT_OF_RANGE */
-        put16(&pb[2], 2007);
+        /* 越过程序区上限（TASK_STORE_CAP）：off = 上限-1 + 120 字节 ⇒ ST_OUT_OF_RANGE */
+        put16(&pb[2], (uint16_t)(TASK_STORE_CAP - 1u));
         host_dl_tx_clear();
         build(fbig, 0x62, 116, pb, 124);
         feed_and_poll(fbig, 131);

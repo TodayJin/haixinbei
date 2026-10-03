@@ -372,7 +372,7 @@ def _acks(frames) -> dict:
     return {f.seq: pr.decode_ack(f.payload)["status"] for f in frames if f.type == pr.T_ACK}
 
 
-def _upload(img: bytes, tid: int = 0, seq0: int = 10):
+def _upload(img: bytes, tid: int = 0, seq0: int = 10, name: str = "直行两米"):
     """按桥的方式分片上传 + COMMIT，返回 (帧列表, PUT 的 seq 列表, COMMIT 的 seq)。"""
     crc = pr.crc16_ccitt(img[12:])
     seq = seq0
@@ -381,7 +381,7 @@ def _upload(img: bytes, tid: int = 0, seq0: int = 10):
         out.append(pr.frame_task_put(seq, tid, off, img[off:off + pr.TASK_PUT_MAX]))
         puts.append(seq)
         seq += 1
-    out.append(pr.frame_task_commit(seq, tid, len(img), crc, "直行两米"))
+    out.append(pr.frame_task_commit(seq, tid, len(img), crc, name))
     return out, puts, seq
 
 
@@ -498,3 +498,124 @@ def test_task_run_refused_while_host_is_driving(pipe, task_image):
     texts = [pr.decode_text(f.payload) for f in frames if f.type == pr.T_TEXT]
     assert any("host driving" in t for t in texts), \
         f"司机占着车时起任务要在链路上说明白（T_TEXT）：{texts}"
+
+
+# ---------------------------------------------------------------------
+#  旧内置比赛流程（已删的 `renwu.c`，12 个障碍）转出来的**长任务**：
+#  `web/src/lib/tasks/renwu-lap.json`（15 状态 / 190 块 / 2127 字节）。
+#  这是"用户真会去烧的那一份"，所以也放进真固件里走一遍：
+#  ① Python 独立编一遍码（与 task.ts 逐字段对齐）⇒ 长度/CRC 两边必须一致；
+#  ② 真 `host_link.c` + 真 `task_store.c` 必须**收下**它（旧的 2048 上限会拒收，
+#     这正是把 TASK_STORE_CAP 提到 4096 的原因）；
+#  ③ 目录里的 len/crc/名字对得上，GET 逐字节回读一致。
+# ---------------------------------------------------------------------
+
+LAP_JSON = os.path.join(HERE, "..", "web", "src", "lib", "tasks", "renwu-lap.json")
+TASK_HDR_LEN, TASK_STATE_LEN, TASK_BLOCK_LEN = 12, 8, 10   # 与 firmware/App/Svc/task_prog.h 同口径
+LAP_LEN = 2127                     # 与 `renwu-lap.test.ts` 里钉的字节数一致
+
+
+def _encode_prog(prog: dict) -> bytes:
+    """按 `web/src/lib/task.ts` 的 v1 布局编码（Python 侧独立实现一遍，用于交叉验证）。"""
+    states = prog["states"]
+    n = len(states)
+    off = TASK_HDR_LEN + n * TASK_STATE_LEN
+    eoff, boff, noff, names = [], [], [], []
+    for st in states:
+        eoff.append(off if st["enter"] else 0)
+        off += len(st["enter"]) * TASK_BLOCK_LEN
+        boff.append(off if st["body"] else 0)
+        off += len(st["body"]) * TASK_BLOCK_LEN
+    for st in states:
+        nb = st["name"].encode("utf-8")
+        names.append(nb)
+        noff.append(off if nb else 0)
+        off += len(nb)
+
+    out = bytearray(off)
+
+    def u16(at: int, v: int) -> None:
+        out[at:at + 2] = (v & 0xFFFF).to_bytes(2, "little")
+
+    def i16(at: int, v: int) -> None:
+        out[at:at + 2] = max(-32768, min(32767, v)).to_bytes(2, "little", signed=True)
+
+    out[0:2] = b"TK"
+    out[2] = 1
+    out[3] = n
+    out[4] = prog["main"]
+    out[5] = 0
+    u16(8, off)
+    u16(10, 0)
+
+    def wblk(at: int, b: dict) -> None:
+        out[at] = b["op"] & 0xFF
+        out[at + 1] = b["flags"] & 0xFF
+        u16(at + 2, b["p0"])
+        i16(at + 4, b["p1"])
+        u16(at + 6, b["p2"])
+        u16(at + 8, b["p3"])
+
+    for i, st in enumerate(states):
+        so = TASK_HDR_LEN + i * TASK_STATE_LEN
+        u16(so, noff[i])
+        u16(so + 2, eoff[i])
+        u16(so + 4, boff[i])
+        out[so + 6] = len(st["enter"])
+        out[so + 7] = len(st["body"])
+        for j, b in enumerate(st["enter"]):
+            wblk(eoff[i] + j * TASK_BLOCK_LEN, b)
+        for j, b in enumerate(st["body"]):
+            wblk(boff[i] + j * TASK_BLOCK_LEN, b)
+        if names[i]:
+            out[noff[i]:noff[i] + len(names[i])] = names[i]
+
+    u16(6, pr.crc16_ccitt(bytes(out[TASK_HDR_LEN:])))
+    return bytes(out)
+
+
+@pytest.fixture(scope="module")
+def lap_image() -> bytes:
+    """`renwu-lap.json`（页面"导入任务文件"认的那份）编出来的镜像。"""
+    with open(LAP_JSON, "r", encoding="utf-8") as fh:
+        doc = json.load(fh)
+    assert doc["ver"] == 1 and len(doc["tasks"]) == 1
+    prog = doc["tasks"][0]["prog"]
+    img = _encode_prog(prog)
+    assert len(img) == LAP_LEN, f"长度与 web 侧钉的 {LAP_LEN} 不一致：{len(img)}"
+    assert len(prog["states"]) == 15 and prog["main"] == 0
+    return img
+
+
+def test_lap_program_is_accepted_by_the_real_firmware(pipe, lap_image):
+    """用户那份 2127 B 的全程任务：真固件必须收下、列得出来、回读一致。"""
+    img = lap_image
+    crc = pr.crc16_ccitt(img[12:])
+    name = "旧全程·12障碍"
+    up, puts, commit_seq = _upload(img, name=name)
+    frames = pipe(*up, pr.frame_task_list(50), pr.frame_task_get(51, 0), pad=400)
+
+    ack = _acks(frames)
+    assert all(ack.get(s) == pr.ST_OK for s in puts), f"有 PUT 片被真固件拒了：{ack}"
+    assert ack.get(commit_seq) == pr.ST_OK, \
+        f"真固件拒收这条长任务（2127B/15 状态/4096 上限）——COMMIT 状态码 {ack.get(commit_seq)}：{ack}"
+
+    items = [pr.decode_task_list_r(f.payload) for f in frames if f.type == pr.T_TASK_LIST_R]
+    assert items and items[0] is not None, f"目录里没列出刚烧的任务：{items}"
+    assert (items[0]["id"], items[0]["len"], items[0]["crc"], items[0]["flags"]) == (0, len(img), crc, 0), items[0]
+    assert items[0]["name"] == name, f"名字没存住：{items[0]['name']!r}"
+
+    got = bytearray()
+    end = None
+    for f in frames:
+        if f.type != pr.T_TASK_DATA:
+            continue
+        tid, off, data = pr.decode_task_data(f.payload)
+        assert tid == 0
+        if not data:
+            end = off
+            break
+        assert off == len(got), f"回读分片顺序不对：off={off} 期望 {len(got)}"
+        got += data
+    assert end == len(img), f"回读没收尾（end={end}，期望 {len(img)}）"
+    assert bytes(got) == img, "2127 B 的长任务回读不一致"

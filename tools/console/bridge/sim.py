@@ -97,7 +97,7 @@ class SimCar:
         self.tasks: dict[int, bytes] = {}           # 槽号 → 完整镜像（已 COMMIT）
         self.task_names: dict[int, str] = {}
         self.task_flags: dict[int, int] = {}        # 槽号 → 记录标志（bit0 = 开机自启）
-        self.task_stage: dict[int, bytearray] = {}  # 槽号 → 2048 B 暂存（PUT 分片落这里）
+        self.task_stage: dict[int, bytearray] = {}  # 槽号 → 4096 B 暂存（PUT 分片落这里）
         self.task_run = {"id": 0xFFFF, "state": 0xFF, "running": False, "block": 0,
                          "elapsed_ms": 0, "flags": 0}
         self.task_run_t0 = 0
@@ -483,7 +483,7 @@ class SimCar:
 
     # ---------------------------------------------------------- 任务程序（0x60..0x69）
     # 与固件口径对齐：TASK_STORE_SLOTS 8 条记录（页 59 目录）+ 页 60..62 共 6144 B 程序区，
-    # 单条 ≤ TASK_STORE_CAP 2048 B（= pr.TASK_SLOT_BYTES，解释器 RAM 上限）。
+    # 单条 ≤ TASK_STORE_CAP 4096 B（= pr.TASK_SLOT_BYTES，解释器 RAM 上限）。
     TASK_SLOTS = 8
     TASK_PROG_BYTES = 6144
 

@@ -682,7 +682,7 @@ const server = http.createServer(async (req, res) => {
       const data = Buffer.from(hex, 'hex')
       const cur = staging.get(id) ?? Buffer.alloc(0)
       const need = off + data.length
-      if (need > 2048) return fail(res, 400, `单个任务最多 2048 字节（解释器 RAM 上限，写到 ${need}）`, 'out_of_range')
+      if (need > 4096) return fail(res, 400, `单个任务最多 4096 字节（解释器 RAM 上限，写到 ${need}）`, 'out_of_range')
       const next = Buffer.alloc(Math.max(cur.length, need), 0xff)
       cur.copy(next)
       data.copy(next, off)

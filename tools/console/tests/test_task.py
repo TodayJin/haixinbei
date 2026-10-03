@@ -78,7 +78,7 @@ def test_task_frame_ids_are_the_reserved_block():
         assert t in pr.TYPE_NAMES
     assert pr.CAP_TASK == 0x80, "HOST_CAP_TASK 是 HELLO 能力字的 bit7"
     assert pr.TASK_PUT_MAX == pr.MAX_PAYLOAD - 4, "PUT 一片 = 整帧载荷减去 4 字节头"
-    assert pr.TASK_DATA_CHUNK == 64 and pr.TASK_SLOT_BYTES == 2048
+    assert pr.TASK_DATA_CHUNK == 64 and pr.TASK_SLOT_BYTES == 4096
 
 
 def test_list_r_layout_matches_the_doc_and_empty_means_done():
@@ -240,10 +240,11 @@ def test_sim_task_rejects_half_burned_program_and_out_of_range():
     badcrc = pr.crc16_ccitt(bytes(bad[12:]))
     burn(car, 1, bytes(bad), badcrc, name="坏版本", commit_ok=False)
 
-    # 槽号越界 / 写超一页
+    # 槽号越界 / 写超单个任务上限（TASK_SLOT_BYTES = 4096）
     assert ack_status(car_req(car, pr.T_TASK_PUT, pr.pack_u16(car.TASK_SLOTS) + pr.pack_u16(0) + b"\x00",
                               seq=73, now=1400)) == pr.ST_OUT_OF_RANGE
-    assert ack_status(car_req(car, pr.T_TASK_PUT, pr.pack_u16(0) + pr.pack_u16(2000) + bytes(120),
+    assert ack_status(car_req(car, pr.T_TASK_PUT,
+                              pr.pack_u16(0) + pr.pack_u16(pr.TASK_SLOT_BYTES - 8) + bytes(120),
                               seq=74, now=1500)) == pr.ST_OUT_OF_RANGE
 
     # 空槽读/跑：明确说"还没准备好"，而不是装作成功

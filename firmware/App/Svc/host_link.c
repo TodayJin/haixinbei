@@ -594,8 +594,8 @@ static void rx_byte(uint8_t b)
  *  COMMIT 校验通过才擦进 Flash（App/Svc/task_store.c：页 60/61/62 三个槽）。
  *
  *  为什么 LIST_R / DATA 不在这里连发：一帧 board_dl_send 是**同步阻塞**的
- *  （64 字节数据 + 11 字节帧头 ≈ 6.5ms @115200）。一次 GET 最长 2008 字节
- *  ≈ 32 帧 ≈ 200ms，在 handle_frame 里连发会把主循环按住那么久：遥测断、
+ *  （64 字节数据 + 11 字节帧头 ≈ 6.5ms @115200）。一次 GET 最长 TASK_STORE_CAP（4096）
+ *  字节 ≈ 64 帧 ≈ 420ms，在 handle_frame 里连发会把主循环按住那么久：遥测断、
  *  OLED 不刷、驾驶看门狗（500ms）也可能被误判成掉线。所以照参数 dump 的老
  *  办法挂"待发"标记，由 host_link_poll 每拍推进一帧。
  *
@@ -923,7 +923,7 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
     if (id >= TASK_STORE_SLOTS) { send_ack(seq, ST_OUT_OF_RANGE); break; }
     /* 只写 RAM 暂存，不碰 Flash ⇒ 车在动也允许（真正擦写要等 COMMIT） */
     if (TaskStore_Stage(off, &p[4], (uint16_t)(len - 4u)) != TASK_STORE_OK) {
-      send_ack(seq, ST_OUT_OF_RANGE);        /* off + 本片 越过 2008 字节的程序区 */
+      send_ack(seq, ST_OUT_OF_RANGE);        /* off + 本片 越过 TASK_STORE_CAP */
       break;
     }
     send_ack(seq, ST_OK);

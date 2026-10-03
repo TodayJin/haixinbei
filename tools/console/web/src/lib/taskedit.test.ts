@@ -97,20 +97,21 @@ describe('块库元数据', () => {
     }
   });
 
-  it('条件表与固件条件号 1..9 一一对应，模式下拉只留 停车/角度环/循迹 三项', () => {
+  it('条件表与固件条件号 1..9 一一对应，模式下拉 = 停车/角度环/循迹/两轮直给', () => {
     expect(COND_SPECS.map((c) => c.cond)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(COND_SPECS[0].cond).toBe(COND.LINE_CENTER);
     expect(COND_SPECS[8].cond).toBe(COND.ALWAYS);
-    expect(MODE_OPTIONS.map((m) => m.value)).toEqual([MODE.IDLE, MODE.GYRO, MODE.TRACE_GYRO]);
+    expect(MODE_OPTIONS.map((m) => m.value)).toEqual([MODE.IDLE, MODE.GYRO, MODE.TRACE_GYRO, MODE.WHEELS]);
   });
 
-  it('老文件里的模式 2/4 仍能解析：下拉临时补一条带「（旧）」的项，摘要给得出人话', () => {
-    // 当前值在标准三项里 ⇒ 就三项，一件不多
-    expect(modeChoices(MODE.TRACE_GYRO).map((m) => m.value)).toEqual([MODE.IDLE, MODE.GYRO, MODE.TRACE_GYRO]);
-    // 老文件里的 2 / 4 ⇒ 补一条，排序仍在后面（不改动文件内容）
-    expect(modeChoices(MODE.TRACE).map((m) => m.value)).toEqual([MODE.IDLE, MODE.GYRO, MODE.TRACE_GYRO, MODE.TRACE]);
+  it('老文件里的模式 2 仍能解析：下拉临时补一条带「（旧）」的项，摘要给得出人话', () => {
+    // 当前值在标准四项里 ⇒ 就四项，一件不多
+    expect(modeChoices(MODE.TRACE_GYRO).map((m) => m.value)).toEqual([MODE.IDLE, MODE.GYRO, MODE.TRACE_GYRO, MODE.WHEELS]);
+    // 老文件里的 2 ⇒ 补一条，排序仍在后面（不改动文件内容）
+    expect(modeChoices(MODE.TRACE).map((m) => m.value)).toEqual([MODE.IDLE, MODE.GYRO, MODE.TRACE_GYRO, MODE.WHEELS, MODE.TRACE]);
     expect(modeChoices(MODE.TRACE).at(-1)?.label).toContain('（旧）');
-    expect(modeChoices(MODE.WHEELS).map((m) => m.value)).toEqual([MODE.IDLE, MODE.GYRO, MODE.TRACE_GYRO, MODE.WHEELS]);
+    // 两轮直给在标准项里（倒车要用），不再标「（旧）」
+    expect(modeLabel(MODE.WHEELS)).toBe('两轮直给');
     // 人话：标准项说闭环形态，旧值说「（旧）」，未知值退回数字
     expect(modeLabel(MODE.TRACE_GYRO)).toBe('循迹');
     expect(modeLabel(MODE.GYRO)).toBe('角度环');

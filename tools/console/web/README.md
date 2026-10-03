@@ -66,7 +66,7 @@ node mock/server.mjs   # 直接开 http://127.0.0.1:8770 ，托管 dist/
   `task.ts`（镜像编解码）= 与车上同一份格式；`taskedit.ts` = 拖拽/增删/脏数据修复/编译预览；
   `taskapi.ts` = `/api/tasks*` 的 HTTP 客户端（每文件各带一份 `.test.ts`）。车上存储：**页 59 = 目录**
   （最多 8 条记录，每条 `id/off/len/crc16/flags/name`）、**页 60..62 = 程序区 6 KB**（`0x0801E000` 起，
-  单条任务 ≤ 2048 B）；编译卡上的「占用 %」就是按 6144 B 算的。烧写栏的**「开机自启」开关**会把
+  单条任务 ≤ 4096 B）；编译卡上的「占用 %」就是按 6144 B 算的。烧写栏的**「开机自启」开关**会把
   COMMIT 帧的 `flags` bit0 置上，车下次上电自己跑这个任务（`TASK_STORE_FLAG_AUTO`）。
   「等固件/桥支持」提示态现在是按**能力位 bit7（`HOST_CAP_TASK`）**切的，不是按端点 404 切的。
 
@@ -81,7 +81,7 @@ node mock/server.mjs   # 直接开 http://127.0.0.1:8770 ，托管 dist/
 写操作会真的改内存状态并回 `ack`，越界/未知名返回 `4xx + {ok:false,error,code}` —— 前端就把这句话显示出来。
 
 任务端点（`/api/tasks*`，契约见 `docs/API.md` §3.6；真桥见 `tools/console/bridge/server.py`）也实现了，
-用的是内存里的**假 Flash**：`put` 收最多 2048 B 分片（页面按 120 B 一片发）、`commit` 查 magic/版本/状态数
+用的是内存里的**假 Flash**：`put` 收最多 4096 B 分片（页面按 120 B 一片发）、`commit` 查 magic/版本/状态数
 并且 **CRC 不对就拒收**（`flags` bit0 存下来、列表里回给前端）、`get` 回整镜像、`run` 之后 `status` 每 400 ms
 走一块（走完序列换下一个状态）——所以 `#/tasks` 页不用等固件就能整条演示（烧写 → 目录 → 回读 → 运行 → 停车）。
 

@@ -53,7 +53,7 @@
 /* 单个任务上限 = 解释器的 RAM 上限（firmware/App/Svc/task_run.c 的 TASK_RUN_MAX_PROG）：
  * 更长的程序装了也跑不起来，所以由存储层先挡掉。程序区总共 6144 B，8 个任务要装得下
  * 得看实际体积（典型 8 状态 × 12 块 ≈ 1.1KB）。 */
-#define TASK_STORE_CAP         2048u
+#define TASK_STORE_CAP         4096u
 
 /* ---- 目录页布局常量（测试直接按这些偏移查 Flash） ---- */
 #define TASK_STORE_DIR_MAGIC   0x5453u

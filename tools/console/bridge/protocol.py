@@ -54,7 +54,7 @@ T_TASK_STATUS = 0x69      # 车→：id u16 + state u8 + running u8 + block u16 
 
 TASK_PUT_MAX = MAX_PAYLOAD - 4     # 一帧 T_TASK_PUT 最多带的字节数（124；页面按 120 分片）
 TASK_DATA_CHUNK = 64               # 固件每帧 T_TASK_DATA 带 64 B
-TASK_SLOT_BYTES = 2048             # 一个槽位一页（firmware/App/Svc/task_store.c）
+TASK_SLOT_BYTES = 4096             # 单个任务上限（= firmware/App/Svc/task_store.h 的 TASK_STORE_CAP）
 
 TYPE_NAMES = {
     T_TELEM: "telem", T_TELEM2: "telem2", T_PARAM_GET: "param_get",

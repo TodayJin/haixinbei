@@ -16,7 +16,7 @@
 #include <stdint.h>
 
 /* 程序镜像缓冲（RAM）：上传/从 Flash 拷出来的程序都放这里，运行期不碰 Flash */
-#define TASK_RUN_MAX_PROG  2048u
+#define TASK_RUN_MAX_PROG  4096u
 
 #ifndef TASK_RUN_OFF
 #define TASK_RUN_OFF       0xFFu   /* 状态号/未运行 */
