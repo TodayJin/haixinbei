@@ -126,6 +126,22 @@ def crc16_ccitt(data: bytes) -> int:
     return crc
 
 
+def param_table_crc(items) -> int:
+    """参数表校验值 —— 与固件 `host_link.c` 的 `param_table_crc()` 同构（T_HELLO 的 param_crc）。
+
+    算法：按传入顺序把每项打包成 `<u16 id><f32 出厂默认值>` 拼接起来算 CRC16-CCITT-FALSE。
+
+    **顺序敏感**：固件按 `SPECS[]` 的顺序算，而 `bridge/params.py` 的 `PARAMS` 顺序是给
+    界面排版用的（两者不同）⇒ 直接拿 `params.PARAMS` 算出来是**另一个值**。要复现固件的值，
+    就得按固件 SPECS[] 的顺序传 —— 参数 dump 回来的顺序正好就是 SPECS[] 顺序。
+    真源码对拍见 ../tests/test_firmware_pipe.py。
+    """
+    buf = bytearray()
+    for pid, default in items:
+        buf += pack_u16(int(pid)) + pack_f32(float(default))
+    return crc16_ccitt(bytes(buf))
+
+
 def build_frame(ftype: int, seq: int, payload: bytes = b"") -> bytes:
     if len(payload) > MAX_PAYLOAD:
         raise ValueError("payload 太长：%d > %d" % (len(payload), MAX_PAYLOAD))

@@ -135,13 +135,23 @@ void     FLASH_Unlock(void);
 void     FLASH_Lock(void);
 uint64_t FLASH_ReadDoubleWord(uint32_t address);   /* 测试自检用 */
 
-/* ---- TIM：只用到"读比较寄存器" ---- */
+/* ---- TIM：比较寄存器读写 ----
+ * 真 HAL 的 __HAL_TIM_SET_COMPARE 是写 TIMx->CCRy；这里落到 host_hal.c 的
+ * host_tim_ccr[]（真 servo.c 用得到，见 firmware/test/pipe_hostlink.c 的构建）。
+ * 两个宏都按假 HAL 的习惯忽略句柄参数（假 TIM_HandleTypeDef 里没有 Instance）。 */
 #define TIM_CHANNEL_1  0x00000000U
 #define TIM_CHANNEL_2  0x00000004U
 #define TIM_CHANNEL_3  0x00000008U
 #define TIM_CHANNEL_4  0x0000000CU
 #define __HAL_TIM_GET_COMPARE(__HANDLE__, __CHANNEL__)  host_tim_get_compare(__CHANNEL__)
+#define __HAL_TIM_SET_COMPARE(__HANDLE__, __CHANNEL__, __COMPARE__)  host_tim_set_compare(__CHANNEL__, __COMPARE__)
 uint32_t host_tim_get_compare(uint32_t channel);
+void     host_tim_set_compare(uint32_t channel, uint32_t value);
+/* 旧拼法（ST 的 stm32_hal_legacy.h 里就这么转的）：本工程 servo.c/motor.c 用的是这组 */
+#define __HAL_TIM_SetCompare(__HANDLE__, __CHANNEL__, __COMPARE__) \
+        __HAL_TIM_SET_COMPARE(__HANDLE__, __CHANNEL__, __COMPARE__)
+#define __HAL_TIM_GetCompare(__HANDLE__, __CHANNEL__) \
+        __HAL_TIM_GET_COMPARE(__HANDLE__, __CHANNEL__)
 /* 注意：bsp_board.h 里 htim1/htim8… 是"对象"而不是指针，所以这里也只能是对象 */
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim8;

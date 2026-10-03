@@ -176,7 +176,10 @@ void host_keys_set(uint8_t bits) { s_keys = bits; }
 uint8_t renwu_flag = 0u;
 uint8_t black_num  = 0u;
 
+/* 真 servo.c 自己就有 Servo_Task()（TIM7 回调），管道对拍构建里要关掉这个空壳 */
+#ifndef HOST_PIPE_REAL_SERVO
 void Servo_Task(void) { }
+#endif
 void bsp_periodic_start(void) { }
 
 /* ---------------- I2C 总线看门狗（board.c 的真实现碰 HAL，这里只记数） ----------------

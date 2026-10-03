@@ -37,6 +37,11 @@ int      stub_nvram_touch;
 uint8_t  stub_nvram_state;
 
 float Yaw, Pitch, Roll;
+/* `-DHOST_PIPE_REAL_SERVO`（firmware/test/pipe_hostlink.c 的构建）会把 servo 这一段
+ * 换成真的 firmware/App/Bsp/servo.c —— 那时这些假表和假函数都不能有，否则符号重复。
+ * 顺带说明：下面 k_def[] 是**旧台架值**，与 servo.c 的 k_action_default[] 不同 ——
+ * 所以 t_hostext 用这套桩时测的是桩自己的表，不是出厂表。 */
+#ifndef HOST_PIPE_REAL_SERVO
 static uint8_t s_pose[SERVO_ACTION_N][2];
 static int     s_pose_ready;
 
@@ -53,6 +58,7 @@ static void pose_ready(void)
         s_pose_ready = 1;
     }
 }
+#endif /* !HOST_PIPE_REAL_SERVO */
 
 /* ---- motion ---- */
 void Motion_SetMode(Motion_Mode m)
@@ -91,7 +97,10 @@ float   NormalizeAngle(float a)
     return a;
 }
 
-/* ---- servo ---- */
+/* ---- servo ----
+ * 带 `-DHOST_PIPE_REAL_SERVO` 编译时（firmware/test/pipe_hostlink.c）这一整段换成真的
+ * firmware/App/Bsp/servo.c：动作表 const→RAM、中位偏差、角度→脉宽、越界夹取都走真代码。 */
+#ifndef HOST_PIPE_REAL_SERVO
 int Servo_ActionCount(void) { return SERVO_ACTION_N; }
 int Servo_SetActionPose(int n, int a1, int a2)
 {
@@ -143,6 +152,7 @@ void  Servo_SetAngle(int x, float a)
     stub_servo_angle[x] = a;
 }
 float Servo_GetAngle(int x) { return (x >= 1 && x <= 2) ? stub_servo_angle[x] : 0.0f; }
+#endif /* !HOST_PIPE_REAL_SERVO */
 
 /* ---- nvram ---- */
 void    nvram_touch(void) { stub_nvram_touch++; }
