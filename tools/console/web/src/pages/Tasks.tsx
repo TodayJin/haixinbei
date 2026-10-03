@@ -22,7 +22,6 @@ import {
   COND_SPECS,
   DRAG_MIME,
   EDIT_MAX_TASKS,
-  MODE_OPTIONS,
   OP_BY_CODE,
   OP_SPECS,
   addState,
@@ -38,6 +37,7 @@ import {
   importTaskFile,
   insertBlock,
   loadTaskFile,
+  modeChoices,
   moveBlock,
   nameBytes,
   newTaskDef,
@@ -130,7 +130,7 @@ function FieldEditor({
               <label key={f.key} className="flex items-center gap-2 text-[12px] text-slate-400">
                 <span className="w-14 shrink-0">{f.label}</span>
                 <select className="field flex-1" value={v} onChange={(e) => setField(f.key, Number(e.target.value))}>
-                  {MODE_OPTIONS.map((m) => (
+                  {modeChoices(v).map((m) => (
                     <option key={m.value} value={m.value}>
                       {m.label}
                     </option>
@@ -778,33 +778,63 @@ export function TasksPage() {
         <Card
           title="状态机"
           right={
-            <button className="btn-ghost !px-2 !py-0.5 text-[11px]" onClick={() => upd((p) => addState(p))} disabled={prog.states.length >= 16}>
-              <Plus size={12} /> 加状态
-            </button>
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] text-slate-600">{prog.states.length} 个状态</span>
+              <button
+                className="btn-ghost !px-2 !py-0.5 text-[11px]"
+                onClick={() => {
+                  const n = prog.states.length
+                  upd((p) => addState(p))
+                  setSelState(Math.min(n, 15))
+                }}
+                disabled={prog.states.length >= 16}
+              >
+                <Plus size={12} /> 加状态
+              </button>
+            </div>
           }
         >
           <div className="mb-2 text-[11px] text-slate-500">
-            从左到右、从上到下就是这个状态里的执行顺序；把右边的块拖到蓝线处插入，拖动已有的块改顺序。点块改参数。
+            一屏只看一个状态：任务从「主页」开始跑，别的状态靠「跳到状态 / 超时改道」切进去。点上面的标签换状态，也可以把块拖到标签上再松手。
+            进门序列在被切进来时跑一遍；循环体跑完停在最后一块等条件。把右边的块拖到蓝线处插入，点块改参数。
           </div>
-          <div className="grid gap-2">
-            {prog.states.map((_, i) => (
-              <div key={i} onDragOver={() => setSelState(i)}>
-                <StateCard
-                  prog={prog}
-                  i={i}
-                  sel={selState === i}
-                  open={open}
-                  dropAt={dropAt}
-                  cur={cur}
-                  onSelect={() => setSelState(i)}
-                  onDrop={onDrop}
-                  onOver={setDropAt}
-                  onToggleBlock={(at) => setOpen((o) => (o && o.state === at.state && o.seq === at.seq && o.index === at.index ? null : at))}
-                  upd={upd}
-                />
-              </div>
+
+          {/* 状态标签条：主页永远排第一，其余按编号排；一屏只渲染选中的那一个状态 */}
+          <div className="mb-2 flex flex-wrap items-center gap-1">
+            {[prog.main, ...prog.states.map((_, i) => i).filter((j) => j !== prog.main)].map((i) => (
+              <button
+                key={i}
+                onClick={() => setSelState(i)}
+                onDragOver={() => setSelState(i)}
+                title={prog.main === i ? '任务启动时从这个状态开始' : `状态 ${i}`}
+                className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] ${
+                  activeState === i ? 'border-neon-cyan/50 bg-neon-cyan/10 text-neon-cyan' : 'border-white/10 text-slate-400 hover:border-neon-cyan/30'
+                }`}
+              >
+                {prog.main === i && <Badge tone="mint">主页</Badge>}
+                <span className="num text-slate-500">{i}</span>
+                <span>{prog.states[i].name || `状态 ${i}`}</span>
+                <span className="num text-slate-600">
+                  {prog.states[i].enter.length}+{prog.states[i].body.length}
+                </span>
+                {!!cur && cur.state === i && <span className="h-1.5 w-1.5 rounded-full bg-neon-mint" title="正在跑这个状态" />}
+              </button>
             ))}
           </div>
+
+          <StateCard
+            prog={prog}
+            i={activeState}
+            sel
+            open={open}
+            dropAt={dropAt}
+            cur={cur}
+            onSelect={() => setSelState(activeState)}
+            onDrop={onDrop}
+            onOver={setDropAt}
+            onToggleBlock={(at) => setOpen((o) => (o && o.state === at.state && o.seq === at.seq && o.index === at.index ? null : at))}
+            upd={upd}
+          />
         </Card>
       </div>
 

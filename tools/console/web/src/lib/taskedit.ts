@@ -82,7 +82,7 @@ export const OP_SPECS: OpSpec[] = [
     name: 'SET_MODE',
     label: '切换模式',
     group: '运动',
-    doc: '空闲=停车；两轮直给用 flags.bit0，左轮 p1、右轮 p2',
+    doc: '停车=停；角度环=角度+速度环（进障碍后的那两层）；循迹=三层串级（正常循迹）',
     fields: [
       { key: 'p0', label: '模式', kind: 'mode', lo: 0, hi: 4 },
       { key: 'p1', label: '左轮', kind: 'int', lo: -7200, hi: 7200, unit: '刻度', showIf: (b) => b.p0 === MODE.WHEELS },
@@ -144,13 +144,33 @@ export const COND_SPECS: CondSpec[] = [
 
 export const COND_BY_CODE = new Map<number, CondSpec>(COND_SPECS.map((c) => [c.cond, c]))
 
+/** 下拉里只留三种：停车 / 角度环 / 循迹。用户 m12856 定案「最终只有两种形态」——
+ *  正常循迹 = 三级 PID 串级，进障碍后的固定流程 = 角度环+速度环，再加一个"停车"保命。
+ *  值 2（旧两级：循迹环+速度环）与值 4（两轮直给）固件仍然认、老文件仍然解析执行，
+ *  但不再出现在下拉里：它们正是用户 m19122 说的"怎么会有这么多"。（老镜像里若真是这两个值，
+ *  下拉会临时补一条标着「（旧）」的项，不改动文件。） */
 export const MODE_OPTIONS: { value: number; label: string }[] = [
-  { value: MODE.IDLE, label: '空闲（停车）' },
+  { value: MODE.IDLE, label: '停车' },
   { value: MODE.GYRO, label: '角度环' },
-  { value: MODE.TRACE, label: '三环循迹' },
-  { value: MODE.TRACE_GYRO, label: '三级串级' },
-  { value: MODE.WHEELS, label: '两轮直给' },
+  { value: MODE.TRACE_GYRO, label: '循迹' },
 ]
+
+/** 不在下拉里的旧值 → 人话（解析老文件用；执行语义固件一行没改） */
+export const MODE_LEGACY: { value: number; label: string }[] = [
+  { value: MODE.TRACE, label: '（旧）循迹环+速度环' },
+  { value: MODE.WHEELS, label: '（旧）两轮直给' },
+]
+
+/** 模式值 → 人话：先查下拉，再查旧值，最后退回数字 */
+export function modeLabel(v: number): string {
+  return MODE_OPTIONS.find((m) => m.value === v)?.label ?? MODE_LEGACY.find((m) => m.value === v)?.label ?? `模式 ${v}`
+}
+
+/** 下拉要显示的项：三个标准模式；若当前值不在其中（老文件用 2/4）就临时补一条，别让选框空着 */
+export function modeChoices(cur: number): { value: number; label: string }[] {
+  if (MODE_OPTIONS.some((m) => m.value === cur)) return MODE_OPTIONS
+  return [...MODE_OPTIONS, ...MODE_LEGACY.filter((m) => m.value === cur)]
+}
 
 /** 该块默认长什么样（从块库拖进序列时用这个） */
 export function defaultsFor(op: number): TaskBlock {
@@ -158,7 +178,7 @@ export function defaultsFor(op: number): TaskBlock {
     case OP.SET_SPEED:
       return blk(OP.SET_SPEED, 6480)
     case OP.SET_MODE:
-      return blk(OP.SET_MODE, MODE.TRACE)
+      return blk(OP.SET_MODE, MODE.TRACE_GYRO)
     case OP.TURN_DEG:
       return blk(OP.TURN_DEG, 2000, -90, 10, NO_STATE, 1)
     case OP.ACTION:
@@ -187,7 +207,7 @@ export function describeBlock(b: TaskBlock, stateCount: number): string {
     case OP.SET_SPEED:
       return `速度 ${b.p0}`
     case OP.SET_MODE:
-      return b.p0 === MODE.WHEELS ? `两轮直给 左 ${b.p1} 右 ${b.p2}` : `模式 ${MODE_OPTIONS.find((m) => m.value === b.p0)?.label ?? b.p0}`
+      return b.p0 === MODE.WHEELS ? `两轮直给 左 ${b.p1} 右 ${b.p2}` : `模式 ${modeLabel(b.p0)}`
     case OP.TURN_DEG:
       return `${b.flags & 1 ? '相对' : '绝对'} ${b.p1}°±${(b.p2 / 10).toFixed(1)}° 最多 ${b.p0}ms`
     case OP.ACTION:
@@ -445,7 +465,7 @@ export function newTaskDef(id: number, name: string): TaskDef {
       states: [
         {
           name: '常态循迹',
-          enter: [blk(OP.SET_MODE, MODE.TRACE)],
+          enter: [blk(OP.SET_MODE, MODE.TRACE_GYRO)],
           body: [blk(OP.SET_SPEED, 6480), blk(OP.WAIT_COND, COND.CROSS, 0, 3000, 1), blk(OP.GOTO, 0)],
         },
         {

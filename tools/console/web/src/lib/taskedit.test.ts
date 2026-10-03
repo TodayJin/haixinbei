@@ -30,6 +30,8 @@ import {
   importTaskFile,
   insertBlock,
   loadTaskFile,
+  modeChoices,
+  modeLabel,
   moveBlock,
   nameBytes,
   newTaskDef,
@@ -94,11 +96,27 @@ describe('块库元数据', () => {
     }
   });
 
-  it('条件表与固件条件号 1..9 一一对应，模式表 5 项', () => {
+  it('条件表与固件条件号 1..9 一一对应，模式下拉只留 停车/角度环/循迹 三项', () => {
     expect(COND_SPECS.map((c) => c.cond)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(COND_SPECS[0].cond).toBe(COND.LINE_CENTER);
     expect(COND_SPECS[8].cond).toBe(COND.ALWAYS);
-    expect(MODE_OPTIONS.map((m) => m.value)).toEqual([MODE.IDLE, MODE.GYRO, MODE.TRACE, MODE.TRACE_GYRO, MODE.WHEELS]);
+    expect(MODE_OPTIONS.map((m) => m.value)).toEqual([MODE.IDLE, MODE.GYRO, MODE.TRACE_GYRO]);
+  });
+
+  it('老文件里的模式 2/4 仍能解析：下拉临时补一条带「（旧）」的项，摘要给得出人话', () => {
+    // 当前值在标准三项里 ⇒ 就三项，一件不多
+    expect(modeChoices(MODE.TRACE_GYRO).map((m) => m.value)).toEqual([MODE.IDLE, MODE.GYRO, MODE.TRACE_GYRO]);
+    // 老文件里的 2 / 4 ⇒ 补一条，排序仍在后面（不改动文件内容）
+    expect(modeChoices(MODE.TRACE).map((m) => m.value)).toEqual([MODE.IDLE, MODE.GYRO, MODE.TRACE_GYRO, MODE.TRACE]);
+    expect(modeChoices(MODE.TRACE).at(-1)?.label).toContain('（旧）');
+    expect(modeChoices(MODE.WHEELS).map((m) => m.value)).toEqual([MODE.IDLE, MODE.GYRO, MODE.TRACE_GYRO, MODE.WHEELS]);
+    // 人话：标准项说闭环形态，旧值说「（旧）」，未知值退回数字
+    expect(modeLabel(MODE.TRACE_GYRO)).toBe('循迹');
+    expect(modeLabel(MODE.GYRO)).toBe('角度环');
+    expect(modeLabel(MODE.TRACE)).toContain('（旧）');
+    expect(modeLabel(7)).toContain('7');
+    // 新拖进来的「切换模式」默认是循迹（三层串级）
+    expect(defaultsFor(OP.SET_MODE).p0).toBe(MODE.TRACE_GYRO);
   });
 
   it('拖拽 MIME 是自定义类型（免得拖到浏览器里变成开新标签）', () => {
