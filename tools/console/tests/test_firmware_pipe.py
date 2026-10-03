@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -44,9 +45,15 @@ FLAGS = ["-std=gnu11", "-O1", "-g", "-Wall", "-Wextra", "-Wno-unused-parameter",
          "-fsanitize=undefined", "-fsanitize-undefined-trap-on-error",
          "-DHOST_PIPE_REAL_SERVO", "-DHOST_PIPE_REAL_NVRAM"]
 
+# `App/Svc/task_store.c` / `task_prog.c` / `task_run.c` 是**真**的任务存储与解释器：
+# host_link.c 的任务帧（0x60..0x69）会调它们，所以它们必须在这一串里 —— 否则管道连链接
+# 都过不了（undefined reference to `TaskStore_*`/`TaskRun_*`）。用真的而不是替身，是为了让
+# 下面那组任务用例走真 Flash 语义（擦页/双字编程/目录页重排都经过 host_hal 的假 Flash）。
 SOURCES = ("firmware/test/pipe_hostlink.c", "firmware/App/Svc/host_link.c",
            "firmware/App/Svc/host_ext.c", "firmware/App/Bsp/servo.c",
            "firmware/App/Svc/nvram.c", "firmware/App/Svc/trace_cal.c",
+           "firmware/App/Svc/task_store.c", "firmware/App/Svc/task_prog.c",
+           "firmware/App/Svc/task_run.c",
            "firmware/test/stub/host_appstub.c", "firmware/test/stub/host_pipestub.c",
            "firmware/test/stub/host_hal.c", "firmware/test/stub/host_board.c",
            "firmware/test/stub/host_rtt.c")
@@ -122,9 +129,9 @@ def test_hello_from_real_firmware(pipe):
     assert h["version"] == "0.2.0"
     assert h["name"] == "quandi-car"
     assert h["telem_hz"] == 50
-    # 7 个能力位全开（protocol.py 的常量必须和固件 host_link.c 的 CAP_* 对齐）
+    # 8 个能力位全开（protocol.py 的常量必须和固件 host_link.c 的 CAP_* 对齐）
     assert h["caps"] == (pr.CAP_TELEM2 | pr.CAP_ACTIONS | pr.CAP_SERVO | pr.CAP_DRIVE
-                         | pr.CAP_CAL | pr.CAP_FLASH | pr.CAP_WATCHDOG)
+                         | pr.CAP_CAL | pr.CAP_FLASH | pr.CAP_WATCHDOG | pr.CAP_TASK)
     assert _first(frames, pr.T_TELEM2) is not None, "HELLO 之后应该有 64B 遥测在流"
 
 
@@ -334,3 +341,160 @@ def test_param_change_alone_does_not_touch_flash(pipe_exe, tmp_path):
     with open(flash, "rb") as fh:
         blob = fh.read()
     assert blob == b"\xFF" * 2048, "没点固化（也没到 1.5s 防抖）时 Flash 记录页被动了"
+
+
+# =====================================================================
+#  任务程序（T_TASK_* 0x60..0x69）：桥组帧 → 真固件 → 桥解回来
+# =====================================================================
+#
+# `firmware/test/t_hostlink.c` 那一半用的是**手写字节**（它连的是任务存储的替身），
+# 这里换真路径：镜像由上位机的编码器（`web/src/lib/task.ts`，经 tests/c/taskgen.c
+# 落地成 `fixtures/task.golden.json`）产出，帧由**桥自己的** `frame_task_*` 组出来，
+# 而车是**真** `host_link.c` + 真 `task_store.c`/`task_run.c`（配假 HAL 的假 Flash）。
+# 三边任意一处口径漂了，这一组就红。
+
+TASK_GOLDEN = os.path.join(HERE, "fixtures", "task.golden.json")
+
+
+@pytest.fixture(scope="module")
+def task_image() -> bytes:
+    """上位机编出来的一整个任务镜像。顺带验证 bridge 的 CRC16 与固件同口径。"""
+    with open(TASK_GOLDEN, "r", encoding="utf-8") as fh:
+        d = json.load(fh)
+    img = bytes.fromhex(d["hex"])
+    assert len(img) == d["len"], f"金样本长度对不上：{len(img)} vs {d['len']}"
+    assert pr.crc16_ccitt(img[12:]) == d["crc16"], \
+        f"bridge 的 CRC16 与金样本的 {d['crc16']:04X} 不一致（车上 COMMIT 会拒收）"
+    return img
+
+
+def _acks(frames) -> dict:
+    return {f.seq: pr.decode_ack(f.payload)["status"] for f in frames if f.type == pr.T_ACK}
+
+
+def _upload(img: bytes, tid: int = 0, seq0: int = 10):
+    """按桥的方式分片上传 + COMMIT，返回 (帧列表, PUT 的 seq 列表, COMMIT 的 seq)。"""
+    crc = pr.crc16_ccitt(img[12:])
+    seq = seq0
+    out, puts = [], []
+    for off in range(0, len(img), pr.TASK_PUT_MAX):
+        out.append(pr.frame_task_put(seq, tid, off, img[off:off + pr.TASK_PUT_MAX]))
+        puts.append(seq)
+        seq += 1
+    out.append(pr.frame_task_commit(seq, tid, len(img), crc, "直行两米"))
+    return out, puts, seq
+
+
+def test_task_upload_list_get_delete_round_trip(pipe, task_image):
+    """PUT 分片 → COMMIT → LIST → GET → DEL → LIST，一条链在一个进程里走完。
+
+    这里钉住三个**约定**（文档 §5）：目录用"一帧空载荷"收尾、读回用"一帧空数据"收尾、
+    两者成功都不回 ACK（ACK 只在写/删/跑这些动作上有）。
+    """
+    img = task_image
+    crc = pr.crc16_ccitt(img[12:])
+    up, puts, commit_seq = _upload(img)
+    frames = pipe(*up,
+                  pr.frame_task_list(50),
+                  pr.frame_task_get(51, 0),
+                  pr.frame_task_del(52, 0),
+                  pr.frame_task_list(53),
+                  pad=200)
+
+    ack = _acks(frames)
+    assert all(ack.get(s) == pr.ST_OK for s in puts), f"有的 PUT 没被 ST_OK 收下：{ack}"
+    assert ack.get(commit_seq) == pr.ST_OK, f"COMMIT 没成功：{ack}"
+    assert ack.get(52) == pr.ST_OK, f"DEL 没成功：{ack}"
+    assert 50 not in ack and 51 not in ack and 53 not in ack, \
+        f"LIST/GET 成功不该回 ACK（收尾帧本身就是应答）：{ack}"
+
+    items = [pr.decode_task_list_r(f.payload) for f in frames if f.type == pr.T_TASK_LIST_R]
+    assert len(items) == 3, f"两次 LIST 该回 3 帧（条目 + 收尾 + 收尾），实际 {len(items)}：{items}"
+    assert items[1] is None and items[2] is None, f"目录没有用空载荷收尾：{items}"
+    assert items[0] is not None, f"第一次 LIST 没回条目：{items}"
+    assert (items[0]["id"], items[0]["len"], items[0]["crc"], items[0]["flags"]) == \
+        (0, len(img), crc, 0), items[0]
+    assert items[0]["name"] == "直行两米", f"名字没存住：{items[0]['name']!r}"
+
+    got = bytearray()
+    end = None
+    for f in frames:
+        if f.type != pr.T_TASK_DATA:
+            continue
+        tid, off, data = pr.decode_task_data(f.payload)
+        assert tid == 0, f"回读的槽号不对：{tid}"
+        if not data:
+            end = off
+            break
+        assert off == len(got), f"回读分片顺序不对：off={off} 期望 {len(got)}"
+        got += data
+    assert end == len(img), f"回读没收尾（end={end}）"
+    assert bytes(got) == img, "GET 回来的镜像与上位机编的不是同一串字节"
+
+
+def test_task_run_status_stop(pipe, task_image):
+    """RUN 之后必须有 STATUS 说在跑，STOP 之后必须说停了（状态变化即推）。"""
+    up, _, commit_seq = _upload(task_image)
+    frames = pipe(*up, pr.frame_task_run(60, 0), pr.frame_task_stop(61), pad=200)
+
+    ack = _acks(frames)
+    assert ack.get(commit_seq) == pr.ST_OK, ack
+    assert ack.get(60) == pr.ST_OK, f"RUN 被拒了：{ack}"
+    assert ack.get(61) == pr.ST_OK, f"STOP 被拒了：{ack}"
+
+    st = [pr.decode_task_status(f.payload) for f in frames if f.type == pr.T_TASK_STATUS]
+    assert st, "任务状态一帧都没推"
+    assert st[0]["id"] == 0xFFFF and st[0]["state"] == 0xFF, \
+        f"开机第一帧 STATUS 应该是「没载程序」：{st[0]}"
+    running = [s for s in st if s["running"]]
+    assert running, f"RUN 之后没有一帧 STATUS 说在跑：{st}"
+    assert running[0]["id"] == 0 and running[0]["state"] == 0, \
+        f"在跑的应该是槽 0 的主状态：{running[0]}"
+    assert st[-1]["running"] is False, f"STOP 之后最后一帧 STATUS 还在跑：{st[-1]}"
+
+
+def test_task_frame_error_paths_match_the_bridge(pipe, task_image):
+    """坏槽号 / 空槽 / 没收全 / CRC 不对 / 名字超长 / 载荷太短 —— 每条都得是桥认得的状态码。"""
+    img = task_image
+    crc = pr.crc16_ccitt(img[12:])
+    up, _, _ = _upload(img)
+    bad_name = (pr.pack_u16(0) + pr.pack_u16(len(img)) + pr.pack_u16(crc)
+                + bytes([31]) + b"a" * 31)                       # name_len 31 > 30
+    frames = pipe(up[0],                                           # 只发第一片，故意不收全
+                  pr.frame_task_commit(71, 0, len(img), crc),
+                  pr.frame_task_commit(72, 0, 120, pr.crc16_ccitt(img[12:120]) ^ 0xFFFF),
+                  pr.build_frame(pr.T_TASK_COMMIT, 73, bad_name),
+                  pr.frame_task_put(74, 99, 0, b"\x00" * 8),     # 槽号越界
+                  pr.build_frame(pr.T_TASK_PUT, 75, pr.pack_u16(0) + pr.pack_u16(0)),
+                  pr.frame_task_get(76, 3),                      # 空槽
+                  pr.frame_task_get(77, 99),                     # 槽号越界
+                  pr.frame_task_run(78, 3),                      # 空槽
+                  pr.frame_task_del(79, 3),                      # 空槽：幂等
+                  pr.frame_task_list(80),
+                  pad=200)
+
+    ack = _acks(frames)
+    assert ack.get(71) == pr.ST_BAD_PARAM, f"没上传完就 COMMIT 该是 BAD_PARAM：{ack}"
+    assert ack.get(72) == pr.ST_BAD_PARAM, f"CRC 不对该是 BAD_PARAM：{ack}"
+    assert ack.get(73) == pr.ST_BAD_PARAM, f"名字超长该是 BAD_PARAM：{ack}"
+    assert ack.get(74) == pr.ST_OUT_OF_RANGE, f"槽号越界该是 OUT_OF_RANGE：{ack}"
+    assert ack.get(75) == pr.ST_BAD_PARAM, f"PUT 载荷不足 5 字节该是 BAD_PARAM：{ack}"
+    assert ack.get(76) == pr.ST_NOT_READY, f"空槽 GET 该是 NOT_READY：{ack}"
+    assert ack.get(77) == pr.ST_OUT_OF_RANGE, f"GET 槽号越界该是 OUT_OF_RANGE：{ack}"
+    assert ack.get(78) == pr.ST_NOT_READY, f"空槽 RUN 该是 NOT_READY：{ack}"
+    assert ack.get(79) == pr.ST_OK, f"空槽 DEL 是幂等 ST_OK：{ack}"
+    items = [pr.decode_task_list_r(f.payload) for f in frames if f.type == pr.T_TASK_LIST_R]
+    assert items and all(i is None for i in items), \
+        f"只发了一片、没 COMMIT 成功，目录必须还是空的：{items}"
+
+
+def test_task_run_refused_while_host_is_driving(pipe, task_image):
+    """上位机正在驾驶时不许起任务（与 T_DRIVE 同一条铁律），且要在链路里说清楚。"""
+    up, _, _ = _upload(task_image)
+    frames = pipe(*up, pr.frame_drive(90, 1, 300, -300), pr.frame_task_run(91, 0), pad=200)
+
+    ack = _acks(frames)
+    assert ack.get(91) == pr.ST_BUSY, f"边驾驶边起任务该是 BUSY：{ack}"
+    texts = [pr.decode_text(f.payload) for f in frames if f.type == pr.T_TEXT]
+    assert any("host driving" in t for t in texts), \
+        f"司机占着车时起任务要在链路上说明白（T_TEXT）：{texts}"
