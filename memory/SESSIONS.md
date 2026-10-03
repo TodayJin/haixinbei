@@ -14,6 +14,29 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：任务编排模块端到端打通并交付：车上存储 firmware/App/Svc/task_store.c（页 59 目录 + 页 60..62 程序区 6144 B、最多 8 条、单条 ≤2048 B）、解释器 task_run.c、协议帧 0x60..0x69 + 能力位 bit7、桥端点 /api/tasks*（真桥 tools/console/bridge/server.py + 假后端 web/mock/server.mjs 同契约）、页面 #/tasks（含「开机自启」开关 → COMMIT flags bit0）。验证：pytest 97 passed、npx tsc exit 0、vitest 16 文件/155 passed、pwsh -File firmware/test/run_tests.ps1 通过 13/失败 0（t_hostlink 272 项）、make -B -j8 后 text 114216/data 364/bss 26944、bin 114588 B（离 118K 余 6244 B）、tools/check_static.ps1 扫 53 文件 0 error；另外用 out/_task_flags_http.py 对 8793 的真 HTTP 桥跑 9 项检查（flags=1 落目录、flags=0 复位、回读逐字节、坏 CRC 被拒、删空目录）全绿。
+未完成：还没上车对拍（真板 + 真 Flash 页 59..62）；firmware/App/Svc/renwu.c 只留作参考、尚未删除。
+下一步：上板验证：烧写一个任务 → 掉电重启看是否按 TASK_STORE_FLAG_AUTO 自启；顺带用真车确认 0x61/0x65/0x69 的回帧节奏在 115200 下不掉帧。
+
+## 2026-10-03
+完成：踩坑记录：改了 tools/console 的 Python 桥或 web/mock/server.mjs 之后必须重启那个进程，否则测试/页面用的还是旧代码（这次 vitest 先红一次，就是因为 8770 上跑着 14:49 起的旧 mock；桥 8793 同理，重启后 flags 往返立刻全绿）。固定跑法：`node mock/server.mjs`（workdir tools/console/web，8770）与 `python -m bridge.main --sim --no-browser --port 8793`（workdir tools/console）。
+下一步：无需后续动作，仅作下次改动时的提醒。
+
+## 2026-10-03
+完成：链路层任务帧 T_TASK_*（0x60..0x69）+ T_HELLO 能力位 bit7 HOST_CAP_TASK 落盘并提交 90a1856：host_link.c 的 8 个 case（LIST/PUT/COMMIT/GET/DEL/RUN/STOP）、pack_task_status、task_tx_poll/task_status_poll 在 host_link_poll 末尾每拍推进一帧；新增 firmware/test/stub/host_taskstub.c 与 t_hostlink.c 24)..32) 共 272 项检查 0 失败。随后提交 9eaccbe：tools/console/tests/test_firmware_pipe.py 的 SOURCES 补真 task_store.c/task_prog.c/task_run.c（不补则整条管道 exe 链接失败、11 个既有用例全 ERROR —— 这个回归是 90a1856 自己造成的），HELLO 能力位断言补 CAP_TASK，并新增 4 条跨语言用例（上传/目录/读回/删除往返、RUN/STOP/STATUS、错误码、驾驶中拒绝起任务），镜像用上位机编码器的金样本 fixtures/task.golden.json、帧用桥自己的 frame_task_*。
+未完成：真车只读链路仍缺 J-Link 20 脚排针 pin5/pin17 到 U12 第 5/6 脚的两根线（待硬件）；上位机 Imu.tsx 的能力位图例只列到 bit6，漏了 bit7 任务。
+下一步：把「开机自启」打通：给 COMMIT 加一个 flags 字节（固件 host_link.c 的 T_TASK_COMMIT、bridge/protocol.py 的 payload_task_commit、bridge/state.py、web/src/lib/taskapi.ts 四处一起改），否则 TASK_STORE_FLAG_AUTO 永远置不上。
+
+## 2026-10-03
+完成：文档 docs/任务编程.md 按实现口径重写并提交：§4 存储（8 条记录 + 页 59 目录 + 页 60..62 程序区 + 先擦目录页语义 + bin 114572B/余 6260B）、§5 帧表（每帧精确载荷 + 空帧收尾/GET 不回 ACK/每拍一帧的理由）、§7 落地顺序、§8.2 证据与待办。先前量出的「118K 只剩 8 字节余量」是树里混着旧 .o 的假象，整份重建后 text 114200/data 364/bss 26944、bin 114572B ⇒ 离 118K 余 6260B。另实测 -Os 备选（text 102368，省约 18KB）记录在案但没有采纳。验证：make -C firmware -j8 exit 0；firmware/test/run_tests.ps1 通过 13/失败 0；tools/console/tests 全量 pytest 94 passed；tools/check_static.ps1 扫描 53 文件 0 error；tools/check_warnings.ps1 待处理告警 0。
+未完成：TASK_STORE_FLAG_AUTO 没有下发通路；main_app.c:31 的 include 注释仍写「3 个槽位（页 60/61/62）」，与现在的 8 槽 + 页 59 目录不符（父代理文件的注释漂移）。
+
+## 2026-10-03
+完成：固件侧任务存储落地并验证完：`firmware/App/Svc/task_store.c/h`（页 59 目录 + 页 60..62 程序区、8 条记录、CRC16、运动中拒写、手写 FLASH->CR 擦页、擦后复验 0xFFFFFFFF、写后 memcmp 回读）+ `firmware/test/t_taskstore.c`（532 项检查 0 失败，13 节）+ main_app 摘旧 renwu 与无条件 TaskRun_Tick + renwu.c 废弃注释 + docs/任务编程.md §7/§8/§8.2 更新。验证：`pwsh -File firmware/test/run_tests.ps1` = 通过 13 / 失败 0；`make -B -j8`（firmware/）= exit 0，text 114200 / data 364 / bss 26944，bin 114572B（离 118K 余 6260B）；6 项变异（不发出擦除 STRT、Commit CRC 恒真、扫描镜像 CRC 恒真、扫描 Validate 恒真、暂存不够放行、拒写判据全失效）全部被咬住，源码 SHA256 还原为 E0C7D12E…；`tools/check_static.ps1` 扫 53 文件 0 error（task_store.c 零告警）。
+未完成：host_link 侧的 T_TASK_* 帧与 t_hostlink/host_taskstub 是并发写者的产物（本会话只改了其中一行坏注释），未提交；桥 tools/console 的 /api/tasks* 端点、pipe_hostlink 对拍、COMMIT 的 flags 字节（开机自启下发通路）都还没做。
+下一步：把本批固件侧结果回报父代理，并让用户裁量是否清理 DECISIONS.md 里算错地址的旧页分配条目。
+
+## 2026-10-03
 完成：#/tasks 任务/状态机编辑器整条落地：web/src/lib/taskedit.ts（块库 10 种 + 条件 9 种、拖拽插入/移动/跨状态、状态增删复制与跳转改道、名字按 32 字节截断、localStorage hxb.tasks.v1 读写、compileInfo 算 len/CRC16(覆盖 [12,len))/占用%)、web/src/pages/Tasks.tsx（三栏：任务列表 / 状态机卡片 / 块库；编译与烧写卡含红错黄警、烧写后回读逐字节比对、开始-停车-500ms 运行监视）、web/src/lib/taskapi.ts（/api/tasks* 客户端，404/501 或文案匹配不支持时切提示态）、接线 router.ts(PageId+PAGES 10 页)/App.tsx/Shell.tsx 图标 Workflow/render.test.tsx/ssrPreview.test.tsx。另建反向对拍链 tests/c/taskcheck.c + taskentry.ts + emit_tasks.mjs + tests/test_task_firmware_e2e.py（8 项）：上位机 encodeTask 编的镜像交给真 firmware/App/Svc/task_prog.c 校验并逐字段比对。mock/server.mjs 按 API.md §3.6 实现了全部 /api/tasks* 端点（内存假 Flash，commit 校验 magic/版本/状态数/CRC）。验证：npx tsc --noEmit 干净；npm test 16 文件 155 passed（含 contract.test.ts 里一条走真 HTTP 的烧写→回读→运行→错 CRC 必须被拦→删除闭环）；pytest tools/console/tests -q 77 passed；firmware/test/run_tests.ps1 12/12；npm run build 干净 dist/assets/index-B3ScAoku.js 335.35 kB(gzip 115.55) + index-WB_aXEht.css 36.92 kB；SSR out/console/ssr/tasks.html 含 状态机/块库/编译与烧写/任务列表/data-dropline×11，无 NaN。
 未完成：真桥（tools/console/bridge/server.py）还没有 /api/tasks* 端点，页面在真桥上是提示态；固件还没有 T_TASK_* 帧（0x60–0x69）与 task_store.c 页 60..62 存储。
 下一步：父代理按 API.md §3.6 在桥里转发 /api/tasks*（T_TASK_GET/PUT/COMMIT/RUN/STOP/STATUS），并做 App/Svc/task_store.c 存页 60..62。
@@ -1140,29 +1163,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：目标机 `cai` 离线；无法验证 SSH 登录
 下一步：等 `cai` 上线后，先 `& "C:\Program Files\Tailscale\tailscale.exe" status` 确认 online，再按用户给的用户名/密钥连（必要时加进 ~/.ssh/config）
 
-## 2026-09-15
-完成：讲了 INA226 接线，并**纠正两处会画错板的错误**（已同步改进文档）：① 封装 —— 立创页把 INA226AIDGSR 标成 VSSOP-8 是错的，TI 的 DGS 实际是 **10 脚 VSSOP**；正确引脚：1=A1、2=A0、3=ALERT(开漏)、4=SDA、5=SCL、6=VS(2.7–5.5V)、7=GND、8=VBUS(0–36V)、9=IN−、10=IN+。② 分流阻值 —— 满量程 ±81.92mV，`Rs ≤ 0.08192/Imax`；整机峰值按 ~10A 估，**由 10mΩ 改为 5mΩ**。接法：高侧，12V+ →[IN+]、Rs、[IN−]→负载，VBUS 接负载侧(IN−)，VS=3V3，SCL/SDA=PB8/PB9(4.7k↑)，ALERT=PB5(10k↑)，A0/A1→GND=地址 0x40；**IN± 必须四线 Kelvin 单独取样**，不能与大电流铜皮共用。
-未完成：驱动最终选型仍待拍板
-下一步：用户继续画图时可帮着核 INA226 校准寄存器/分流取值，或出布局分区草图
-
-## 2026-09-15
-完成：讲了 AT8236 的接法与 ISEN（未拍板驱动的科普 + 本项目约定）：引脚 1 GND / 2 IN1 / 3 IN2 / 4 VREF / 5 VM / 6 OUT1 / 7 ISEN / 8 OUT2，EPAD 接 GND 铺铜散热；IN1/IN2 两线控制（1/0 正转、0/1 反转、1/1 刹车、0/0 滑行），PWM 直接打输入；两颗做双路，本项目映射 PC6/PC7=电机A、PC8/PC9=电机B。**ISEN 是低端电流采样脚**：接 R_ISEN 到 GND 得 V=I×R_ISEN，既可用于测电流，也配合 VREF 做堵转限流（I_limit≈VREF/(R_ISEN×G)）。**本项目约定：既然电流检测只做 12V 主电源，每路电机 ISEN 直接接 GND（不设限流）**；VREF 不是供电（网上有文章写错），不用限流时接 GND/固定电平，别悬空。另发现**规格分歧**：中科微原厂 AT8236 标 5.5–30V、6A 峰值/4A 连续，而 MSKSEMI 的 AT8236-MS 立创页写 2A 连续/3.6A 峰值（更像 AT8870）—— 选型/限流时要以实际拿到的型号 datasheet 为准。
-未完成：驱动最终选型仍待拍板（TB6612 / 2×AT8236 / 2×RZ7899 / DRV8412）
-下一步：用户定驱动后改文档第3节+BOM+接口，并在接口表里写明 ISEN/VREF 处理
-
-## 2026-09-15
-完成：**纠正**：上一轮引用立创商品页把 RZ7899-MS 写成「单路 6A 持续」是错的。核实后：RZ7899-MS 为无锡睿智微电子单通道双向驱动，**实际≈3A 等级**、3.0–25V、SOP-8 **无散热焊盘**，6A 只能是峰值/宣传值。结论修正为：两颗做双路时 **AT8236-MS（ESOP-8 带散热焊盘，2A/3.6A）比 RZ7899 更可信**；TB6612FNG 仍是最省事的单芯片双路。
-未完成：驱动最终选型仍待用户拍板
-下一步：用户选定后改文档第 3 节/BOM/接口
-
-## 2026-09-15
-完成：因用户嫌 DRV8412 贵，调研便宜双路驱动替代并给出候选（未拍板）：TB6612FNG（双路 1.2A/3.2A，~¥4）、RZ7899-MS ×2（单路 6A，~¥1–2/颗）、AT8236-MS ×2（单路 2A/3.6A，~¥1–2/颗）；已排除 SS8833T(1.0A 太小)、L298N(发热)。确认换驱动不改变现有引脚表。
-未完成：驱动最终选型待用户拍板，文档第 3/BOM/接口仍是 DRV8412 版本
-下一步：用户选好后把文档 DRV8412 段 + BOM + 接口定义一并改掉
-
-## 2026-09-14
-完成：复核用户的 12V→7.4V/5V 电源原理图。识别芯片为 **SP1N28STER（芯洲 SCT）**：Vin 3.8–36V、**5A 连续**、同步降压(45mΩ/20mΩ)、**Vfb=0.8V**、ESOP-8、频率可编程。核对：U8 5V 分压(51K+1.5K)/10K = 5.0V ✅；**U7 7.4V 分压 27K/8.2K 只有 3.4V ❌**，建议固定 68K/8.2K(=7.43V) 或 82K/10K。另指出：RT/CLK 频率电阻需确认、D3 SS54 对同步 buck 多余、C23 标 47pF 疑为 47µF 笔误、ESOP-8 散热焊盘要铺铜+过孔。
-未完成：用户电源图未改（U7 分压仍为 3.4V）；电源文件不在仓库
-下一步：等用户改完电源图再核；或出布局分区草图
-
-> 更早的会话条目已归档到 170 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 175 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。

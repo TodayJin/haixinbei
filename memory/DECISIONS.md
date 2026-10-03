@@ -12,6 +12,61 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-03 — COMMIT 帧（T_TASK_COMMIT 0x63）载荷冻结为 u16 id + u16 len + u16 crc + u8 flags，可选再跟 u8 name_len + name（len==6 只认前三者、len==7 只带 flags、len>=8 带名字）
+选择：COMMIT 帧（T_TASK_COMMIT 0x63）载荷冻结为 u16 id + u16 len + u16 crc + u8 flags，可选再跟 u8 name_len + name（len==6 只认前三者、len==7 只带 flags、len>=8 带名字）
+放弃：否决「flags 放在名字之后」——任务帧是本次新加的，没有已部署的旧固件要兼容，干净布局更可读；旧布局（name_len 在 p[6]）在新固件里会被当 flags 读、随后因 name_len 越界回 ST_BAD_PARAM，不会静默写错
+因为：TASK_STORE_FLAG_AUTO（开机自启）早就在固件里，但 COMMIT 没有 flags 字节 ⇒ 上位机永远打不开它；加这一字节要固件 host_link.c + bridge/{protocol,state,server}.py + sim.py + taskapi.ts + Tasks.tsx + mock 一起改
+
+## 2026-10-03 — TASK_PUT 的单帧数据上限按协议取 124 B（= MAX_PAYLOAD(128) − 4），页面按 120 B 分片
+选择：TASK_PUT 的单帧数据上限按协议取 124 B（= MAX_PAYLOAD(128) − 4），页面按 120 B 分片
+放弃：文档原来写的「hex ≤ 240 字符 = 120 B」当成协议上限——那是页面分片尺寸，桥侧不拦截 120
+因为：bridge/protocol.py 的 TASK_PUT_MAX = MAX_PAYLOAD − 4 = 124；把页面分片尺寸写成协议上限会让别的前端照抄成硬限制
+
+## 2026-10-03 — 任务帧的目录回读（LIST_R）用「一帧空载荷」收尾、程序读回（DATA）用「一帧空数据」收尾，且 GET/LIST 成功都不回 ACK
+选择：任务帧的目录回读（LIST_R）用「一帧空载荷」收尾、程序读回（DATA）用「一帧空数据」收尾，且 GET/LIST 成功都不回 ACK
+放弃：另加一个 has_more 标志位 —— 要改帧语法且老桥不认
+因为：§5 的帧语法允许 n=0，但文档没有「还有更多」标志位；桥必须要一个无歧义的结束标志，而 ACK 会被误当成数据帧到达
+
+## 2026-10-03 — 任务帧回包每拍最多一帧、DATA 每帧 64B
+选择：任务帧回包每拍最多一帧、DATA 每帧 64B
+放弃：收到请求就一次性把整份镜像发完
+因为：board_dl_send() 是同步阻塞的（64B 数据帧 ≈6.5ms @115200，与一帧 T_TELEM2 同量级）；若在 handle_frame 里连发，一次 GET 2008B ≈32 帧 ≈200ms 会把主循环按住，遥测断流、OLED 不刷，还可能被 500ms 驾驶看门狗误判成掉线
+
+## 2026-10-03 — COMMIT 的 flags 只能是 0（TASK_STORE_FLAG_AUTO 目前没有下发通路）
+选择：COMMIT 的 flags 只能是 0（TASK_STORE_FLAG_AUTO 目前没有下发通路）
+放弃：在桥里偷偷默认置 AUTO —— 那会让每次烧写都变成自启，无法取消
+因为：docs/API.md §3.6 的 commit 只带 {id,len,crc,name}，前端 taskapi.ts 也没发 flags；要做开机自启必须两边一起给 COMMIT 加一个 flags 字节
+
+## 2026-10-03 — 上位机↔真固件对拍管道（tools/console/tests/test_firmware_pipe.py）链**真** task_store.c/task_prog.c/task_run.c，不用 host_taskstub.c 替身
+选择：上位机↔真固件对拍管道（tools/console/tests/test_firmware_pipe.py）链**真** task_store.c/task_prog.c/task_run.c，不用 host_taskstub.c 替身
+放弃：链 firmware/test/stub/host_taskstub.c（那是 t_hostlink 的替身，只验协议不验 Flash）
+因为：host_link.c 的任务帧要调这些模块，缺了整条管道链接失败；用真的还能顺带让任务用例走真 Flash 语义（擦页/双字编程/目录页重排都过 host_hal 的假 Flash）
+
+## 2026-10-03 — firmware/STM32G474RBTx_FLASH.ld 的 FLASH 保持 118K（0x08000000..0x0801D7FF）
+选择：firmware/STM32G474RBTx_FLASH.ld 的 FLASH 保持 118K（0x08000000..0x0801D7FF）
+放弃：126K（原值）/120K —— 都覆盖到任务存储页
+因为：页 59（0x0801D800）是任务目录页、页 60..62 是程序区、页 63 是 nvram，全归运行期自己擦写；改成 120K/126K 会让链接器把代码或常量静默摆进这些页，而 TaskStore_Commit 每次写任务都擦它们
+
+## 2026-10-03 — 任务存储定为「页 59 目录 + 页 60..62 程序区」：目录页 = 8B 头（magic 0x5453/ver 2/count/seq）+ 8×40B 记录（id/off/len/crc16/flags/name_len/name[30]），程序区 6144B，最多 8 条、单条 ≤2048B（= 解释器 RAM 上限）；`.ld` FLASH 收到 118K，页 63 仍是 nvram。
+选择：任务存储定为「页 59 目录 + 页 60..62 程序区」：目录页 = 8B 头（magic 0x5453/ver 2/count/seq）+ 8×40B 记录（id/off/len/crc16/flags/name_len/name[30]），程序区 6144B，最多 8 条、单条 ≤2048B（= 解释器 RAM 上限）；`.ld` FLASH 收到 118K，页 63 仍是 nvram。
+放弃：本会话早先写过的「一槽一页 × 3 槽（页 60..62）、40B 记录头放页首」已作废并重写 —— 单条上限只有 2008B、槽间要各自擦页；另外否决把 `.ld` 改回 120K/126K 腾地方。
+因为：并发写者已把 host_link 的 T_TASK_* 帧与上位机契约写成按目录页寻址，而且可视化编辑器要 8 个任务；`.ld` 保持 118K 是因为 TaskStore_Commit 每次写任务都要擦页 59..62，允许链接器把代码摆进去等于静默擦掉正在跑的代码/`.data` 初值。
+
+## 2026-10-03 — TaskStore_Commit 的落盘顺序 = 校验（槽号/长度/暂存覆盖 → 运动中拒写 → CRC16 → TaskProg_Validate → 重排布局）→ 擦目录页与程序区 3 页 → 逐页复验页首字回到 0xFFFFFFFF → 编程 → memcmp 回读 → 才更新缓存。
+选择：TaskStore_Commit 的落盘顺序 = 校验（槽号/长度/暂存覆盖 → 运动中拒写 → CRC16 → TaskProg_Validate → 重排布局）→ 擦目录页与程序区 3 页 → 逐页复验页首字回到 0xFFFFFFFF → 编程 → memcmp 回读 → 才更新缓存。
+放弃：先写数据再写目录、或用 HAL_FLASHEx_Erase() 擦页。
+因为：本板 HAL_FLASHEx_Erase() 是静默失败的（nvram.c 早就因此手写 FLASH->CR 序列），而擦完不复验、写完不回读的话，掉电/失败会留下一个「CRC 对但内容半新半旧」的槽。
+
+## 2026-10-03 — main_app 主循环里旧 renwu() 的调用整段摘掉，只保留「清 renwu_flag + 需要时 renwu_stop()」；renwu.c 保留不删，文件头加废弃注释。
+选择：main_app 主循环里旧 renwu() 的调用整段摘掉，只保留「清 renwu_flag + 需要时 renwu_stop()」；renwu.c 保留不删，文件头加废弃注释。
+放弃：保留「renwu_flag == 0U 时才 TaskRun_Tick()」的互斥写法；也否决了直接把 renwu.c 删掉。
+因为：host_link 把 renwu_flag != 0 当成「车在动」的判据（COMMIT/DEL 回 ST_BUSY），只删调用不清标志会让一个老式 CMD_START_A 把任务存储区永久锁成 BUSY；renwu.c 里的 RW(v) 刻度换算与 11 个障碍的旧板时序仍然有用。
+
+## 2026-10-03 — 坏记录的测试必须包含「镜像完好、但目录里那条记录自己的 crc16 被写坏」这一形态（改 dir_ent_w(1U)[6]），不能只靠「翻镜像一位」。
+选择：坏记录的测试必须包含「镜像完好、但目录里那条记录自己的 crc16 被写坏」这一形态（改 dir_ent_w(1U)[6]），不能只靠「翻镜像一位」。
+放弃：只用「镜像翻位」用例覆盖扫描期校验。
+因为：记录头 crc16 与镜像自带 crc16 盖的是同一段 [12,len)，镜像一坏两层同时红 ⇒ 把「扫描时镜像 CRC 校验」变异成恒真时测试仍然全绿（实测存活）；而记录头字段不在镜像 CRC 覆盖内，只有这条用例能单独咬住它。同理镜像头（magic/ver/n_states/main_state）不在任何 CRC 覆盖内，只有 TaskProg_Validate 挡得住。
+
 ## 2026-10-03 — 任务程序格式以父代理的 A 格式（web/src/lib/task.ts：magic 0x4B54、ver 1、12B 头 + 8B 状态表 + 10B 块、CRC16-CCITT、帧由固件 task_prog.c 解析）为唯一标准
 选择：任务程序格式以父代理的 A 格式（web/src/lib/task.ts：magic 0x4B54、ver 1、12B 头 + 8B 状态表 + 10B 块、CRC16-CCITT、帧由固件 task_prog.c 解析）为唯一标准
 放弃：我先前自创的 B 格式（tools/console/bridge/tasks.py + tasksim.py + docs/任务程序格式.md，magic 0x31545848）：整包移到 out/_archive_taskfmt_b/ 归档不删

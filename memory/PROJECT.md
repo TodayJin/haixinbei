@@ -26,8 +26,8 @@
 界面取证（要连着板）：`out/_lcd.ps1 -Png <文件>`（抓屏 + page-major 解包；它现在会先删旧文件——之前不删导致 savebin 失败时拿旧数据报假结论）、`out/_wiz.ps1`（标定向导按键注入）、`docs/灰度标定与检验.md` + `out/_gray.ps1`。
 
 **离线（不接板）检查**：
-- 主机侧单元测试：`pwsh -File firmware/test/run_tests.ps1`（可 `-Only <正则>`）。测试编 PC 上跑，带 `-fsanitize=undefined -fsanitize-undefined-trap-on-error`（MinGW 没有 asan/ubsan 运行库，trap 模式不需要）。当前 **9 个测试**（t_jy61p / t_pid / t_tracing / t_hostlink / t_speedctrl / t_gyrotest / t_motion / t_bushealth / t_tracecal）合计约 12.3 万项检查，脚本汇总“通过 9 / 失败 0”。新测试的源码依赖写在脚本的 `$deps` 表里。
-- 静态分析：`pwsh -File tools/check_static.ps1`（逐文件 `-fanalyzer -Wall`，必须 `-c -o`，`-fsyntax-only` 时分析器不跑）。基线：49 文件、只有 8 处故意 `while(1)` 的 `-Wanalyzer-infinite-loop`、0 error。
+- 主机侧单元测试：`pwsh -File firmware/test/run_tests.ps1`（可 `-Only <正则>`）。测试编 PC 上跑，带 `-fsanitize=undefined -fsanitize-undefined-trap-on-error`（MinGW 没有 asan/ubsan 运行库，trap 模式不需要）。当前 **13 个测试**（t_jy61p / t_pid / t_tracing / t_hostlink / t_speedctrl / t_gyrotest / t_motion / t_bushealth / t_tracecal / t_hostext / t_nvram / t_task / t_taskstore）合计约 12.5 万项检查，脚本汇总“通过 13 / 失败 0”。新测试的源码依赖写在脚本的 `$deps` 表里。**它的输出是 GBK**，管道里抓中文会乱码，判定只认“通过 N / 失败 0”。
+- 静态分析：`pwsh -File tools/check_static.ps1`（逐文件 `-fanalyzer -Wall`，必须 `-c -o`，`-fsyntax-only` 时分析器不跑）。基线：53 文件、4 个文件有告警（全是故意 `while(1)` 的 `-Wanalyzer-infinite-loop`）、0 error。
 - 更严告警集：`pwsh -File tools/check_warnings.ps1 [-Out 文件] [-List]`（比正式构建多 `-Wextra -Wswitch-enum -Wshadow …`，43 个文件；白名单 28 条框架必需告警，待处理必须为 0；**它靠“.o 是否真的生成”判断编译是否真跑了**，第一版只拿纯文件名 ⇒ 假“0 告警”）。
 - 比赛流程状态机检查：`$env:PYTHONIOENCODING='utf-8'; python tools/renwu_states.py [-Strict] [-Out out/renwu_states.txt]`（纯文本画 `renwu.c` 的 `black_num` 状态图；当前 21 可达、死分支 8/12/14/15/16/20/22，未改）。
 
@@ -51,7 +51,7 @@
   - **上位机链路已实现并编译通过**：`App/Svc/host_link.c` + `board.c` 的 LPUART1（PC0=RX/PC1=TX，**AF8** 查手册确认）+ 512B 环形缓冲 + `LPUART1_IRQHandler`，主循环 `host_link_poll()`。
   - **未做**：参数写 Flash（回未就绪）、编码器测速（遥测 v_l/v_r 恒 0）、陀螺在线标志、以及**把 `pid.c`/`gyro_control.c` 的 `#define` 换成 `host_param_get()` —— 在这之前改参数不影响控制律**。验证步骤见协议文档 §10。
 - `tools/console/` — **上位机（新，唯一的一套；旧 Qt 上位机 `tools/host/` 已于 2026-10-03 删除，需要时从 git 提交 `5051a4d` 取回）**：
-  - `bridge/` = 纯标准库 HTTP/SSE 桥（`protocol.py` 编解码、`params.py` 参数镜像 43 项、`state.py` 链路状态、`sim.py` 仿真车、`server.py` 路由、`link.py` 串口、`main.py` 入口）；`web/` = React+TS+Vite+Tailwind+uPlot 前端（`web/dist/` 是构建产物，**要进版本库**）；`docs/API.md` = HTTP/SSE 契约（SSE 的 `data` 就是载荷本体）；`tests/` = 47 项 pytest。
+  - `bridge/` = 纯标准库 HTTP/SSE 桥（`protocol.py` 编解码、`params.py` 参数镜像 43 项、`state.py` 链路状态、`sim.py` 仿真车、`server.py` 路由、`link.py` 串口、`main.py` 入口）；`web/` = React+TS+Vite+Tailwind+uPlot 前端（`web/dist/` 是构建产物，**要进版本库**）；`docs/API.md` = HTTP/SSE 契约（SSE 的 `data` 就是载荷本体）；`tests/` = 97 项 pytest（含 `test_task.py`：帧层 / 仿真车 / 桥端点三层 + 真 HTTP 闭环；另有 `test_firmware_pipe.py` 把真固件编成管道进程做字节对拍）。前端测试走 `npx vitest run`（16 文件 / 155 项，需要 `node mock/server.mjs` 在 8770）。
   - 跑：`python -m bridge.main --sim`（无硬件）/ `--serial COM<n>`（真车）；前端改动后 `npm run build`（在 `web/` 下）。
 - `docs/上位机通信协议.md` — 通信协议（帧/CRC16/32B 遥测/参数表/**§8.1 固件实现状态**/**§10 硬件验证步骤**）。位姿帧 T_POSE 已随地图删除。
 - `docs/控制算法升级方案.md` — 分段惯性导航 + 状态机改造方案（P0→P3）。
@@ -62,7 +62,9 @@
 
 ## 现状
 
-固件已完成十一轮（`docs/自主优化记录.md` 第 1~17 节）。上板实测过的：ISR 9/12µs、陀螺看门狗、I2C 自愈、软启动 A/B、循迹丢线收回、运动中不写 Flash、pivot PID（`PID_PIVOT_KP/KI/KD = 900/0/405`，经 `PID_SetPivot()` 在 `motor_tracing_pid_speed()` 里按 base_speed==0 切换，已实测生效且比旧的 2700 组好）。三级串级 `motor_tracing_cascade()` 已写好但**仍是死代码**（没人选 `MOTION_TRACE_GYRO`），`renwu.c` 直行 97 处仍走旧两级 `motor_tracing_pid(4.5)`；pivot 场景实测 **`s_angle_per_unit = 10.0f` 保持不动**（14 次受控实验否证了“往 5~7 调”的推演），接线未做、直行未放开。界面侧最新：`PAGE_CUSTOM_SERVO 17`（舵机测试：两路角度 + 「收回」0/0 + 14 号「动作预设」占两行显示动作名 + 返回保持角度）；动作表/名字在 `firmware/App/Bsp/servo.c` 的 `k_action_pose[14][2]` / `k_action_name[14]` 单一真值来源。**注意 `bsp_servo_init()`（`bsp_board.c:227`）以前全工程没人调、舵机一直没初始化，第十一轮才修**。最新尺寸：text 111012 / data 368 / bss 15264，烧录回读一致 111388 字节。
+固件已完成十一轮（`docs/自主优化记录.md` 第 1~17 节）。上板实测过的：ISR 9/12µs、陀螺看门狗、I2C 自愈、软启动 A/B、循迹丢线收回、运动中不写 Flash、pivot PID（`PID_PIVOT_KP/KI/KD = 900/0/405`，经 `PID_SetPivot()` 在 `motor_tracing_pid_speed()` 里按 base_speed==0 切换，已实测生效且比旧的 2700 组好）。三级串级 `motor_tracing_cascade()` 已写好但**仍是死代码**（没人选 `MOTION_TRACE_GYRO`），`renwu.c` 直行 97 处仍走旧两级 `motor_tracing_pid(4.5)`；pivot 场景实测 **`s_angle_per_unit = 10.0f` 保持不动**（14 次受控实验否证了“往 5~7 调”的推演），接线未做、直行未放开。界面侧最新：`PAGE_CUSTOM_SERVO 17`（舵机测试：两路角度 + 「收回」0/0 + 14 号「动作预设」占两行显示动作名 + 返回保持角度）；动作表/名字在 `firmware/App/Bsp/servo.c` 的 `k_action_pose[14][2]` / `k_action_name[14]` 单一真值来源。**注意 `bsp_servo_init()`（`bsp_board.c:227`）以前全工程没人调、舵机一直没初始化，第十一轮才修**。
+**任务编排（上位机画状态机 → 烧到车上的 Flash → 车上解释执行）已端到端打通**：镜像格式见 `docs/任务编程.md`（magic 0x4B54、12B 头 + 8B 状态表 + 10B 块、CRC16-CCITT）；车上存储 `firmware/App/Svc/task_store.c` = **页 59 目录 + 页 60..62 程序区（6144 B）**、最多 8 条、单条 ≤2048 B（= 解释器 RAM）；解释器 `task_run.c` 5ms 非阻塞；协议帧 `0x60..0x69` + 能力位 bit7（`HOST_CAP_TASK`）；桥端点 `/api/tasks*`（真桥 + 假后端同契约）、页面 `#/tasks` 有「开机自启」开关（COMMIT 的 flags bit0 → `TASK_STORE_FLAG_AUTO`）。`.ld` 的 FLASH 因此收到 **118K**（页 59 起归运行期擦写，**不许改回 120K/126K**）。
+最新尺寸：text **114216** / data 364 / bss 26944，`build-app/haixin-app.bin` **114588 字节**（离 118K 余 6244 B）。
 
 ## 坑
 
