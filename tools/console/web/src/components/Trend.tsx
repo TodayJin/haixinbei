@@ -11,34 +11,47 @@ import { Sparkline } from './ui'
 /** 通道 key -> 环形缓冲字段下标（与 CHANNELS 顺序一致） */
 const ORDER = CHANNELS.map((c) => c.key)
 
-export function MiniTrend({
-  channel,
-  windowMs = 20000,
-  height = 40,
-  color,
-}: {
-  channel: string
-  windowMs?: number
-  height?: number
-  color?: string
-}) {
+/**
+ * 取某一路的窗口数据（抽稀后）。抽稀到最多 `maxPoints` 点，SVG 才不费。
+ * 单独导出是因为"波形卡"除了画线还要算窗口内的最小/最大/当前值。
+ */
+export function useChannelSeries(channel: string, windowMs = 20000, maxPoints = 120): number[] {
   const { version, ringFill } = useStore()
-  const def = CHANNEL_BY_KEY[channel]
-  const tint = color ?? def?.color ?? '#22d3ee'
 
-  const data = React.useMemo(() => {
+  return React.useMemo(() => {
     const idx = ORDER.indexOf(channel)
     if (idx < 0) return [] as number[]
     const snap = store.ring.snapshot(windowMs)
     const arr = snap.v[idx]
     if (!arr || arr.length === 0) return [] as number[]
-    // 抽稀到最多 120 点，SVG 才不费
-    const step = Math.max(1, Math.floor(arr.length / 120))
+    const step = Math.max(1, Math.floor(arr.length / maxPoints))
     const out: number[] = []
     for (let i = 0; i < arr.length; i += step) out.push(arr[i])
     return out
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [version, ringFill, windowMs, channel])
+  }, [version, ringFill, windowMs, channel, maxPoints])
+}
 
-  return <Sparkline data={data} color={tint} height={height} />
+export function MiniTrend({
+  channel,
+  windowMs = 20000,
+  height = 40,
+  color,
+  className,
+  maxPoints = 120,
+  zeroScale = false,
+}: {
+  channel: string
+  windowMs?: number
+  height?: number
+  color?: string
+  /** 给了就以它为准（画出来的高度由它决定，见 Sparkline）；不给还是原来的 h-9 */
+  className?: string
+  maxPoints?: number
+  zeroScale?: boolean
+}) {
+  const def = CHANNEL_BY_KEY[channel]
+  const tint = color ?? def?.color ?? '#22d3ee'
+  const data = useChannelSeries(channel, windowMs, maxPoints)
+  return <Sparkline data={data} color={tint} height={height} className={className} zeroScale={zeroScale} />
 }

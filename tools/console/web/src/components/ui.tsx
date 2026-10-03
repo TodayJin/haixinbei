@@ -303,32 +303,52 @@ export function GrayBar({ value, active, label }: { value: number; active: boole
   )
 }
 
-/** 迷你趋势线（总览页用；SVG，不引图表库） */
+/**
+ * 迷你趋势线（总览/IMU 页用；SVG，不引图表库）。
+ *
+ * `className` 决定**画出来的高度**（viewBox 里的 height 只是坐标刻度，靠 preserveAspectRatio
+ * 拉伸），默认 h-9 是各处原来的大小；IMU 页的波形卡给更大的类。
+ * `zeroScale` = 纵轴以 0 为中心对称（姿态角用：抬头/低头、左倾/右倾不能靠自动缩放看，
+ * 自动缩放会把 0 附近的抖动放大成满屏，看着像在剧烈晃）。
+ */
 export function Sparkline({
   data,
   color = '#22d3ee',
   height = 34,
   fill = true,
+  className = 'h-9 w-full',
+  zeroScale = false,
 }: {
   data: number[]
   color?: string
   height?: number
   fill?: boolean
+  className?: string
+  zeroScale?: boolean
 }) {
-  if (data.length < 2) return <div className="text-[11px] text-slate-600">等待数据…</div>
+  if (data.length < 2)
+    return (
+      <div className={`${className} flex items-center justify-center text-[11px] text-slate-600`}>等待数据…</div>
+    )
   const min = Math.min(...data)
   const max = Math.max(...data)
-  const span = max - min || 1
+  const lo = zeroScale ? -Math.max(Math.abs(min), Math.abs(max), 1e-6) : min
+  const hi = zeroScale ? -lo : max
+  const span = hi - lo || 1
   const w = 100
   const pts = data.map((v, i) => {
     const x = (i / (data.length - 1)) * w
-    const y = height - ((v - min) / span) * (height - 4) - 2
+    const y = height - ((v - lo) / span) * (height - 4) - 2
     return `${x.toFixed(2)},${y.toFixed(2)}`
   })
   return (
-    <svg viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none" className="h-9 w-full">
+    <svg viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none" className={className}>
       {fill && (
-        <polygon points={`0,${height} ${pts.join(' ')} ${w},${height}`} fill={color} opacity={0.12} />
+        <polygon
+          points={`0,${zeroScale ? height / 2 : height} ${pts.join(' ')} ${w},${zeroScale ? height / 2 : height}`}
+          fill={color}
+          opacity={0.12}
+        />
       )}
       <polyline points={pts.join(' ')} fill="none" stroke={color} strokeWidth={1.2} vectorEffect="non-scaling-stroke" />
     </svg>

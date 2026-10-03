@@ -21,7 +21,7 @@ import { SettingsPage } from '../pages/Settings'
 const CASES: Array<[string, () => React.JSX.Element, string]> = [
   ['总览', OverviewPage, '循迹'],
   ['操控', DrivePage, 'WASD'],
-  ['IMU', ImuPage, '偏航'],
+  ['IMU', ImuPage, '车姿态'],
   ['传感器', SensorsPage, '灰度'],
   ['舵机与动作', ServoPage, '舵机'],
   ['调参', ParamsPage, '参数'],

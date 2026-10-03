@@ -1,9 +1,58 @@
 import React from 'react'
 import { store, useStore } from '../lib/store'
-import { AttitudeGauge, Badge, Card, Slider, Stat } from '../components/ui'
-import { MiniTrend } from '../components/Trend'
+import { Badge, Card, Slider, Sparkline, Stat } from '../components/ui'
+import { MiniTrend, useChannelSeries } from '../components/Trend'
+import { Car3D } from '../components/Car3D'
+import { CHANNEL_BY_KEY } from '../lib/channels'
 import { fmt, fmtInt, fmtSigned, normDeg } from '../lib/format'
 import { TURN_TICK_MS, norm180, offsetLabel } from '../lib/heading'
+import { compassText } from '../lib/attitude3d'
+
+/** 三张姿态波形的窗口（和 MiniTrend 的默认一致，写出来是为了印在卡片上） */
+const WAVE_WINDOW_MS = 20000
+
+/**
+ * 一张姿态波形卡（偏航/俯仰/横滚）：窗口内最小/最大/当前 + 趋势线。
+ * 纵轴**以 0 为中心**（zeroScale）：姿态角自动缩放会把 0 附近的抖动拉满整屏，看着像在剧烈晃。
+ */
+function WaveCard({ channel }: { channel: string }) {
+  const def = CHANNEL_BY_KEY[channel]
+  const data = useChannelSeries(channel, WAVE_WINDOW_MS, 240)
+  const last = data.length ? data[data.length - 1] : undefined
+  const min = data.length ? Math.min(...data) : undefined
+  const max = data.length ? Math.max(...data) : undefined
+  const u = def.unit
+  return (
+    <Card
+      title={`${def.label}波形`}
+      right={
+        <span className="num text-[12px]" style={{ color: def.color }}>
+          {fmt(last, def.decimals)}
+          {u}
+        </span>
+      }
+    >
+      <Sparkline data={data} color={def.color} height={96} className="h-24 w-full" zeroScale />
+      <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] text-slate-500">
+        <span>
+          最小{' '}
+          <span className="num text-slate-300">
+            {fmt(min, def.decimals)}
+            {u}
+          </span>
+        </span>
+        <span>
+          最大{' '}
+          <span className="num text-slate-300">
+            {fmt(max, def.decimals)}
+            {u}
+          </span>
+        </span>
+        <span className="text-right">窗口 {WAVE_WINDOW_MS / 1000}s</span>
+      </div>
+    </Card>
+  )
+}
 
 export function ImuPage() {
   const { telem, link } = useStore()
@@ -72,36 +121,25 @@ export function ImuPage() {
   const target = baseYaw === null ? null : norm180(baseYaw + offset)
 
   return (
-    <div className="grid gap-3 xl:grid-cols-[420px_minmax(0,1fr)]">
-      <Card title="姿态" right={<Badge tone={t?.flags.gyro_ok ? 'mint' : 'rose'}>{t?.flags.gyro_ok ? '陀螺在线' : '陀螺离线'}</Badge>}>
-        <AttitudeGauge yaw={t?.yaw ?? 0} pitch={t?.pitch ?? 0} roll={t?.roll ?? 0} size={210} />
-        <div className="mt-3 grid grid-cols-3 gap-3">
-          <Stat label="偏航" value={fmt(t?.yaw, 1)} unit="°" tone="cyan" />
-          <Stat label="俯仰" value={fmt(t?.pitch, 1)} unit="°" tone="violet" />
-          <Stat label="横滚" value={fmt(t?.roll, 1)} unit="°" tone="mint" />
-        </div>
-        <div className="mt-3 grid gap-3">
-          <div>
-            <div className="mb-1 flex justify-between text-[12px] text-slate-400">
-              <span>偏航趋势</span>
-              <span className="num">{fmtSigned(normDeg(t?.yaw ?? 0), 1)}°</span>
-            </div>
-            <MiniTrend channel="yaw" height={44} />
+    <div className="grid gap-3">
+      <div className="grid gap-3 xl:grid-cols-2">
+        <Card
+          title="车姿态（3D）"
+          right={<Badge tone={t?.flags.gyro_ok ? 'mint' : 'rose'}>{t?.flags.gyro_ok ? '陀螺在线' : '陀螺离线'}</Badge>}
+        >
+          <Car3D yaw={t?.yaw} pitch={t?.pitch} roll={t?.roll} />
+          <div className="mt-3 grid grid-cols-3 gap-3">
+            <Stat label="偏航" value={fmt(t?.yaw, 1)} unit="°" tone="cyan" hint={`罗盘 ${compassText(t?.yaw, 0)}`} />
+            <Stat label="俯仰" value={fmt(t?.pitch, 1)} unit="°" tone="violet" hint="+ = 抬头" />
+            <Stat label="横滚" value={fmt(t?.roll, 1)} unit="°" tone="mint" hint="+ = 向左倾" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <div className="mb-1 text-[12px] text-slate-400">俯仰</div>
-              <MiniTrend channel="pitch" height={36} />
-            </div>
-            <div>
-              <div className="mb-1 text-[12px] text-slate-400">横滚</div>
-              <MiniTrend channel="roll" height={36} />
-            </div>
+          <div className="mt-2 text-[11px] leading-relaxed text-slate-500">
+            模型和读数用同一把尺子（遥测原始帧）：<span className="text-slate-400">+偏航 = 左转、+俯仰 = 抬头、+横滚 = 向左倾</span>
+            。固件给 OLED 画图时另做了一次轴序交换（<span className="text-slate-400">app_ui.c 的 M1..M8，默认 M3</span>），
+            真车上哪个方向反了，就是 <span className="text-slate-400">lib/attitude3d.ts</span> 里一行符号的事。
           </div>
-        </div>
-      </Card>
+        </Card>
 
-      <div className="grid gap-3">
         <Card
           title="朝向控制"
           right={<Badge tone={armed ? 'mint' : 'slate'}>{armed ? '角度环接管中' : '未接管'}</Badge>}
@@ -146,7 +184,15 @@ export function ImuPage() {
             </span>
           </div>
         </Card>
+      </div>
 
+      <div className="grid gap-3 lg:grid-cols-3">
+        <WaveCard channel="yaw" />
+        <WaveCard channel="pitch" />
+        <WaveCard channel="roll" />
+      </div>
+
+      <div className="grid gap-3 xl:grid-cols-2">
         <Card title="角度环内部量">
           <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <Stat label="目标角" value={fmt(normDeg(t?.angle.err ?? 0) + (t?.yaw ?? 0), 1)} unit="°" hint="= 当前 + 误差" />
