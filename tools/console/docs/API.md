@@ -6,7 +6,11 @@
 
 ## 0. 运行形态
 
-- 桥只依赖 **Python 3.11+ 标准库 + pyserial**；`python -m bridge.main --port COM26`（或 `--sim`）。
+- 一键启动（双击，不用手敲命令）：`tools/console/启动上位机.bat`（真车：自动找串口，230400）、
+  `启动上位机-仿真.bat`（内置仿真车，无车也能开）、`启动上位机-列串口.bat`（只看车在哪个 COM）；
+  逻辑都在 `tools/console/launch.ps1`（手工用：`pwsh -File tools\console\launch.ps1 -Sim -NoBrowser`）。
+- 桥只依赖 **Python 3.11+ 标准库 + pyserial**；手工跑：`cd tools/console && python -m bridge.main --serial COM26`
+  （或 `--sim`）。注意 `--port` 是**桥的 HTTP 端口**（默认 8770），串口设备用 `--serial`。
 - 静态前端：桥直接托管 `tools/console/web/dist/`（`GET /` → `index.html`，其余按文件返回）。
   开发期可用 `npm run dev`（Vite 5173）并把 `/api` 代理到桥的 8770 端口。
 - 默认端口 **8770**，只监听 `127.0.0.1`。

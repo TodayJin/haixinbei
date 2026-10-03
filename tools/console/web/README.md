@@ -25,6 +25,10 @@ npm run build          # tsc --noEmit && vite build -> dist/
 node mock/server.mjs   # 直接开 http://127.0.0.1:8770 ，托管 dist/
 ~~~
 
+**真车 / 仿真的成品界面不用 node**：双击 `tools/console/` 下的
+`启动上位机.bat`（真车，自动找串口 @230400）、`启动上位机-仿真.bat`（无车）、
+`启动上位机-列串口.bat`（只看串口在哪）。桥自己托管 `dist/` 并打开浏览器。
+
 ## 2. 命令一览
 
 | 命令 | 作用 |
