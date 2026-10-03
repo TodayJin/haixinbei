@@ -3,16 +3,15 @@
 `bridge.probe` 管**线上有没有合法帧**（串口那半步），本工具管**桥→网页这一步**：
 同样的桥进程，挂一路 SSE 客户端，按秒统计。
 
-四种接法（前三种本工具自己起桥、量完就关；第四种量已经在跑的桥）：
+三种接法（前两种本工具自己起桥、量完就关；第三种量已经在跑的桥）：
 
     python -m bridge.bench --attach 8770              # 量正在跑的真车桥（最常用）
     python -m bridge.bench --serial COM26 --baud 230400
     python -m bridge.bench --sim                      # 仿真车：量"发指令 → 遥测里看见"
-    python -m bridge.bench --replay --hz 50,100,200   # 定频回放：只测主机侧承载
 
 说明白它能说明什么、不能说明什么：
 
-- 回放/仿真**不经过 UART**，所以它们的数字只代表"桥 + SSE + 浏览器上游"这一步的承载与延迟；
+- 仿真**不经过 UART**，所以它的数字只代表"桥 + SSE + 浏览器上游"这一步的承载与延迟；
   串口本身（波特率、CRC 错、重同步）看 `stats.crc` / `stats.resync` 与 `bridge.probe`。
 - 唯一会让**所有**数字都动的是 Windows 计时器精度：不提高（系统默认 ~15.6ms）时
   `LinkRunner` 的 5ms 轮询实际只有 ~64 次/s，100Hz 遥测会被攒成串。桥默认会提高，
@@ -29,7 +28,6 @@ from __future__ import annotations
 
 import argparse
 import ctypes
-import glob
 import json
 import os
 import socket
@@ -344,53 +342,6 @@ def bench_attached(port: int, seconds: float) -> dict:
     return {"rep": rep, "link": link}
 
 
-# --------------------------------------------------- 定频回放（主机侧承载对照）
-def make_replay(hz: int, frames: int) -> str:
-    """拿真实录制里的 `src` 当模板，按 `hz` 重排 `t_host`，合成一份定频录制。"""
-    src = None
-    for path in sorted(glob.glob(os.path.join(CONSOLE, "data", "logs", "rec_*.jsonl"))):
-        with open(path, "r", encoding="utf-8") as fh:
-            for line in fh:
-                try:
-                    o = json.loads(line)
-                except ValueError:
-                    continue
-                if o.get("n") == "telem" and o.get("src"):
-                    src = o["src"]
-                    break
-        if src:
-            break
-    if src is None:
-        raise SystemExit("data/logs 里找不到 telem 录制行，没法当模板")
-    base = 1_700_000_000_000
-    step = 1000.0 / hz
-    out = os.path.join(CONSOLE, "data", "logs", "bench_replay_%dhz.jsonl" % hz)
-    with open(out, "w", encoding="utf-8") as fh:
-        for i in range(frames):
-            t = dict(src)
-            t["t"] = int(i * step)
-            fh.write(json.dumps({"n": "telem", "src": t, "t_host": base + int(i * step)},
-                                ensure_ascii=False) + "\n")
-    return out
-
-
-def bench_replay(hz: int, seconds: float, low_res_timer: bool,
-                 sse_batch_ms: int | None = None) -> dict:
-    path = make_replay(hz, max(60, int(hz * (seconds + 2))))
-    port = free_port()
-    p, log = spawn(["--replay", path, "--replay-speed", "1.0"], port, "replay%dhz" % hz,
-                   low_res_timer, sse_batch_ms)
-    try:
-        time.sleep(0.3)
-        m = measure(port, seconds, cpu_pid=p.pid)
-    finally:
-        kill(p)
-    rep = summarize(m["events"], m["dt"], fed_frames=m["fed"],
-                    cpu=m["cpu"], log=log)
-    rep["hz"] = hz
-    return rep
-
-
 # ------------------------------------------------------------ 串口模式（真车）
 def bench_serial(dev: str, baud: int, seconds: float, low_res_timer: bool = False,
                  sse_batch_ms: int | None = None) -> dict:
@@ -489,11 +440,10 @@ def main(argv=None) -> int:
     g.add_argument("--attach", type=int, metavar="PORT", help="量已经在跑的桥（不启不停）")
     g.add_argument("--serial", metavar="COM", help="自己起桥连串口（真车）")
     g.add_argument("--sim", action="store_true", help="自己起桥跑仿真车：量指令往返")
-    g.add_argument("--replay", action="store_true", help="自己起桥跑定频回放：量主机侧承载")
-    ap.add_argument("--baud", type=int, default=921600, help="--serial 用的波特率")
+    ap.add_argument("--baud", type=int, default=230400,
+                    help="--serial 用的波特率（默认跟板上固件的 DL_BAUD 一致）")
     ap.add_argument("--force-baud", action="store_true", dest="force_baud",
                     help="不拦 J-Link CDC 口上 >230400 的波特率（会让探针崩进 bootloader 态，慎用）")
-    ap.add_argument("--hz", default="50,100,200", help="--replay 的定频档位，逗号分隔")
     ap.add_argument("--seconds", type=float, default=6.0, help="每档量多久，默认 6s")
     ap.add_argument("--low-res-timer", action="store_true",
                     help="起桥时不提高 Windows 计时器精度（对照：轮询掉到 ~64 次/s）")
@@ -534,19 +484,16 @@ def main(argv=None) -> int:
         print("=" * 100)
         return b["rc"]
 
+    # 互斥组是 required 的，正常走到这里只剩 --sim
     if args.sim:
         sim = bench_sim(args.seconds, args.low_res_timer, batch)
         for line in format_sim(sim):
             print(line)
         print("=" * 100)
         return 0
-
-    for hz in [int(x) for x in args.hz.split(",") if x.strip()]:
-        rep = bench_replay(hz, args.seconds, args.low_res_timer, batch)
-        for line in format_report(rep, "回放 %3dHz" % hz):
-            print(line)
+    print("  要给 --attach PORT / --serial COMx / --sim 之一")
     print("=" * 100)
-    return 0
+    return 2
 
 
 if __name__ == "__main__":

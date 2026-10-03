@@ -15,8 +15,6 @@ import type {
   LogItem,
   ParamsResponse,
   PresetItem,
-  RecItem,
-  RecordStatus,
   StatsEvent,
   Telem,
 } from './types'
@@ -104,9 +102,10 @@ export const api = {
   health: () => request<HealthInfo>('/api/health'),
   link: () => request<LinkInfo>('/api/link'),
   ports: () => request<{ ok: true; ports: { port: string; desc?: string }[] }>('/api/ports'),
-  /** 波特率默认 921600（固件 2026-10 起 LPUART1 就是这个）；sim/replay 用不到但照样带上 */
-  connect: (mode: 'serial' | 'sim' | 'replay', port?: string, baud = 921600, replay?: string, speed?: number) =>
-    post<{ ok: true; link: LinkInfo }>('/api/link/connect', { mode, port, baud, replay, speed }),
+  /** 波特率默认 230400（固件 `board.c` 的 `DL_BAUD` 就是它，车上那颗 J-Link VCOM 上限也是它）；
+   *  要 921600 得换普通 USB-TTL 接 U12，并把固件与桥一起改回；sim 用不到但照样带上 */
+  connect: (mode: 'serial' | 'sim', port?: string, baud = 230400) =>
+    post<{ ok: true; link: LinkInfo }>('/api/link/connect', { mode, port, baud }),
   disconnect: () => post<{ ok: true }>('/api/link/disconnect'),
 
   params: () => request<ParamsResponse>('/api/params'),
@@ -132,6 +131,8 @@ export const api = {
   cmd: (cmd: string, arg?: number) => post<{ ok: true }>('/api/cmd', { cmd, arg }),
 
   log: (limit = 200) => request<{ ok: true; items: LogItem[] }>(`/api/log${qs({ limit })}`),
+  /** 清桥侧日志（不是只清界面）：不然下一次 refreshAll() 会把旧日志原样拉回来 */
+  logClear: () => post<{ ok: true }>('/api/log/clear'),
   cal: () => request<CalResponse>('/api/cal'),
 
   presets: async () => {
@@ -143,11 +144,6 @@ export const api = {
   presetApply: (name: string, targets: string[]) => post<{ ok: true }>('/api/presets/apply', { name, targets }),
   presetDelete: (name: string) =>
     request<{ ok: true }>(`/api/presets${qs({ name })}`, { method: 'DELETE' }),
-
-  record: (action: 'start' | 'stop') => post<{ ok: true; record: RecordStatus }>('/api/record', { action }),
-  recordStatus: () => request<{ ok: true; record: RecordStatus }>('/api/record'),
-  /** 能拿来回放的录制文件（`data/logs/rec_*.jsonl`） */
-  recordings: () => request<{ ok: true; dir: string; items: RecItem[] }>('/api/recordings'),
 }
 
 /** 打开 SSE 流（断线自动重连由浏览器 EventSource 自己做） */

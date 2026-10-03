@@ -100,7 +100,7 @@ const link = {
   ok: true,
   mode: 'sim',
   port: null,
-  baud: 115200,
+  baud: 230400,
   connected: true,
   stats: { rx: 0, tx: 0, crc: 0, resync: 0, drops: 0 },
   telem_hz: 50,
@@ -136,14 +136,11 @@ const cal = {
 
 let drive = { mode: 'off', vl: 0, vr: 0, base: 0, turn: 0 }
 let servo = { ch1: 0, ch2: 0, dev1: 0, dev2: 0 }
-let record = { ok: true, recording: false, path: null, samples: 0, started_ms: null }
 let telemHz = 50
 let sim = { yaw: -64.7, pitch: 0.4, roll: -0.8, vl: 0, vr: 0, vbat: 12040, linePos: 4.5, action: 1, nvram: 0 }
 const logs = []
 const clients = new Set()
 let lastStats = Date.now()
-// 回放用过的最后一次文件：和桥一样，只给 `{mode:"replay"}` 时复用它
-let lastReplay = ''
 
 function log(level, text) {
   const item = { ts_ms: Date.now(), level, text }
@@ -269,7 +266,7 @@ function makeTelem() {
       gyro_ok: true,
       motor: driving,
       host_drive: driving,
-      logging: record.recording,
+      logging: false,
       flash: sim.nvram === 2,
       fault: false,
     },
@@ -292,7 +289,6 @@ function startTimers() {
       link.stats.tx += 3
       link.last_rx_ms = 0
       send('telem', t)
-      if (record.recording) record.samples++
       if (Math.random() < 0.02) link.stats.drops += 1
     }
     if (Date.now() - lastStats > 1000) {
@@ -374,17 +370,13 @@ const server = http.createServer(async (req, res) => {
 
     if (path === '/api/link/connect' && req.method === 'POST') {
       const body = (await readBody(req)) || {}
-      if (!['sim', 'serial', 'replay'].includes(body.mode)) return fail(res, 400, 'mode 必须是 sim/serial/replay', 'bad_param')
-      if (body.mode === 'replay' && !body.replay && !lastReplay) {
-        return fail(res, 400, '回放要指定文件：{mode:"replay", replay:"<jsonl>"}', 'bad_param')
-      }
-      const rec = body.replay ? String(body.replay) : lastReplay   // 和桥一样：不给文件就复用上次那个
-      if (rec) lastReplay = rec
+      // 回放模式 2026-10-04 已按用户要求删除：这里也必须与桥一致地拒绝
+      if (!['sim', 'serial'].includes(body.mode)) return fail(res, 400, 'mode 必须是 sim/serial', 'bad_param')
       link.mode = body.mode
-      link.port = body.mode === 'replay' ? rec.split(/[\\/]/).pop() : (body.port ?? null)
-      link.baud = body.baud ?? 115200
+      link.port = body.port ?? null
+      link.baud = body.baud ?? 230400
       link.connected = true
-      link.note = body.mode === 'replay' ? `回放 ${link.port}（${body.speed ?? 1}×）` : ''
+      link.note = ''
       log('info', `已连接：${link.mode}${link.mode === 'serial' && link.port ? ' ' + link.port : ''}`)
       ack('link/connect')
       send('link', link)
@@ -567,17 +559,27 @@ const server = http.createServer(async (req, res) => {
 
     if (path === '/api/cmd' && req.method === 'POST') {
       const body = (await readBody(req)) || {}
-      const allowed = ['stop', 'start_a', 'start_b', 'start_c', 'clear_fault', 'reset', 'telem_hz', 'gyro_cal', 'gyro_turn', 'gyro_zero']
-      if (!allowed.includes(body.cmd)) return fail(res, 400, `不认识的命令 ${body.cmd}`, 'bad_cmd')
+      // 命令名与 tools/console/bridge/state.py 的 CMD_NAMES 逐字一致（2026-10-04 修：
+      // 这里原来写的是 telem_hz/gyro_cal/gyro_turn/gyro_zero，跟真桥对不上，
+      // 于是网页下发的命令在 mock 和真桥上一半能过一半报「没有这个命令」）。
+      const allowed = ['stop', 'start_a', 'start_b', 'start_c', 'calib_gyro', 'save_params',
+        'clear_fault', 'reset', 'set_telem_hz', 'set_logging', 'set_telem_mode']
+      if (!allowed.includes(body.cmd)) return json(res, 200, { ok: false, error: `没有这个命令：${body.cmd}` })
       if (['start_a', 'start_b', 'start_c'].includes(body.cmd)) {
         // 固件删了内置任务流程 ⇒ 这三个命令回 ST_UNSUPPORTED（0x08）＝ 桥侧 ok:false
         log('warn', `命令 ${body.cmd} 已废弃（固件回"不支持"）`)
         return json(res, 200, { ok: false, code: 'unsupported', status: 0x08, error: `${body.cmd} 已废弃：任务改用 #/tasks 页的「开始」` })
       }
-      if (body.cmd === 'telem_hz') {
+      if (body.cmd === 'calib_gyro' || body.cmd === 'set_logging') {
+        // 固件 host_link.c:820-825 这两个还没实现，明说"未就绪"，不假装成功
+        log('warn', `命令 ${body.cmd} 还没实现（固件回"未就绪"）`)
+        return json(res, 200, { ok: false, code: 'not_ready', status: 0x05, error: `${body.cmd} 还没实现（固件回"未就绪"）` })
+      }
+      if (body.cmd === 'set_telem_hz') {
+        // 固件 host_link.c:806-811 钳 1..200（不是 100）
         const hz = Number(body.arg)
-        if (!Number.isFinite(hz) || hz < 1 || hz > 100) return fail(res, 400, 'telem_hz 必须在 1..100', 'out_of_range')
-        telemHz = Math.round(hz)
+        if (!Number.isFinite(hz)) return json(res, 200, { ok: false, error: 'set_telem_hz 要整数频率', code: 'out_of_range' })
+        telemHz = Math.max(1, Math.min(200, Math.round(hz)))
         startTimers()
       }
       if (body.cmd === 'stop') {
@@ -628,34 +630,6 @@ const server = http.createServer(async (req, res) => {
       ack('presets/delete')
       send('state', stateEvent())
       return json(res, 200, { ok: true })
-    }
-
-    if (path === '/api/record' && req.method === 'POST') {
-      const body = (await readBody(req)) || {}
-      if (body.action === 'start') {
-        record = { ok: true, recording: true, path: 'mock://flash/black-box.bin', samples: 0, started_ms: Date.now() }
-        log('info', '车上记录开始')
-      } else if (body.action === 'stop') {
-        record = { ...record, recording: false }
-        log('info', `车上记录停止（${record.samples} 帧）`)
-      } else {
-        return fail(res, 400, 'action 必须是 start/stop', 'bad_param')
-      }
-      ack('record')
-      return json(res, 200, { ok: true, record })
-    }
-
-    if (path === '/api/record' && req.method === 'GET') return json(res, 200, { ok: true, record })
-
-    if (path === '/api/recordings') {
-      return json(res, 200, {
-        ok: true,
-        dir: '/mock/data/logs',
-        items: [
-          { name: 'rec_20261003_101500.jsonl', path: '/mock/data/logs/rec_20261003_101500.jsonl', size: 184320, mtime_ms: Date.now() - 60_000 },
-          { name: 'rec_20261002_203000.jsonl', path: '/mock/data/logs/rec_20261002_203000.jsonl', size: 2097152, mtime_ms: Date.now() - 86_400_000 },
-        ],
-      })
     }
 
     // ---- 任务页（与真桥的 /api/tasks* 同一份契约；真桥见 tools/console/bridge/server.py）----
@@ -807,5 +781,5 @@ startTimers()
 server.listen(PORT, HOST, () => {
   console.log(`[mock] 假后端已启动：http://${HOST}:${PORT}`)
   console.log(`[mock] 静态目录：${DIST}`)
-  console.log('[mock] 端点：/api/health /link /ports /params* /actions* /servo* /drive /cmd /log /cal /presets* /record /recordings /tasks* /stream')
+  console.log('[mock] 端点：/api/health /link /ports /params* /actions* /servo* /drive /cmd /log /cal /presets* /tasks* /stream')
 })

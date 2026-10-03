@@ -5,6 +5,7 @@
 
 import React from 'react'
 import { clamp } from '../lib/format'
+import { nextRange, rawRange, type ValueRange } from '../lib/sparkline'
 
 export type Tone = 'cyan' | 'violet' | 'mint' | 'amber' | 'rose' | 'slate'
 
@@ -326,6 +327,10 @@ export function GrayBar({ value, active, label }: { value: number; active: boole
  * 拉伸），默认 h-9 是各处原来的大小；IMU 页的波形卡给更大的类。
  * `zeroScale` = 纵轴以 0 为中心对称（姿态角用：抬头/低头、左倾/右倾不能靠自动缩放看，
  * 自动缩放会把 0 附近的抖动放大成满屏，看着像在剧烈晃）。
+ *
+ * 纵轴量程走 `nextRange` **滞回（峰值包络）**：原来每个 tick 都按当前窗口极值重算，
+ * 窗口每滑一格极值就动一点点 ⇒ 整条曲线每帧重新缩放 ⇒ 看着"一直在闪"。
+ * `data` 收 `ArrayLike<number>`（环形缓冲的 `Float32Array` 直接用，不必转成数组）。
  */
 export function Sparkline({
   data,
@@ -335,28 +340,32 @@ export function Sparkline({
   className = 'h-9 w-full',
   zeroScale = false,
 }: {
-  data: number[]
+  data: ArrayLike<number>
   color?: string
   height?: number
   fill?: boolean
   className?: string
   zeroScale?: boolean
 }) {
-  if (data.length < 2)
+  const rangeRef = React.useRef<ValueRange | null>(null)
+  const ready = data.length >= 2
+  const raw = ready ? rawRange(data, zeroScale) : { lo: -1, hi: 1 }
+  const range = nextRange(rangeRef.current, raw)
+  rangeRef.current = ready ? range : null
+
+  if (!ready)
     return (
       <div className={`${className} flex items-center justify-center text-[11px] text-slate-600`}>等待数据…</div>
     )
-  const min = Math.min(...data)
-  const max = Math.max(...data)
-  const lo = zeroScale ? -Math.max(Math.abs(min), Math.abs(max), 1e-6) : min
-  const hi = zeroScale ? -lo : max
+  const { lo, hi } = range
   const span = hi - lo || 1
   const w = 100
-  const pts = data.map((v, i) => {
+  const pts: string[] = []
+  for (let i = 0; i < data.length; i++) {
     const x = (i / (data.length - 1)) * w
-    const y = height - ((v - lo) / span) * (height - 4) - 2
-    return `${x.toFixed(2)},${y.toFixed(2)}`
-  })
+    const y = height - ((data[i] - lo) / span) * (height - 4) - 2
+    pts.push(`${x.toFixed(2)},${y.toFixed(2)}`)
+  }
   return (
     <svg viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none" className={className}>
       {fill && (

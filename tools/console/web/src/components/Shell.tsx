@@ -14,7 +14,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { PAGES, navigateTo, usePage, type PageId } from '../lib/router'
-import { store, useStore } from '../lib/store'
+import { store, useHotSelect, useMeta } from '../lib/store'
 import { Badge, StatusDot } from './ui'
 import { ErrorBanner } from './Toasts'
 import { PageBoundary } from './PageBoundary'
@@ -35,23 +35,25 @@ const ICONS: Record<PageId, LucideIcon> = {
 }
 
 function LinkBadge() {
-  const { link, sse, telem } = useStore()
-  const mode = link?.mode ?? 'off'
+  // 链路状态/推送状态都走低频 meta（`link`/`sse` 变更时 store 走 `emit()`）；
+  // 车上模式与任务号是热数据，用两个**标量**窄订阅 —— 值没变就不重渲染。
+  // 这里原来是整份快照：20Hz 的热 tick 一直在重渲染整个 header。
+  const { link, sse } = useMeta()
+  const mode = useHotSelect((s) => s.telem?.mode ?? null)
+  const taskId = useHotSelect((s) => s.telem?.task_id ?? null)
   const connected = !!link?.connected
   const tone = connected ? 'mint' : sse === 'open' ? 'slate' : 'rose'
   const text =
-    mode === 'sim'
+    link?.mode === 'sim'
       ? '模拟器'
-      : mode === 'replay'
-        ? '回放'
-        : mode === 'serial'
-          ? link?.port ?? '串口'
-          : '未连接'
+      : link?.mode === 'serial'
+        ? link.port ?? '串口'
+        : '未连接'
   return (
     <div className="flex items-center gap-3">
       <Badge
         tone={tone}
-        title="这里是当前连着的口：模拟器 / 回放 / 串口名（如 COM26） / 未连接。圆点动 = 正在从车上实时收数据"
+        title="这里是当前连着的口：模拟器 / 串口名（如 COM26） / 未连接。圆点动 = 正在从车上实时收数据"
       >
         <StatusDot on={connected} tone={connected ? 'mint' : sse === 'open' ? 'slate' : 'rose'} pulse={connected} />
         {text}
@@ -65,8 +67,8 @@ function LinkBadge() {
         </span>
       )}
       <span className="num text-[12px] text-slate-400" title="车上当前的运动模式，以及正在跑的任务">
-        {telem ? `模式 ${fmt(telem.mode >= 0 ? telem.mode : 0, 0)} ${MODE_TEXT[telem.mode] ?? ''}` : ''}
-        {telem?.task_id !== undefined && telem.task_id !== 0xff ? ` · ${taskText(telem.task_id)}` : ''}
+        {mode !== null ? `模式 ${fmt(mode >= 0 ? mode : 0, 0)} ${MODE_TEXT[mode] ?? ''}` : ''}
+        {taskId !== null && taskId !== undefined && taskId !== 0xff ? ` · ${taskText(taskId)}` : ''}
       </span>
       <Badge
         tone={sse === 'open' ? 'cyan' : sse === 'connecting' ? 'amber' : 'rose'}
@@ -80,7 +82,8 @@ function LinkBadge() {
 
 export function Shell({ children }: { children: React.ReactNode }) {
   const page = usePage()
-  const { settings, telem, sse, params } = useStore()
+  // 低频订阅：这个壳不该跟着 20Hz 的遥测重渲染（原来它订阅整份快照，只是运气好没把页面拖下水）
+  const { settings, sse, params } = useMeta()
   const [collapsed, setCollapsed] = React.useState(false)
 
   React.useEffect(() => {

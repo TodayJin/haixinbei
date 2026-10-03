@@ -1,6 +1,6 @@
-"""三种链路：真车串口 / 内置仿真 / 录制回放（契约 tools/console/docs/API.md §1、§6）。
+"""两种链路：真车串口 / 内置仿真（契约 tools/console/docs/API.md §1）。
 
-三者对上层是同一个接口：
+两者对上层是同一个接口：
     link.start()                 打开
     link.poll(now_ms) -> [Frame] 非阻塞收帧（内部自己解码）
     link.send(frame_bytes)       发一帧
@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import glob
-import os
 import threading
 import time
 
@@ -54,8 +53,8 @@ class LinkError(RuntimeError):
 class LinkBase:
     mode = "?"
     port = ""
-    # 固件 2026-10 起 LPUART1 跑 921600（收 DMA + 发 DMA），两边必须一致
-    baud = 921600
+    # 固件 2026-10-04 实机烧的是 DL_BAUD 230400（车上 J-Link VCOM 的上限），两边必须一致
+    baud = 230400
 
     def __init__(self):
         self.dec = pr.FrameDecoder()
@@ -100,11 +99,11 @@ class LinkBase:
 
 
 class SerialLink(LinkBase):
-    """真车：USB 虚拟串口（无线下载器）/ J-Link VCOM，921600 8N1。"""
+    """真车：USB 虚拟串口（无线下载器）/ J-Link VCOM，默认 230400 8N1。"""
 
     mode = "serial"
 
-    def __init__(self, port: str, baud: int = 921600):
+    def __init__(self, port: str, baud: int = 230400):
         super().__init__()
         self.port = port
         self.baud = baud
@@ -197,71 +196,6 @@ class SimLink(LinkBase):
         self.tx_bytes += len(data)
         self.tx_frames += 1
         self.car.send(data)
-        return len(data)
-
-
-class ReplayLink(LinkBase):
-    """回放：把 `--record` 存下来的 JSONL 当输入源（默认按原始时间戳的 1 倍速）。"""
-
-    mode = "replay"
-
-    def __init__(self, path: str, speed: float = 1.0, loop: bool = True):
-        super().__init__()
-        self.path = path
-        self.speed = max(0.05, float(speed))
-        self.loop = loop
-        self.rows: list[dict] = []
-        self.idx = 0
-        self.port = os.path.basename(path)
-        self.t0 = 0
-
-    def start(self) -> None:
-        import json
-        self.rows = []
-        with open(self.path, "r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    o = json.loads(line)
-                except Exception:
-                    continue
-                if o.get("n") == "telem" and o.get("src"):
-                    self.rows.append(o)
-        if not self.rows:
-            raise LinkError(f"{self.path} 里没有 telem 记录")
-        self.idx = 0
-        self.t0 = time.time() * 1000.0 - float(self.rows[0].get("t_host", 0)) / self.speed
-        self.open_ = True
-        self.note = f"回放 {len(self.rows)} 帧（{self.speed:g}×）"
-
-    def poll(self, now_ms: int) -> list[pr.Frame]:
-        out = []
-        row = self.rows[self.idx]
-        while now_ms >= self.t0 + float(row.get("t_host", 0)) / self.speed:
-            t = dict(row["src"])
-            raw = pr.build_frame(pr.T_TELEM2, 0, pr.encode_telemetry2(t))
-            out.extend(self._frames(raw, int(now_ms)))
-            self.idx += 1
-            if self.idx >= len(self.rows):
-                if not self.loop:
-                    self.open_ = False
-                    return out
-                self.idx = 0
-                # 绕回开头时把时间基准挪到"现在"：t_host 是录制的**绝对**毫秒
-                # （动辄 1.7e12），不挪的话第二遍要等 t_host[0]/speed 那么久才出帧
-                # ——表现就是回放放完一遍就再也不动了。
-                self.t0 = now_ms - float(self.rows[0].get("t_host", 0)) / self.speed
-                return out
-            row = self.rows[self.idx]
-            if len(out) > 512:                      # 防止追帧时一口气吐太多
-                break
-        return out
-
-    def send(self, data: bytes) -> int:
-        self.tx_bytes += len(data)
-        self.tx_frames += 1
         return len(data)
 
 

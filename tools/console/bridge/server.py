@@ -17,7 +17,7 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from .link import SerialLink, SimLink, ReplayLink, LinkRunner, available_ports, find_default_port
+from .link import SerialLink, SimLink, LinkRunner, available_ports, find_default_port
 
 VERSION = "1.0"
 WEB_ROOT_DEFAULT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web", "dist")
@@ -52,9 +52,9 @@ def group_sse(evs: list[dict], batch_max: int = 64) -> list[tuple[str, object]]:
 class Bridge:
     """一条链路 + 一个 Console + 一个 HTTP 服务（`--serial` 可以在运行时换）。"""
 
-    def __init__(self, mode: str = "sim", port: str = "", baud: int = 921600,
-                 replay: str = "", web_root: str = "", log_dir: str = "",
-                 preset_dir: str = "", console_dir: str = "", replay_speed: float = 1.0,
+    def __init__(self, mode: str = "sim", port: str = "", baud: int = 230400,
+                 web_root: str = "", log_dir: str = "",
+                 preset_dir: str = "", console_dir: str = "",
                  sse_batch_ms: int = SSE_BATCH_MS_DEFAULT):
         from .state import Console
         self.web_root = web_root or WEB_ROOT_DEFAULT
@@ -66,37 +66,16 @@ class Bridge:
         self.mode = mode
         self.port = port
         self.baud = baud
-        self.replay = replay
-        self.replay_speed = replay_speed
         self.sse_batch_ms = max(0, int(sse_batch_ms))
         self.runner: LinkRunner | None = None
         self.console: Console | None = None
 
     # ------------------------------------------------------------------ 链路
-    @staticmethod
-    def _replay_ok(path: str) -> str:
-        """回放前的体检：文件在、且至少有一帧 telem。返回错误文案（空 = 没问题）。
-
-        故意放在动既有链路之前：路径写错时原来那条链路照旧跑，不会把波形弄断。
-        """
-        if not path:
-            return "回放要指定文件：{mode:\"replay\", replay:\"<jsonl>\"}（GET /api/recordings 可列）"
-        if not os.path.isfile(path):
-            return f"回放文件不存在：{path}"
-        try:
-            with open(path, "r", encoding="utf-8", errors="replace") as fh:
-                for line in fh:
-                    if '"telem"' in line:
-                        return ""
-        except OSError as e:
-            return f"回放文件读不了：{e}"
-        return f"{os.path.basename(path)} 里没有一帧 telem 记录"
-
     # 串口名的形态：Windows 是 COM1 / COM26（也允许 `\\.\COM10` 的写法），POSIX 是 /dev/ttyXXX。
-    # 为什么要在动旧链路之前先拦：出过一次事故 —— 回放之后 `link.port` 变成录制文件名
-    # `rec_20261003_021035.jsonl`，设置页看着还像 COM26，点「连串口」就把桥切到这个"串口"名上；
-    # 而 `SerialLink` 打不开时只在 note 里记一句、**不抛异常**，于是 switch() 认为建成了，
-    # 把好的旧链路也停掉 ⇒ 表现为"操控不了车、遥测不动"。这里直接拒掉，旧链路就保得住。
+    # 为什么要在动旧链路之前先拦：出过一次事故 —— `link.port` 被写成一个不像串口名的文件名，
+    # 设置页看着还像 COM26，点「连串口」就把桥切到这个"串口"名上；而 `SerialLink` 打不开时
+    # 只在 note 里记一句、**不抛异常**，于是 switch() 认为建成了，把好的旧链路也停掉
+    # ⇒ 表现为"操控不了车、遥测不动"。这里直接拒掉，旧链路就保得住。
     _RE_PORT_NT = re.compile(r"^(?:\\\\\.\\)?COM\d+$", re.IGNORECASE)
     _RE_PORT_POSIX = re.compile(r"^/dev/[A-Za-z0-9._/-]+$")
 
@@ -107,16 +86,11 @@ class Bridge:
     def _make_link(self, mode: str, port: str, baud: int):
         if mode == "sim":
             return SimLink()
-        if mode == "replay":
-            err = self._replay_ok(self.replay)
-            if err:
-                raise SystemExit(err)
-            return ReplayLink(self.replay, speed=self.replay_speed)
         port = port or find_default_port()
         if not port:
             raise SystemExit("没找到串口：用 --list-ports 看有哪些，或 --port COMxx")
         if not self._serial_port_ok(port):
-            raise SystemExit(f"这不是串口号：{port}（Windows 上是 COM1、COM26 这种；要放录制文件请用 mode:\"replay\"）")
+            raise SystemExit(f"这不是串口号：{port}（Windows 上是 COM1、COM26 这种）")
         return SerialLink(port, baud)
 
     def start(self):
@@ -150,19 +124,14 @@ class Bridge:
         if self.runner:
             self.runner.stop()
 
-    def switch(self, mode: str, port: str = "", baud: int = 0,
-               replay: str = "", speed: float = 0.0) -> dict:
-        """运行中换链路（前端「连接」按钮）；`replay` 给出要回放的 jsonl。
+    def switch(self, mode: str, port: str = "", baud: int = 0) -> dict:
+        """运行中换链路（前端「连接」按钮）。
 
-        先把新链路建起来（这一步会开串口、读回放文件），**能建才停旧的**：
-        回放路径写错或串口打不开时，原来那条链路照旧在跑，前端正在看的波形
-        不会被弄断（契约 §1 的失败语义）。
+        先把新链路建起来（这一步会开串口），**能建才停旧的**：
+        串口打不开时原来那条链路照旧在跑，前端正在看的波形不会被弄断
+        （契约 §1 的失败语义）。
         """
         old_mode = self.mode
-        if replay:
-            self.replay = replay
-        if speed:
-            self.replay_speed = max(0.05, float(speed))
         try:
             link = self._make_link(mode, port or self.port, baud or self.baud)
         except (SystemExit, Exception) as e:        # SystemExit 是校验文案，Exception 是串口打不开
@@ -337,10 +306,6 @@ class Handler(BaseHTTPRequestHandler):
             q = self._query()
             n = max(1, min(5000, int(q.get("limit", 300))))
             self._json({"ok": True, "items": list(con.logs)[-n:]})
-        elif path == "/api/record":
-            self._json({"ok": True, "record": con.record_status()})
-        elif path == "/api/recordings":
-            self._json(con.recordings())
         elif path == "/api/state":
             self._json({"ok": True, **con.snapshot()})
         elif path == "/api/stream":
@@ -369,9 +334,7 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body()
         if path == "/api/link/connect":
             mode = body.get("mode") or ("serial" if body.get("port") or self.bridge.port else "serial")
-            r = self.bridge.switch(mode, body.get("port", ""), int(body.get("baud", 0) or 0),
-                                   replay=body.get("replay", "") or body.get("file", ""),
-                                   speed=float(body.get("speed", 0) or 0))
+            r = self.bridge.switch(mode, body.get("port", ""), int(body.get("baud", 0) or 0))
             self._json({**r, "link": con.link_payload()})
         elif path == "/api/link/disconnect":
             self.bridge.stop()
@@ -439,15 +402,6 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/presets/apply":
             name = str(body.get("name", "")).strip()
             self._json(con.preset_apply(name, body.get("targets")))
-        elif path == "/api/record":
-            on = body.get("on")
-            if on is None:
-                on = str(body.get("action", "start")) != "stop"
-            if on:
-                con.record_start(body.get("path", ""))
-            else:
-                con.record_stop()
-            self._json({"ok": True, "record": con.record_status()})
         elif path == "/api/log/clear":
             with con.lock:
                 con.logs.clear()

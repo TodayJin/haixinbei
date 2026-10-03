@@ -33,7 +33,7 @@ export const PAGES: PageDef[] = [
   { id: 'params', title: '调参', desc: '三环参数与下发' },
   { id: 'tasks', title: '任务', desc: '状态机拖拽编程' },
   { id: 'scope', title: '波形', desc: '多通道独立量程' },
-  { id: 'control', title: '控制与日志', desc: '命令 / 记录 / 回放' },
+  { id: 'control', title: '控制与日志', desc: '命令 / 日志 / 车辆状态' },
   { id: 'settings', title: '设置', desc: '缓冲 / 预设 / 关于' },
 ]
 

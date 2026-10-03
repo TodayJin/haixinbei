@@ -85,14 +85,8 @@ describe('契约自检（需要 mock 或桥在 127.0.0.1:8770）', () => {
     expect(by[9].compound).toBe(true)
   })
 
-  it('/api/recordings 列回放文件，connect replay 收文件和倍速', async () => {
+  it('connect 只认 sim/serial：模式不对必须明说失败', async () => {
     if (!live) return
-    const r = await getJson('/api/recordings')
-    expect(r.body.ok).toBe(true)
-    expect(typeof r.body.dir).toBe('string')
-    expect(r.body.items.length).toBeGreaterThan(0)
-    for (const k of ['name', 'path', 'size', 'mtime_ms']) expect(r.body.items[0]).toHaveProperty(k)
-
     // mode 不对必须明说失败（这条与"上次连过什么"无关，是确定性的）
     const bogus = await getJson('/api/link/connect', {
       method: 'POST',
@@ -100,29 +94,14 @@ describe('契约自检（需要 mock 或桥在 127.0.0.1:8770）', () => {
       body: JSON.stringify({ mode: 'bogus' }),
     })
     expect(bogus.body.ok).toBe(false)
-
-    // 回放不带文件：mock/桥会复用"上次那个文件"（`lastReplay`），所以**不能**断言一定失败 ——
-    // 长跑的 mock 进程在上一次用例里刚连过回放时这里就是成功的。
-    // 要么明说是哪出了问题，要么真的连上回放，二者必居其一。
-    const bad = await getJson('/api/link/connect', {
+    // 回放模式 2026-10-04 已按用户要求删除：再喊 "replay" 必须是明说的失败，不能连上什么
+    const gone = await getJson('/api/link/connect', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ mode: 'replay' }),
     })
-    if (bad.body.ok) expect(bad.body.link.mode).toBe('replay')
-    else expect(String(bad.body.error)).toMatch(/回放|文件/)
-
-    const ok = await getJson('/api/link/connect', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ mode: 'replay', replay: r.body.items[0].path, speed: 2 }),
-    })
-    if (ok.body.ok) {
-      expect(ok.body.link.mode).toBe('replay')
-    } else {
-      // 真桥上 mock 的假路径确实不存在：失败也必须是明说的失败
-      expect(String(ok.body.error)).toMatch(/回放|不存在/)
-    }
+    expect(gone.body.ok).toBe(false)
+    expect(String(gone.body.error)).toMatch(/sim|serial/)
 
     // 收尾切回模拟器：后面的用例还指望链路是 sim
     const back = await getJson('/api/link/connect', {

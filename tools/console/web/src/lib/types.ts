@@ -3,8 +3,8 @@
  * 契约里的字段名/单位不要改；这里只是把它们写成 TS 类型。
  */
 
-/** 链路模式 */
-export type LinkMode = 'sim' | 'serial' | 'replay'
+/** 链路模式（`replay` 已在 2026-10-04 按用户要求删除，只剩真串口与模拟器） */
+export type LinkMode = 'sim' | 'serial'
 
 /** 固件握手信息（未握手时为 null） */
 export interface FwInfo {
@@ -42,14 +42,6 @@ export interface HealthInfo {
   version: string
   uptime_ms: number
   sim: boolean
-}
-
-/** 一个可回放的录制文件（`GET /api/recordings`） */
-export interface RecItem {
-  name: string
-  path: string
-  size: number
-  mtime_ms: number
 }
 
 /** 参数分组：契约固定这几个取值 */
@@ -247,6 +239,12 @@ export interface DriveRequest {
 }
 
 /** /api/cmd 支持的命令（`start_a/b/c` 已废弃：固件删了内置任务流程，收到回 `ST_UNSUPPORTED`） */
+/**
+ * `/api/cmd` 的**规范命令名** —— 与桥上唯一那张表 `bridge/state.py:CMD_NAMES` 逐字一致
+ * （2026-10-04 修：网页原来发的是 `telem_hz`，桥上叫 `set_telem_hz` ⇒ 每次「下发频率」
+ *  都被回「没有这个命令: telem_hz」。`bridge/protocol.py` 里那张同义表 `CMD_BY_NAME`
+ *  是没人引用的死代码，已删除。）
+ */
 export type CmdName =
   | 'stop'
   /** @deprecated 用 `#/tasks` 页的「开始」；固件回「不支持」 */
@@ -255,14 +253,10 @@ export type CmdName =
   | 'start_b'
   /** @deprecated 同上 */
   | 'start_c'
+  | 'calib_gyro'
+  | 'save_params'
   | 'clear_fault'
   | 'reset'
-  | 'telem_hz'
-
-export interface RecordStatus {
-  ok: true
-  recording: boolean
-  path: string | null
-  samples: number
-  started_ms: number | null
-}
+  | 'set_telem_hz'
+  | 'set_logging'
+  | 'set_telem_mode'

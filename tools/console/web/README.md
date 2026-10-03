@@ -46,7 +46,8 @@ node mock/server.mjs   # 直接开 http://127.0.0.1:8770 ，托管 dist/
 | `#/servo` | 舵机与动作 | 两路舵机手动角度 + 回中 + 中位偏差；**14 个动作的逐行编辑**（下发 / 播放 / 与出厂值对比 / 复合动作标记）；「固化到车」（写小车 Flash）；预设 |
 | `#/params` | 调参 | 按环分组（速度环/角度环/循迹环/串级/任务/车辆/电源）逐项编辑、范围条 + 默认位置刻线、只看改动、全部下发、固化到车、回默认 |
 | `#/tasks` | 任务 | **状态机拖拽编程**：左任务列表（新建/复制/删除/导入导出 JSON，浏览器 localStorage 存 `hxb.tasks.v1`）、中状态卡片（每张「进门」+「循环体」两个序列，块拖动排序 / 点开改参数 / 设为主页 / 复制 / 删除）+ 编译与烧写卡（长度·占用%·CRC16·状态块数、红错/黄警列表、**「开机自启」开关（下发 COMMIT 的 flags bit0）**、烧写后**回读逐字节比对**、开始/停车/500ms 运行监视高亮当前状态与块）、右块库（10 种块按 运动/等待/动作/流程 分组，拖进去或点一下加到当前状态）。格式真值是仓根 [任务编程](../../../docs/任务编程.md)；编译器 `src/lib/task.ts`、编辑器 `src/lib/taskedit.ts`、桥客户端 `src/lib/taskapi.ts`（车上能力位 bit7 = `HOST_CAP_TASK` 为 0 时切成「等固件支持」提示） |
-| `#/scope` | 波形 | uPlot **每通道独立量程泳道**、5/10/20/30s 窗口、暂停、游标读数、通道勾选、导出 CSV（当前窗口或整个缓冲）、清空 || `#/control` | 控制与日志 | 停车（也停车上正在跑的任务）、跳任务编排页、清故障、软复位、遥测频率、车上记录；日志（可过滤）与 ACK 列表；车辆状态 —— 「启动任务 A/B/C」按钮已删除（车上内置流程已不存在，固件对 `0x02..0x04` 回 `0x08` 不支持），「陀螺校准」按钮同样是删掉的（`gyro_cal` 桥没这个名字、固件 `0x05` 也没实现） |
+| `#/scope` | 波形 | uPlot **每通道独立量程泳道**、5/10/20/30s 窗口、暂停、游标读数、通道勾选、清空 |
+| `#/control` | 控制与日志 | 停车（也停车上正在跑的任务）、跳任务编排页、清故障、软复位、遥测频率；日志（可过滤）与 ACK 列表；车辆状态 —— 「启动任务 A/B/C」按钮已删除（车上内置流程已不存在，固件对 `0x02..0x04` 回 `0x08` 不支持），「陀螺校准」按钮同样是删掉的（`gyro_cal` 桥没这个名字、固件 `0x05` 也没实现） |
 | `#/settings` | 设置 | 串口/波特率选择、连模拟器/串口/断开、环形缓冲点数、波形窗口、安全提示开关、固件能力位、预设管理与导出、关于 |
 
 全局：侧栏导航 + 顶栏链路徽章；右下角 toast（写操作的成功/失败提示，**失败直接显示后端的 `error` 原文**）；
@@ -88,14 +89,13 @@ node mock/server.mjs   # 直接开 http://127.0.0.1:8770 ，托管 dist/
 ## 6. 自测
 
 ~~~bash
-npm test                 # 16 个测试文件
+npm test                 # 19 个测试文件
 ~~~
 
 | 文件 | 覆盖 |
 |---|---|
 | `src/lib/ring.test.ts` | 环形缓冲：窗口切片、绕回、resize 保留、NaN 归零 |
 | `src/lib/format.test.ts` | 单位/格式换算：PWM%、脉宽→角度、角度归一、灰度、时长 |
-| `src/lib/csv.test.ts` | CSV 转义（逗号/引号/换行）、逐列小数位、表头、文件名 |
 | `src/lib/render.test.tsx` | **10 个页面 SSR 冒烟**：能渲染、含关键中文、不出现 `NaN`/`undefined` |
 | `src/lib/contract.test.ts` | 对 mock 的**契约自检**：字段形状、分组、越界错误体、14 个动作抽查、SSE 先 `state` 后 `telem`、`/api/tasks*` 整条闭环（烧写→目录→回读逐字节→运行→错 CRC 被拦→删掉；mock 没起就 skip） |
 | `src/lib/ssrPreview.test.tsx` | **产物生成器**：喂真实结构数据后把 10 个页面渲染成 `out/console/ssr/*.html` |
@@ -103,6 +103,9 @@ npm test                 # 16 个测试文件
 | `src/lib/task.golden.test.ts` | **跨语言金样本**：`encodeTask` 编出来的字节逐字节等于 C 侧 `task_prog.c` 生成的 `GOLDEN_HEX`（208 B / CRC16 `0x023A`），再解码往返 |
 | `src/lib/taskedit.test.ts` | 编辑器纯逻辑：块默认值/描述、拖拽插入与右移补偿、跨状态移动、状态增删克隆与跳转改道、按 UTF-8 字节截名、脏数据修复、存盘往返、编译预览（含红错/黄警） |
 | `src/lib/taskapi.test.ts` | 桥客户端：hex 编解码、120 B 分片拼镜像、`/api/tasks*` 各端点载荷、404/`不支持` ⇒ 提示态而不是报错、桥不在/非 JSON 的报错文案 |
+| `src/lib/perf.test.ts` | **热路径设计钉死**（用户说「感觉卡」的那次）：200 帧遥测不叫醒 `useMeta()`、rAF 合并、meta 快照同一引用、单通道取数 |
+| `src/lib/sparkline.test.ts` | 迷你波形：`rawRange`/`nextRange` 的**纵轴滞回**（放大即时、收缩每 tick 2%、掉到 55% 以下贴合）与 `decimationStep` 死区；对照旧实现证明旧代码每 tick 都在换相位（IMU 曲线"闪"的根源） |
+| `src/lib/hotpath.test.tsx` | **量测夹具**：喂 20s×100Hz 真遥测后 SSR 渲染 10 个页面，打印每页 `ms(中位)/折线点/取快照/热tick/元取数/拷贝点/扫描点/角上取数`（不是断言，是给人看的账本） |
 
 契约自检与预览生成需要 mock 在跑：
 
@@ -126,7 +129,7 @@ mkdir -p out/console
 > 一律 `exit=21`；加 `--single-process --no-zygote` 变成 `exit=0` 但**不产出 png**（独立
 > `--user-data-dir`、绝对/相对 `--screenshot` 路径、`--log-file` 都试过，无日志无文件）；
 > Edge `--headless=new` 直接挂死。所以那一轮**没有像素截图**，替代证据是：
-> ①`render.test.tsx` 的 9 页 SSR 冒烟；②`ssrPreview.test.tsx` 生成的
+> ①`render.test.tsx` 的 10 页 SSR 冒烟；②`ssrPreview.test.tsx` 生成的
 > `out/console/ssr/<页面>.html`（内联真实 CSS + 真实数据结构）——**用一个能跑的浏览器打开这些
 > html 就是成品长相**，也可以直接拿来截图。
 

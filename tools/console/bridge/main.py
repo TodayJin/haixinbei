@@ -53,11 +53,9 @@ def parse_args(argv=None):
     ap.add_argument("--port", type=int, default=8770, help="HTTP 端口，默认 8770")
     ap.add_argument("--sim", action="store_true", help="内置仿真车（无车也能跑，契约要求）")
     ap.add_argument("--serial", metavar="COMX", help="串口设备名，例如 COM26")
-    ap.add_argument("--baud", type=int, default=921600, help="波特率，默认 921600（和固件一致）")
-    ap.add_argument("--replay", metavar="FILE.jsonl", help="回放录制文件")
-    ap.add_argument("--replay-speed", type=float, default=1.0, help="回放倍速，默认 1.0")
+    ap.add_argument("--baud", type=int, default=230400,
+                    help="波特率，默认 230400（和板上固件的 DL_BAUD 一致；要 921600 得换普通 USB-TTL 接 U12）")
     ap.add_argument("--web", metavar="DIR", help="前端 dist 目录（默认 tools/console/web/dist）")
-    ap.add_argument("--record", metavar="FILE.jsonl", help="启动即开始录制的文件")
     ap.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     ap.add_argument("--list-ports", action="store_true", help="列出串口后退出")
     ap.add_argument("--low-res-timer", action="store_true",
@@ -84,7 +82,7 @@ def main(argv=None) -> int:
         print(f"\n建议：--serial {find_default_port()}")
         return 0
 
-    mode = "sim" if args.sim else ("replay" if args.replay else "serial")
+    mode = "sim" if args.sim else "serial"
     if mode == "serial":
         err = check_baud(args.serial or find_default_port(), args.baud, args.force_baud)
         if err:
@@ -92,7 +90,6 @@ def main(argv=None) -> int:
             return 2
     hi_res = False if args.low_res_timer else raise_timer_resolution()
     b = Bridge(mode=mode, port=args.serial or "", baud=args.baud,
-               replay=args.replay or "", replay_speed=args.replay_speed,
                web_root=args.web or "", console_dir=CONSOLE_DIR,
                sse_batch_ms=args.sse_batch_ms)
     try:
@@ -103,9 +100,6 @@ def main(argv=None) -> int:
     except Exception as e:
         print(f"启动失败：{type(e).__name__}: {e}")
         return 2
-
-    if args.record:
-        b.console.record_start(args.record)
 
     httpd = serve(b, args.host, args.port)
     url = f"http://{args.host}:{args.port}/"
@@ -118,8 +112,6 @@ def main(argv=None) -> int:
     if not os.path.isfile(os.path.join(b.web_root, "index.html")):
         print(f"  注意    : 前端还没构建（{b.web_root}），先跑：")
         print("            cd tools/console/web && npm install && npm run build")
-    print(f"  录制    : {'开' if b.console.recording else '关'}"
-          + (f" → {b.console.rec_path}" if b.console.rec_path else ""))
     print("  计时器  : " + ("1ms（已提高：链路轮询 ~180 次/s，100Hz 遥测不再成串到）"
                             if hi_res else "系统默认（Windows 上约 15.6ms）"))
     print("  SSE 合并: " + (f"{b.sse_batch_ms}ms（连续遥测合成一条 telem_batch）"
@@ -135,15 +127,11 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         print("\n收到 Ctrl+C，正在收尾……")
     finally:
-        try:
-            b.console.record_stop()
-        except Exception:
-            pass
         b.stop()
         httpd.shutdown()
         if hi_res:
             drop_timer_resolution()
-        print("已停止（链路关闭、录制收尾）。")
+        print("已停止（链路关闭）。")
     return 0
 
 

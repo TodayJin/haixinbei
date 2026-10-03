@@ -1,32 +1,18 @@
 import React from 'react'
-import { Download, Pause, Play, Trash2 } from 'lucide-react'
+import { Pause, Play, Trash2 } from 'lucide-react'
 import { Badge, Card, Toggle } from '../components/ui'
 import { ScopeBoard, type CursorReadout } from '../components/ScopeChart'
 import { CHANNELS, CHANNEL_BY_KEY } from '../lib/channels'
-import { csvFileName, downloadText, snapshotToCsv, type CsvColumn } from '../lib/csv'
-import { store, useStore } from '../lib/store'
+import { store, useHotSelect, useMeta } from '../lib/store'
 import { fmt } from '../lib/format'
 
 const WINDOWS: Array<5 | 10 | 20 | 30> = [5, 10, 20, 30]
 
 export function ScopePage() {
-  const { settings, ringFill } = useStore()
+  // 设置走 meta（低频）、缓冲水位走标量窄订阅：这一页的壳不跟着遥测重渲染，只有泳道自己重画
+  const { settings } = useMeta()
+  const ringFill = useHotSelect((s) => s.ringFill)
   const [readout, setReadout] = React.useState<CursorReadout | null>(null)
-  const [full, setFull] = React.useState(false)
-
-  const exportCsv = () => {
-    const snap = full ? store.ring.all() : store.ring.snapshot(settings.windowSec * 1000)
-    const cols: CsvColumn[] = []
-    for (const k of settings.scopeChannels) {
-      const def = CHANNEL_BY_KEY[k]
-      const field = CHANNELS.findIndex((c) => c.key === k)
-      if (!def || field < 0) continue
-      cols.push({ header: `${def.label}${def.unit ? `(${def.unit})` : ''}`, field, decimals: def.decimals })
-    }
-    const text = snapshotToCsv(snap, cols)
-    downloadText(csvFileName('console', Date.now()), text)
-    store.toast('info', `已导出 ${snap.count} 行（${full ? '全缓冲' : `${settings.windowSec}s 窗口`}）`)
-  }
 
   const rd = readout ? CHANNEL_BY_KEY[readout.key] : undefined
 
@@ -51,13 +37,6 @@ export function ScopePage() {
               {settings.paused ? <Play size={13} /> : <Pause size={13} />}
               {settings.paused ? '继续' : '暂停'}
             </button>
-            <button className="btn-ghost" onClick={exportCsv}>
-              <Download size={13} /> 导出 CSV
-            </button>
-            <label className="flex items-center gap-1 text-[12px] text-slate-400">
-              <input type="checkbox" checked={full} onChange={(e) => setFull(e.target.checked)} />
-              全缓冲
-            </label>
             <button className="btn-ghost" onClick={() => store.clearBuffers()}>
               <Trash2 size={13} /> 清空
             </button>

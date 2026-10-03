@@ -50,7 +50,7 @@ export function OverviewPage() {
           <div className="flex items-center justify-between">
             <span className="text-slate-400">状态</span>
             <span className="num text-slate-200">
-              {link?.connected ? `${link.port ?? ''} @ ${link.baud ?? 921600}` : '未连接'}
+              {link?.connected ? `${link.port ?? ''} @ ${link.baud ?? 230400}` : '未连接'}
             </span>
           </div>
           <div className="flex items-center justify-between">

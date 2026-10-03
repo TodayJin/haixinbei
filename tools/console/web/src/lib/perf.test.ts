@@ -8,6 +8,15 @@
  *   3. `SeriesRing.snapshotField()`：波形一条泳道只拷**一个**通道，
  *      不再每次 `snapshot()` 把 21 个通道全拷一遍（21 倍的无用拷贝）。
  *
+ * 2026-10-04 又补了三条（用户 m22973 再提「感觉有点卡」+「IMU 波形一直在闪」）：
+ *   4. `SeriesRing.view()`：一趟同时算抽稀线 + 整窗 min/max/last，相位锚在绝对下标
+ *      （`decimationStep()` 带死区），泳道点数上限定死 —— 每 tick 拷贝点从 4000~12000
+ *      降到 236~1023；
+ *   5. `nextRange()`：迷你波形纵轴做峰值包络 + 滞回（放大即时、收缩慢），
+ *      不再每 tick 按当前窗口重新量程（那就是"闪来闪去"）；
+ *   6. 页面壳/提示条改 `useMeta()`，读数改 `useHotSelect()` 窄订阅，IMU 页拆成叶子组件。
+ *      账本在 `hotpath.test.tsx`，纵轴/抽稀的单元测试在 `sparkline.test.ts`。
+ *
  * 这里把这三条钉死：谁把 telem 又塞回 meta 快照、或把节流拆掉、或让泳道退回
  * 全通道拷贝，测试立刻红。真机上的帧率/CRC/延迟另有 `tools/console/tests/` 的
  * 字节级对拍与真板实测（见 memory/SESSIONS.md）。

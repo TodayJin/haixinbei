@@ -1,5 +1,5 @@
 import React from 'react'
-import { CircleStop, Play, Power, Radio, RefreshCw, RotateCcw, Trash2 } from 'lucide-react'
+import { CircleStop, Play, Power, RefreshCw, RotateCcw, Trash2 } from 'lucide-react'
 import { Badge, Card, StatusDot } from '../components/ui'
 import { store, useMeta, useStore } from '../lib/store'
 import { fmt, fmtClock } from '../lib/format'
@@ -71,13 +71,12 @@ function LogCards() {
 
 /** 车上固件把遥测频率钳在 1..200Hz（`firmware/App/Svc/host_link.c` 的
  *  `CMD_SET_TELEM_HZ`：`arg<1 → 1`、`arg>200 → 200`），所以滑块上限就是 200 ——
- *  100Hz 只是**默认值**，不是上限（链路提速到 921600 后就是留给用户往上调的）。 */
+ *  100Hz 只是**默认值**，不是上限（链路提速后就是留给用户往上调的）。 */
 const HZ_MIN = 1
 const HZ_MAX = 200
 
 export function ControlPage() {
-  const { record, link, stats, params, telem } = useStore()
-  const recording = record?.recording ?? false
+  const { link, stats, params, telem } = useStore()
   const isTaskRunning = telem?.task_id !== undefined && telem.task_id !== 0xff
   const [hz, setHz] = React.useState(50)
 
@@ -90,7 +89,7 @@ export function ControlPage() {
   return (
     <div className="grid gap-3 xl:grid-cols-[380px_minmax(0,1fr)]">
       <div className="grid gap-3">
-        <Card title="任务命令" right={<Badge tone={recording ? 'rose' : 'slate'}>车上记录 {recording ? '开' : '关'}</Badge>}>
+        <Card title="任务命令">
           <div className="grid grid-cols-2 gap-2">
             <button className="btn-danger" onClick={() => void store.cmd('stop')}>
               <CircleStop size={13} /> 停止
@@ -111,9 +110,6 @@ export function ControlPage() {
             <button className="btn-ghost" onClick={() => void store.cmd('reset')}>
               <RotateCcw size={13} /> 软复位
             </button>
-            <button className="btn-ghost" onClick={() => void store.toggleRecord()}>
-              <Radio size={13} /> {recording ? '停止记录' : '开始记录'}
-            </button>
           </div>
         </Card>
 
@@ -129,7 +125,7 @@ export function ControlPage() {
             />
             <span className="num w-16 text-right text-[13px] text-slate-200">{hz} Hz</span>
           </div>
-          <button className="btn mt-2" onClick={() => void store.cmd('telem_hz', hz)}>
+          <button className="btn mt-2" onClick={() => void store.cmd('set_telem_hz', hz)}>
             下发频率
           </button>
           <div className="mt-2 text-[12px] text-slate-400">
@@ -151,16 +147,6 @@ export function ControlPage() {
               参数指纹 <span className="num text-slate-200">0x{(params?.param_crc ?? 0).toString(16).toUpperCase()}</span>
             </div>
           </div>
-        </Card>
-
-        <Card title="车上记录">
-          <div className="text-[13px] text-slate-300">
-            状态：{recording ? '记录中' : '未记录'}
-            {record?.samples !== undefined && <span className="num ml-2 text-slate-400">{record.samples} 帧</span>}
-          </div>
-          <p className="mt-2 text-[12px] text-slate-500">
-            「车上记录」是把黑匣子写进车自己的 Flash；上位机的 CSV 是另一套（在波形页导出），两回事。
-          </p>
         </Card>
 
         <Card title="车辆状态">

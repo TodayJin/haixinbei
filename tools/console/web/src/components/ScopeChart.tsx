@@ -11,13 +11,22 @@ import React from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
 import { CHANNEL_BY_KEY, CHANNELS } from '../lib/channels'
-import { store, useStore } from '../lib/store'
+import { store, useHotSelect, useHotVersion, useMeta } from '../lib/store'
 
 /** channel key -> 环形缓冲里的字段下标（与 CHANNELS 顺序一致） */
 const CHANNEL_KEYS = CHANNELS.map((c) => c.key)
 function channelIndexOf(key: string): number {
   return CHANNEL_KEYS.indexOf(key)
 }
+
+/**
+ * 一根泳道交给 uPlot 的最大点数。
+ *
+ * 原来把整个窗口（20s @100Hz = 2000 点）原样塞进去，5 条泳道 = 每帧 1 万点重新
+ * 布点 + 重新计算。屏幕就 1000 多像素宽，800 点已经比像素还密；再用
+ * `ring.view()` 的稳定相位抽稀，窗口滑动时重叠部分的采样点一个不动。
+ */
+const LANE_MAX_POINTS = 800
 
 interface LaneProps {
   channelKey: string
@@ -32,7 +41,10 @@ function ScopeLane({ channelKey, windowMs, paused, height = 96, onHover }: LaneP
   const hostRef = React.useRef<HTMLDivElement | null>(null)
   const plotRef = React.useRef<uPlot | null>(null)
   const dataRef = React.useRef<uPlot.AlignedData>([new Float64Array(0), new Float32Array(0)])
-  const { version, ringFill } = useStore()
+  // 窄订阅：只要热 tick 号 + 缓冲水位（标量），不要整份快照
+  const version = useHotVersion()
+  const ringFill = useHotSelect((s) => s.ringFill)
+  const stepRef = React.useRef(1)
 
   // 建图（只建一次）
   React.useEffect(() => {
@@ -115,13 +127,14 @@ function ScopeLane({ channelKey, windowMs, paused, height = 96, onHover }: LaneP
     if (paused) return
     const idx = channelIndexOf(channelKey)
     if (idx < 0) return
-    // 只取这一条泳道的通道：全量 snapshot() 要拷 21 个通道，这里白拷 20 份
-    const snap = store.ring.snapshotField(windowMs, idx)
-    if (snap.count < 2) return
-    const t0 = snap.t[0]
-    const xs = new Float64Array(snap.count)
-    for (let i = 0; i < snap.count; i++) xs[i] = (snap.t[i] - t0) / 1000
-    const data: uPlot.AlignedData = [xs, snap.v]
+    // 一趟扫描：抽稀后的线（稳定相位）+ 整窗极值；不再整窗拷贝 2000 点
+    const view = store.ring.view(windowMs, idx, LANE_MAX_POINTS, stepRef.current)
+    stepRef.current = view.step
+    if (view.count < 2) return
+    const t0 = view.t[0]
+    const xs = new Float64Array(view.count)
+    for (let i = 0; i < view.count; i++) xs[i] = (view.t[i] - t0) / 1000
+    const data: uPlot.AlignedData = [xs, view.v]
     dataRef.current = data
     u.setData(data, false)
     // y 轴自动量程：加一点余量，避免贴边
@@ -131,8 +144,8 @@ function ScopeLane({ channelKey, windowMs, paused, height = 96, onHover }: LaneP
   const last = React.useMemo(() => {
     const f = channelIndexOf(channelKey)
     if (f < 0) return null
-    const arr = store.ring.snapshotField(windowMs, f).v
-    return arr.length ? arr[arr.length - 1] : null
+    // O(1)：取窗口内最新一个样本，不拷数组
+    return store.ring.lastValue(f, windowMs)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, windowMs, channelKey])
 
@@ -170,7 +183,8 @@ export function ScopeBoard({
   paused: boolean
   onHover?: (r: CursorReadout) => void
 }) {
-  const { settings } = useStore()
+  // 低频：通道开关是设置（meta），页面壳不该跟着 20Hz 的遥测重渲染
+  const { settings } = useMeta()
   const keys = settings.scopeChannels.length ? settings.scopeChannels : ['yaw']
   return (
     <div className="grid gap-3">

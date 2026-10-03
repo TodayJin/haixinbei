@@ -23,6 +23,62 @@ export interface FieldSnapshot {
   count: number
 }
 
+/**
+ * 一条通道的"显示窗口"：抽稀后的线 + 整窗数字，**一次扫描算完**。
+ *
+ * 和 `snapshotField()` 的区别：这里同时给出抽稀网格的相位（`start`/`step`）和
+ * 整窗的 min/max/last —— 折线要的是"画得动"，卡片上的数字要的是"准"，
+ * 两者不该互相将就（抽稀后的数组算 min/max 会漏掉尖峰）。
+ */
+export interface FieldView {
+  /** 抽稀后的时间戳（毫秒），长度 = count */
+  t: Float64Array
+  /** 抽稀后的值，长度 = count */
+  v: Float32Array
+  /** 抽稀后的点数 */
+  count: number
+  /** `v[0]` 在环形缓冲里的**绝对下标**（0 = 当前最旧的一条） */
+  start: number
+  /** 抽稀步长（绝对下标 % step === 0 的样本才会被留下） */
+  step: number
+  /** 窗口内的原始点数（未抽稀） */
+  windowCount: number
+  /** 整窗最小值（不受抽稀影响）；窗口为空时 NaN */
+  min: number
+  /** 整窗最大值；窗口为空时 NaN */
+  max: number
+  /** 窗口内最新一个值；窗口为空时 NaN */
+  last: number
+}
+
+const EMPTY_VIEW: FieldView = {
+  t: new Float64Array(0),
+  v: new Float32Array(0),
+  count: 0,
+  start: 0,
+  step: 1,
+  windowCount: 0,
+  min: Number.NaN,
+  max: Number.NaN,
+  last: Number.NaN,
+}
+
+/**
+ * 稳定相位抽稀的步长：抽稀后点数 ≈ count/step ≤ maxPoints。
+ *
+ * 为什么要 `hint`（死区）：`ceil(count/maxPoints)` 在窗口边界上会在相邻两档之间来回跳，
+ * 每跳一次采样网格的相位就整体挪一格 ⇒ 折线抖。给了 hint 就"能不动就不动"：
+ * 只有 count 明确超过上一档容量时才调大，明确低于下一档容量 ×0.98 时才调小。
+ */
+export function decimationStep(count: number, maxPoints: number, hint = 1): number {
+  const cap = Math.max(1, Math.floor(maxPoints))
+  const need = Math.max(1, Math.ceil(count / cap))
+  const prev = Math.max(1, Math.floor(hint))
+  if (need > prev) return need
+  const smaller = Math.max(1, prev - 1)
+  return count <= cap * smaller * 0.98 ? smaller : prev
+}
+
 export class SeriesRing {
   private cap: number
   private fields: number
@@ -144,7 +200,60 @@ export class SeriesRing {
     return { t, v, count }
   }
 
-  /** 取全部（按时间升序），CSV 导出用 */
+  /**
+   * 显示窗口 = **稳定相位**抽稀 + 整窗极值/末值，一次扫描。
+   *
+   * 相位锚在**绝对下标**上（只留 `absIdx % step === 0` 的样本），不是锚在窗口数组的
+   * `i=0` 上：窗口每滑一格，`snapshotField()[0]` 就换一个样本，从 `i=0` 起步的抽稀网格
+   * 会让**每个**采样点都换样本 ⇒ 折线整条抖（用户 m22973「波形一直在闪来闪去」的根因之一）。
+   * 锚绝对下标后，两次窗口重叠部分的采样点一个不动，只有两端进出。
+   */
+  view(windowMs: number, fieldIndex: number, maxPoints: number, stepHint = 1, nowMs?: number): FieldView {
+    const f = Math.max(0, Math.min(this.fields - 1, Math.floor(fieldIndex)))
+    const { lo, count } = this.range(windowMs, nowMs)
+    if (count === 0) return EMPTY_VIEW
+    const src = this.ch[f]
+
+    // 一整趟：极值 + 末值（数字要准，不受抽稀影响）
+    let min = Number.POSITIVE_INFINITY
+    let max = Number.NEGATIVE_INFINITY
+    for (let k = 0; k < count; k++) {
+      const val = src[this.phys(lo + k)]
+      if (val < min) min = val
+      if (val > max) max = val
+    }
+    const last = src[this.phys(lo + count - 1)]
+
+    const step = decimationStep(count, maxPoints, stepHint)
+    // 第一个落在绝对网格上的偏移：使 (lo + off) % step === 0
+    const off = (step - (lo % step)) % step
+    const n = off >= count ? 0 : Math.floor((count - 1 - off) / step) + 1
+    const t = new Float64Array(n)
+    const v = new Float32Array(n)
+    for (let k = 0; k < n; k++) {
+      const p = this.phys(lo + off + k * step)
+      t[k] = this.t[p]
+      v[k] = src[p]
+    }
+    return { t, v, count: n, start: lo + off, step, windowCount: count, min, max, last }
+  }
+
+  /**
+   * 窗口内最新一个值 —— O(1)，**不拷数组**。
+   * 卡片/泳道角上的数字原来走 `snapshotField(...).v` 再取最后一个：20Hz × 每条泳道
+   * 白拷一整窗口（波形页 5 条 = 5005 点/帧），纯浪费。窗口空给 null。
+   *
+   * `range()` 的右端永远是最后一帧（`nowMs` 只决定**左端**往哪裁），所以取
+   * `lo + count - 1` 与取全局最新等价 —— 写出来是为了语义诚实：取的是"窗口内"的末值。
+   */
+  lastValue(fieldIndex: number, windowMs = Number.POSITIVE_INFINITY, nowMs?: number): number | null {
+    const f = Math.max(0, Math.min(this.fields - 1, Math.floor(fieldIndex)))
+    const { lo, count } = this.range(windowMs, nowMs)
+    if (count === 0) return null
+    return this.ch[f][this.phys(lo + count - 1)]
+  }
+
+  /** 取全部（按时间升序） */
   all(): Snapshot {
     return this.snapshot(Number.POSITIVE_INFINITY)
   }

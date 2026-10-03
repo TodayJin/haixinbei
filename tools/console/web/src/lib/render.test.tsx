@@ -27,7 +27,7 @@ const CASES: Array<[string, () => React.JSX.Element, string]> = [
   ['舵机与动作', ServoPage, '舵机'],
   ['调参', ParamsPage, '参数'],
   ['任务', TasksPage, '状态机'],
-  ['波形', ScopePage, 'CSV'],
+  ['波形', ScopePage, '显示哪些通道'],
   ['控制与日志', ControlPage, '任务'],
   ['设置', SettingsPage, '串口'],
 ]

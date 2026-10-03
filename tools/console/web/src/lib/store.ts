@@ -11,7 +11,7 @@
  *  - 断线由浏览器 EventSource 自动重连，期间保留缓冲（API.md §5）。
  */
 
-import { useSyncExternalStore } from 'react'
+import { useCallback, useRef, useSyncExternalStore } from 'react'
 import { api, normalizePresets, openStream } from './api'
 import { CHANNELS } from './channels'
 import { SeriesRing } from './ring'
@@ -24,8 +24,6 @@ import type {
   ParamItem,
   ParamsResponse,
   PresetItem,
-  RecItem,
-  RecordStatus,
   StatsEvent,
   Telem,
 } from './types'
@@ -94,7 +92,6 @@ export interface ConsoleSnapshot {
   actions: ActionsResponse | null
   cal: CalResponse | null
   presets: PresetItem[]
-  record: RecordStatus | null
   telem: Telem | null
   stats: StatsEvent | null
   logs: LogItem[]
@@ -105,8 +102,6 @@ export interface ConsoleSnapshot {
   lastError: string | null
   /** 桥扫描到的串口（设置页下拉用） */
   ports: string[]
-  /** 能回放的录制文件（设置页「回放」卡用） */
-  recordings: RecItem[]
 }
 
 /**
@@ -139,7 +134,6 @@ class ConsoleStore {
     actions: null,
     cal: null,
     presets: [],
-    record: null,
     telem: null,
     stats: null,
     logs: [],
@@ -149,7 +143,6 @@ class ConsoleStore {
     ringFill: 0,
     lastError: null,
     ports: [],
-    recordings: [],
   }
 
   readonly ring = new SeriesRing(loadSettings().ringPoints, CHANNELS.length)
@@ -173,6 +166,9 @@ class ConsoleStore {
   }
 
   getSnapshot = (): ConsoleSnapshot => this.snap
+
+  /** 只给窄订阅用：热 tick 号（每次 emit/热更新 +1）。引用恒定，永远不会让 React 重订阅。 */
+  getVersion = (): number => this.snap.version
 
   /** 低频状态（不含 telem），只显示参数/设置/日志的页面用它 */
   subscribeMeta = (fn: () => void): (() => void) => {
@@ -359,13 +355,12 @@ class ConsoleStore {
 
   // ---- 首屏/手动刷新 ----
   async refreshAll(): Promise<void> {
-    const [link, params, actions, presets, cal, rec] = await Promise.allSettled([
+    const [link, params, actions, presets, cal] = await Promise.allSettled([
       api.link(),
       api.params(),
       api.actions(),
       api.presets(),
       api.cal(),
-      api.recordStatus(),
     ])
     const next = { ...this.snap }
     if (link.status === 'fulfilled' && link.value) next.link = link.value as unknown as LinkInfo
@@ -373,27 +368,16 @@ class ConsoleStore {
     if (actions.status === 'fulfilled') next.actions = actions.value
     if (presets.status === 'fulfilled') next.presets = presets.value.items
     if (cal.status === 'fulfilled') next.cal = cal.value
-    if (rec.status === 'fulfilled') next.record = rec.value.record
     this.snap = next
     this.emit()
   }
 
   // ---- 链路 ----
-  /**
-   * 连链路。`replay` 是回放要用的 jsonl 路径（只有回放模式需要），
-   * `speed` 是回放倍速（1.0 = 原速）。
-   */
-  async connect(
-    mode: 'serial' | 'sim' | 'replay',
-    port?: string,
-    baud?: number,
-    replay?: string,
-    speed?: number,
-  ): Promise<void> {
+  async connect(mode: 'serial' | 'sim', port?: string, baud?: number): Promise<void> {
     await this.op(
       '连接',
-      () => api.connect(mode, port, baud, replay, speed),
-      `已发起连接（${mode}${mode === 'replay' && replay ? '：' + replay : port ? ' ' + port : ''}）`,
+      () => api.connect(mode, port, baud),
+      `已发起连接（${mode}${port ? ' ' + port : ''}）`,
     )
     await this.refreshAll()
   }
@@ -412,17 +396,6 @@ class ConsoleStore {
       this.emit()
     } catch (e) {
       this.toast('err', `扫描串口失败：${(e as Error).message}`)
-    }
-  }
-
-  /** 列出 `data/logs/*.jsonl`（设置页回放下拉用） */
-  async listRecordings(): Promise<void> {
-    try {
-      const r = await api.recordings()
-      this.snap = { ...this.snap, recordings: r.items ?? [] }
-      this.emit()
-    } catch (e) {
-      this.toast('err', `读录制文件列表失败：${(e as Error).message}`)
     }
   }
 
@@ -540,15 +513,6 @@ class ConsoleStore {
     await this.op('命令', () => api.cmd(cmd, arg), `命令 ${cmd} 已下发`)
   }
 
-  async toggleRecord(): Promise<void> {
-    const on = this.snap.record?.recording ?? false
-    const r = await this.op('记录', () => api.record(on ? 'stop' : 'start'), on ? '已停止记录' : '开始记录 JSONL')
-    if (r) {
-      this.snap = { ...this.snap, record: r.record }
-      this.emit()
-    }
-  }
-
   // ---- 预设 ----
   async savePreset(name: string, targets: string[], note?: string): Promise<void> {
     const r = await this.op('保存预设', () => api.presetSave(name, targets, note), `预设「${name}」已保存`)
@@ -592,10 +556,19 @@ class ConsoleStore {
     this.emit()
   }
 
-  /** 只清日志/ACK（不动波形缓冲） */
+  /**
+   * 只清日志/ACK（不动波形缓冲）。
+   *
+   * 本地先清、桥那边也尽力清一遍（`POST /api/log/clear`，桥早就有了）。不通知桥的旧行为
+   * 看着像"清不掉"：下一次 `refreshAll()`（GET `/api/log`）会把旧日志原样拉回来。
+   * 桥清失败只在本地清空之后报一声，不影响使用。
+   */
   clearLogs(): void {
     this.snap = { ...this.snap, logs: [], acks: [] }
     this.emit()
+    void api.logClear().catch((e: Error) => {
+      this.toast('err', `桥侧日志没清掉（界面已清空）：${e.message}`)
+    })
   }
 }
 
@@ -608,4 +581,32 @@ export function useStore(): ConsoleSnapshot {
 /** 只订阅低频状态：拿不到 `telem`，也就不会被 20Hz 的遥测拖着重渲染 */
 export function useMeta(): MetaSnapshot {
   return useSyncExternalStore(store.subscribeMeta, store.getMetaSnapshot, store.getMetaSnapshot)
+}
+
+/**
+ * 只拿"热 tick 号"（一个数字），不搬运整份快照。
+ *
+ * 吃 telem 的**叶子**组件用它：引用恒定的数字，React 不会重订阅；需要重算的东西
+ * （波形、数字）把它挂进 `useMemo` 依赖里。页面壳不要用它 —— 页面壳要的是"我不跟着抖"。
+ */
+export function useHotVersion(): number {
+  return useSyncExternalStore(store.subscribe, store.getVersion, store.getVersion)
+}
+
+/** `useHotSelect` 的返回值必须是**标量**：React 用 `Object.is` 比对，新对象会让它一直重渲染 */
+type Scalar = string | number | boolean | null | undefined
+
+/**
+ * 从一个热快照里挑一个**标量**：挑出来的值没变（`Object.is`）就 bail out，不重渲染。
+ *
+ * 约束（沿用 `useMeta()` 那条约定）：`select` 必须是纯函数、且**每次调用都不分配**
+ * （返回 number/string/bool/null）。返回新对象等于每次都快照不一致，会踩
+ * "The result of getSnapshot should be cached" 并陷入无限重渲染。
+ * `select` 放进 ref：内联箭头函数每次都换引用，但不能因此重订阅。
+ */
+export function useHotSelect<T extends Scalar>(select: (s: ConsoleSnapshot) => T): T {
+  const fnRef = useRef(select)
+  fnRef.current = select
+  const get = useCallback(() => fnRef.current(store.getSnapshot()), [])
+  return useSyncExternalStore(store.subscribe, get, get)
 }

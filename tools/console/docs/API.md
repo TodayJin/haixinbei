@@ -2,7 +2,7 @@
 
 > 前端（`tools/console/web/`）与 Python 桥（`tools/console/bridge/`）之间**唯一的约定**。
 > 双方都不得单方面改动；要改先改本文件并在提交信息里写明。
-> 数据方向：小车 ──(LPUART1 921600, 帧协议)──> 桥 ──(HTTP + SSE, localhost)──> 浏览器。
+> 数据方向：小车 ──(LPUART1 230400, 帧协议)──> 桥 ──(HTTP + SSE, localhost)──> 浏览器。
 
 ## 0. 运行形态
 
@@ -10,7 +10,7 @@
 - 静态前端：桥直接托管 `tools/console/web/dist/`（`GET /` → `index.html`，其余按文件返回）。
   开发期可用 `npm run dev`（Vite 5173）并把 `/api` 代理到桥的 8770 端口。
 - 默认端口 **8770**，只监听 `127.0.0.1`。
-- 三种链路模式：`serial`（真车，串口）/ `sim`（内置仿真信号源，无车可用）/ `replay`（回放 `data/logs/rec_*.jsonl`）。
+- 两种链路模式：`serial`（真车，串口）/ `sim`（内置仿真信号源，无车可用）。
 
 ## 1. 通用
 
@@ -25,7 +25,7 @@
 |---|---|---|
 | GET | `/api/health` | 版本/运行时长/是否仿真 |
 | GET | `/api/link` | 链路状态 + 固件握手信息 |
-| POST | `/api/link/connect` | `{mode,port?,baud?,replay?,speed?}` 连接（切换模式也用它；`mode:"replay"` 必须给 `replay`=jsonl 路径，`speed` 是回放倍速） |
+| POST | `/api/link/connect` | `{mode,port?,baud?}` 连接（切换模式也用它；`mode` 只有 `serial`（要 `port`）/ `sim`） |
 | POST | `/api/link/disconnect` | 断开 |
 | GET | `/api/ports` | 可用串口列表 |
 | GET | `/api/params` | 全部参数（本地值 + 默认/范围 + 脏标记） |
@@ -42,7 +42,7 @@
 | POST | `/api/servo/center` | 两路回 0°（收回位） |
 | POST | `/api/servo/deviation` | `{ch, dev_us}` 中位偏差微调（±100µs） |
 | POST | `/api/drive` | `{mode:"off"\|"wheels"\|"base_turn", vl?,vr?,base?,turn?}`：`wheels` 的 `vl`/`vr` = 左右轮**速度刻度**（−7200..+7200，负 = 反转）；`base_turn` 的 **`base` = 基准速度刻度（−7200..+7200，负 = 倒车）、`turn` = 目标航向偏移（度，正 = 左转 = 偏航角增大，±540）**，基准航向在**进入**该模式时锁存（= 固件 `s_base_yaw`），之后重复帧只改目标；`base=0` 即"原地用车上的角度环转到并保持这个朝向"。**注意：这里的速度是固件速度环的目标刻度、不是 mm/s**（mm/s 只有遥测的 `vl/vr` 用；刻度 1000 以下落在静摩擦死区） |
-| POST | `/api/cmd` | `{cmd, arg?}`：`stop/clear_fault/reset/telem_hz`（`start_a/start_b/start_c` 仍收，但车回 **`0x08` 不支持** ⇒ 桥回 `200 + ok:false`；车上内置任务流程已删除，任务走 §3.6）。**`arg` 是 32 位**：桥发 `cmd`(u8) + 4 字节小端 i32，少于 5 字节的载荷固件会当成 `arg=0`（2026-10-04 修的真 bug：老代码只发 1 字节 ⇒ `telem_hz` 被钳成 1Hz）。`telem_hz` 固件钳 **1..200**，桥的 `/api/link` 报同一个钳过的值 |
+| POST | `/api/cmd` | `{cmd, arg?}`：命令名只有桥上 `bridge/state.py:CMD_NAMES` 那张表 —— `stop` / `clear_fault` / `reset` / `set_telem_hz` / `save_params` / `calib_gyro`(固件回未就绪) / `set_logging`(同上) / `set_telem_mode` / `start_a`·`start_b`·`start_c`（这三个仍收，但固件删了内置任务流程、回 **`0x08` 不支持** ⇒ 桥回 `200 + ok:false`；任务走 §3.6）。**没有 `telem_hz` 这个短名**（2026-10-04 用户报的「没有这个命令: telem_hz」就是网页发了短名）。**`arg` 是 32 位**：桥发 `cmd`(u8) + 4 字节小端 i32，少于 5 字节的载荷固件会当成 `arg=0`（2026-10-04 修的真 bug：老代码只发 1 字节 ⇒ `set_telem_hz` 被钳成 1Hz）。`set_telem_hz` 固件钳 **1..200**，桥的 `/api/link` 报同一个钳过的值 |
 | GET | `/api/stream` | **SSE**：实时数据流（见 §4） |
 | GET | `/api/log?limit=200` | 最近的文本日志 |
 | GET | `/api/cal` | 灰度标定数据（8 路黑白阈值/抖动/有效性） |
@@ -50,9 +50,6 @@
 | POST | `/api/presets` | `{name, targets?:["params","actions","servo"], keys?, values?, note?}` 保存（`values` 省略 = 抓当前；`kind` 由 targets 推） |
 | POST | `/api/presets/apply` | `{name, targets:["actions","params","servo"]}` 应用 |
 | DELETE | `/api/presets?name=x` | 删除 |
-| POST | `/api/record` | `{action:"start"\|"stop"}` 把遥测帧逐行写成 JSONL（`data/logs/rec_*.jsonl`），供回放用 |
-| GET | `/api/record` | 录制状态 + 文件路径 |
-| GET | `/api/recordings` | `{ok,dir,items:[{name,path,size,mtime_ms}]}`：`data/logs/*.jsonl`，按 mtime 倒序（前端回放下拉） |
 
 ## 3. 数据模型
 
@@ -60,8 +57,8 @@
 ```json
 {
   "ok": true,
-  "mode": "sim",                  // sim | serial | replay
-  "port": "COM26", "baud": 921600,    // 代码默认 921600；走 J-Link 的 VCOM 时只能 230400（桥的 --baud 跟固件 DL_BAUD 一致）
+  "mode": "sim",                  // sim | serial
+  "port": "COM26", "baud": 230400,    // 代码默认 230400 = 板上固件 board.c 的 DL_BAUD（车上 J-Link VCOM 的上限也是它）
   "connected": true,
   "stats": {"rx": 0, "tx": 0, "crc": 0, "resync": 0, "drops": 0},
   "telem_hz": 100,
@@ -152,9 +149,8 @@
 | `error` | 事件驱动 | `{"text":"串口被拔出"}` |
 
 **攒批（`--sse-batch-ms`，默认 20ms）**：桥把连续遥测攒够一个窗口再发同一条
-`telem_batch`；`0` = 关，退回"一条事件一帧"的老行为。这是**拿延迟换唤醒数**：
-`python -m bridge.bench --replay --hz 100,200` 实测 —— 帧率不变（100.4→100.2、
-199.3→199.8 帧/s），遥测报文数 100Hz 402→135、200Hz 803→134（约 1/3 ~ 1/6），
+`telem_batch`；`0` = 关，退回"一条事件一帧"的老行为。这是**拿延迟换唤醒数**：100/200 Hz 定频源实测 ——
+帧率不变（100.4→100.2、199.3→199.8 帧/s），遥测报文数 100Hz 402→135、200Hz 803→134（约 1/3 ~ 1/6），
 单条报文 740B→2132B/4260B，字节率基本不变（73.2→72.1 KB/s）；代价是单帧最坏晚
 一个窗口（20ms 档实测报文到达间隔 p95 31.9ms / max 32.4ms）。前端 `openStream`
 对 `telem_batch` 逐帧喂同一个 `onTelem`，上层无感。
@@ -198,7 +194,7 @@
 - IMU 页 3D 车模型：**纯 CSS 3D**（`preserve-3d` 叠长方体，不引 three.js，仓库里也没有模型文件），符号约定 **+偏航 = 左转 = `rotateY(+)`、+俯仰 = 抬头 = `rotateX(+)`、+横滚 = 向左倾 = `rotateZ(+)`**（车的左侧 = 模型 +x，车头朝 +z），相机是 `rotateY(az) rotateX(-el)`（默认 az 26° / el 30°，拖动改视角、双击复位）。模型和读数都吃**遥测原始帧**，**不要**在这里再套一遍固件 `app_ui.c` 给 OLED 用的 M1..M8 轴序交换（那套是按 OLED 视角经验挑的）；真车上哪个方向反了，就是 `web/src/lib/attitude3d.ts` 里一行符号。三张波形 = 偏航/俯仰/横滚各一张（20 s 窗口，纵轴以 0 为中心，用 `Sparkline` 的 `zeroScale`）。
 - 不要用 `gyro_cal` / `gyro_zero` / `gyro_turn` 这三个命令名：桥的 `CMD_NAMES` 里没有（只有 `calib_gyro`），固件 `CMD_CALIB_GYRO 0x05` 也没实现（明确回 `ST_NOT_READY`）；只有开发用 mock 认这三个名字。朝向控制的正确做法就是上面的 `/api/drive` `base_turn`。
 - 数据：`EventSource('/api/stream')` + 本地环形缓冲（默认 30 000 点，可在设置里改）。断开自动重连并保留缓冲。
-- 波形页：每通道**独立量程泳道**（节约纵向空间）、可选 5/10/20/30 s 窗口、暂停/继续、游标读数、CSV 导出（前端生成）。
+- 波形页：每通道**独立量程泳道**（节约纵向空间）、可选 5/10/20/30 s 窗口、暂停/继续、游标读数。
 - 每个写操作后给出 1 行反馈（成功/失败原因），失败要用后端返回的 `error` 原文。
 - 安全提示常驻：操控页顶部一行“真车模式下会真的让车轮转动 —— 先架空空转”。
 - 任务页（`#/tasks`）：三栏 = 左任务列表（新建/复制/删除/导入导出 JSON，localStorage `hxb.tasks.v1`）/ 中状态卡片（每张

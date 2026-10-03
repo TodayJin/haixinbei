@@ -112,10 +112,10 @@ def test_summarize_counts_frames_inside_batches_not_messages():
 def test_format_report_adds_batch_line_only_when_batched():
     evs = [("telem_batch", [{"i": 1}, {"i": 2}], 0.00, 200),
            ("telem_batch", [{"i": 3}, {"i": 4}], 0.01, 200)]
-    lines = bench.format_report(bench.summarize(evs, dt=1.0, fed_frames=4), "回放 100Hz")
+    lines = bench.format_report(bench.summarize(evs, dt=1.0, fed_frames=4), "100Hz 档")
     assert len(lines) == 4 and "telem_batch" in lines[3] and "2 条" in lines[3]
     plain = bench.summarize([_ev("telem", 0.0), _ev("telem", 0.01)], dt=1.0)
-    assert len(bench.format_report(plain, "回放 50Hz")) == 3   # 没合并就不加那行
+    assert len(bench.format_report(plain, "50Hz 档")) == 3   # 没合并就不加那行
 
 
 # --------------------------------------------------------------- format_report

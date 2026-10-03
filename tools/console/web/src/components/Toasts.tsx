@@ -1,5 +1,5 @@
 import React from 'react'
-import { store, useStore } from '../lib/store'
+import { store, useMeta } from '../lib/store'
 
 const TONE: Record<string, string> = {
   ok: 'ring-neon-mint/30 bg-neon-mint/10 text-neon-mint',
@@ -9,7 +9,8 @@ const TONE: Record<string, string> = {
 
 /** 右下角提示条：写操作成功/失败都在这里（失败显示后端 error 原文） */
 export function Toasts() {
-  const { toasts } = useStore()
+  // 提示条是低频状态（走 emit()），不该被 20Hz 的遥测叫醒
+  const { toasts } = useMeta()
   return (
     <div className="pointer-events-none fixed bottom-4 right-4 z-50 flex w-[min(92vw,420px)] flex-col gap-2">
       {toasts.map((t) => (
@@ -27,7 +28,7 @@ export function Toasts() {
 
 /** 顶部错误横幅（最近一次后端错误；点掉即消失） */
 export function ErrorBanner() {
-  const { lastError, toasts } = useStore()
+  const { lastError, toasts } = useMeta()
   const [dismissed, setDismissed] = React.useState<string | null>(null)
   if (!lastError || dismissed === lastError || toasts.some((t) => t.kind === 'err')) return null
   return (

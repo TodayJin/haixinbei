@@ -5,16 +5,13 @@ import { store, useMeta } from '../lib/store'
 import { bytesToHuman, fmt, fmtInt } from '../lib/format'
 
 export function SettingsPage() {
-  const { link, settings, sse, stats, ports, presets, recordings } = useMeta()
+  const { link, settings, sse, stats, ports, presets } = useMeta()
   const [port, setPort] = React.useState(link?.port ?? 'COM26')
-  const [baud, setBaud] = React.useState(String(link?.baud ?? 921600))
+  const [baud, setBaud] = React.useState(String(link?.baud ?? 230400))
   const [busy, setBusy] = React.useState(false)
-  const [rec, setRec] = React.useState('')
-  const [speed, setSpeed] = React.useState(1)
 
-  // 只在"真串口"这条链路上把口名同步进输入框：回放时 link.port 是录制文件名，同步进来会让
-  // 「串口」这一栏看着还像 COM26、实际点「连串口」发出去的却是那个文件名（出过一次事故，
-  // 见 bridge/server.py 里 _serial_port_ok 的注释）。
+  // 只在"真串口"这条链路上把口名同步进输入框：不然会拿着一个不是串口的字符串去连
+  // （出过一次事故，见 bridge/server.py 里 _serial_port_ok 的注释）。
   React.useEffect(() => {
     if (link?.mode === 'serial' && link.port) setPort(link.port)
     if (link?.baud) setBaud(String(link.baud))
@@ -27,21 +24,11 @@ export function SettingsPage() {
 
   React.useEffect(() => {
     void store.listPorts()
-    void store.listRecordings()
   }, [])
 
-  // 列表到手就默认选中最新那个（列表本身是按 mtime 倒序的）
-  React.useEffect(() => {
-    if (!rec && recordings.length) setRec(recordings[0].path)
-  }, [recordings, rec])
-
-  const doConnect = async (mode: 'sim' | 'serial' | 'replay') => {
+  const doConnect = async (mode: 'sim' | 'serial') => {
     setBusy(true)
-    if (mode === 'replay') {
-      await store.connect('replay', undefined, undefined, rec, speed)
-    } else {
-      await store.connect(mode, mode === 'serial' ? port : undefined, mode === 'serial' ? Number(baud) : undefined)
-    }
+    await store.connect(mode, mode === 'serial' ? port : undefined, mode === 'serial' ? Number(baud) : undefined)
     setBusy(false)
   }
 
@@ -103,48 +90,7 @@ export function SettingsPage() {
               </div>
             </div>
             <p className="text-[12px] leading-relaxed text-slate-500">
-              真车要连的是无线下载器那个虚拟串口（默认 921600 8N1，固件 2026-10 起提到这个速率）。桥只监听 127.0.0.1，不对外开放。
-            </p>
-          </div>
-        </Card>
-
-        <Card
-          title="回放录制"
-          right={
-            <Badge tone={link?.mode === 'replay' ? 'mint' : 'slate'}>
-              <StatusDot on={link?.mode === 'replay'} tone="mint" />
-              {link?.mode === 'replay' ? '回放中' : '未使用'}
-            </Badge>
-          }
-        >
-          <div className="grid gap-3">
-            <div className="flex flex-wrap items-end gap-2">
-              <div>
-                <div className="mb-1 text-[12px] text-slate-400">录制文件</div>
-                <select className="field w-64" value={rec} onChange={(e) => setRec(e.target.value)} title="录制文件 = 「控制」页点「开始记录」时录下来的遥测数据，存在 tools/console/data/logs/ 里">
-                  {recordings.length === 0 && <option value="">（还没有录制文件）</option>}
-                  {recordings.map((r) => (
-                    <option key={r.path} value={r.path}>
-                      {r.name}（{bytesToHuman(r.size)}）
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <div className="mb-1 text-[12px] text-slate-400">倍速</div>
-                <NumberField value={speed} min={0.25} max={8} step={0.25} decimals={2} onChange={setSpeed} unit="×" />
-              </div>
-              <button className="btn-ghost" onClick={() => void store.listRecordings()}>
-                <RefreshCw size={13} /> 刷新列表
-              </button>
-              <button className="btn" disabled={busy || !rec || link?.mode === 'replay'} onClick={() => void doConnect('replay')}>
-                播放
-              </button>
-            </div>
-            <p className="text-[12px] leading-relaxed text-slate-500">
-              回放把「控制」页点「开始记录」时录下来的遥测数据（存在{' '}
-              <span className="num">tools/console/data/logs/</span> 里的 .jsonl 文本文件，一行一帧）
-              按原来的时间戳重新喂一遍：波形、仪表、日志都照常走，只是数据来自文件、循环播放。想回到实时就点上面的「连模拟器」或「连串口」。
+              真车要连的是无线下载器那个虚拟串口（默认 230400 8N1，跟板上固件 `board.c` 的 `DL_BAUD` 一致；车上那颗 J-Link VCOM 的上限也是 230400）。桥只监听 127.0.0.1，不对外开放。
             </p>
           </div>
         </Card>
@@ -272,14 +218,13 @@ export function SettingsPage() {
               [
                 ['实时推送（SSE）', '网页和本地桥之间的实时数据通道，技术名 Server-Sent Events。它断开只表示网页收不到实时数据，不代表车掉线 —— 车在不在线看顶栏那个口袋的圆点'],
                 ['收到 / 丢弃 / 校验错', '顶栏三个数字：收到 = 从车上读到的完整帧数；丢弃 = 半截或认不出来的帧；校验错 = 校验没过的帧。后两个平时都该是 0'],
-                ['串口号（COM26）', '当前连的是车上哪个口。模拟器 = 假车，回放 = 放录制数据，COMx = 真车的串口'],
+                ['串口号（COM26）', '当前连的是车上哪个口。模拟器 = 假车，COMx = 真车的串口'],
                 ['参数指纹 0xXXXX', '车上那张参数表的版本号。网页算出来的和它不一致，说明两边参数不一样（要在「参数」页固化成一致）'],
                 ['车上控制占用 x%', '车上控制器每 5 毫秒跑一拍，这是被占掉的比例；跟电脑快慢无关'],
                 ['PWM', '给电机的占空比刻度，0~7200：越大转得越快，负数是反转。它不是转速单位'],
                 ['PID', '控制器算出来的修正量（循迹 PID 输出），越大说明它判断车越偏'],
                 ['校验和 / CRC16', '一种校验算法（CRC16/CCITT）。烧到车上再读回来，两边这个数一样，就说明字节一个没坏'],
                 ['镜长 / 槽位 #0~#7', '一份任务程序叫一份「镜像」，长度就是它占多少字节；车上 Flash 里能放 8 份，编号就是槽位'],
-                ['录制文件 .jsonl', '一行一帧的纯文本记录，存在 tools/console/data/logs/ 里，可以在上面「回放录制」里重播'],
               ] as const
             ).map(([term, desc]) => (
               <React.Fragment key={term}>

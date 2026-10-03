@@ -97,12 +97,9 @@ CMD_RESET = 0x09
 CMD_SET_LOGGING = 0x0A
 CMD_SET_TELEM_MODE = 0x0F
 
-CMD_BY_NAME = {
-    "stop": CMD_STOP, "start_a": CMD_START_A, "start_b": CMD_START_B, "start_c": CMD_START_C,
-    "calib_gyro": CMD_CALIB_GYRO, "save_params": CMD_SAVE_PARAMS, "clear_fault": CMD_CLEAR_FAULT,
-    "telem_hz": CMD_SET_TELEM_HZ, "reset": CMD_RESET, "logging": CMD_SET_LOGGING,
-    "telem_mode": CMD_SET_TELEM_MODE,
-}
+# 命令名 → 字节的表只有一张：`bridge/state.py` 的 `CMD_NAMES`。
+# 这里原来还有一张 `CMD_BY_NAME`，用的是 `telem_hz`/`logging`/`telem_mode` 这些**旧名**，
+# 没人引用、还会和真表打架（2026-10-04 的「没有这个命令: telem_hz」就是这么来的）——已删。
 
 FL_GYRO_OK = 0x01
 FL_LOST = 0x02
@@ -573,7 +570,7 @@ def frame_task_stop(seq: int) -> bytes:
     return build_frame(T_TASK_STOP, seq, b"")
 
 
-# ---------------------------------------------------------------- 车侧组帧（仿真/回放）
+# ---------------------------------------------------------------- 车侧组帧（仿真）
 
 def encode_task_list_r(tid: int, length: int, crc: int, flags: int, name: str = "") -> bytes:
     nb = name.encode("utf-8")[:30]
@@ -595,12 +592,12 @@ def payload_task_status(st: dict) -> bytes:
 
 
 def frame_task_status(seq: int, st: dict) -> bytes:
-    """T_TASK_STATUS 的组帧（仿真用；`bridge/sim.py` 与回放都走这里）。"""
+    """T_TASK_STATUS 的组帧（仿真用；`bridge/sim.py` 走这里）。"""
     return build_frame(T_TASK_STATUS, seq, payload_task_status(st))
 
 
 def encode_telemetry2(t: dict) -> bytes:
-    """`decode_telemetry` 的逆（仿真/回放用）——两边必须严格互逆，测试里有往返断言。"""
+    """`decode_telemetry` 的逆（仿真用）——两边必须严格互逆，测试里有往返断言。"""
     p = bytearray(TELEM2_LEN)
     struct.pack_into("<I", p, 0, int(t.get("t", 0)) & 0xFFFFFFFF)
     struct.pack_into("<h", p, 4, int(round(t.get("yaw", 0.0) * 10)))

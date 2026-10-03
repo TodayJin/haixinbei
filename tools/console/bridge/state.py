@@ -1,4 +1,4 @@
-"""控制台状态机：链路上的收发、参数/动作/标定缓存、日志、录制、SSE 广播。
+"""控制台状态机：链路上的收发、参数/动作/标定缓存、日志、SSE 广播。
 
 只有这一层懂业务；HTTP 层（server.py）只是把它的方法翻译成 JSON。
 所有对车的写操作都走 `send_wait()`：发帧 → 等应答（ACK / 报表）→ 返回结果，
@@ -109,11 +109,6 @@ class Console:
         self.subs: list[Subscriber] = []
         self.hz = 50
         self.telem_mode = 1
-        self.rec_path = ""
-        self.recording = False
-        self.rec_samples = 0
-        self.rec_started: int | None = None
-        self._rec_fh = None
         self._seq = 0
         self.rtt_ms: float | None = None
         self._sent_type: dict[int, int] = {}
@@ -191,19 +186,6 @@ class Console:
         with self.lock:
             self.logs.append(item)
         self.emit({"n": "log", "src": item})
-        self.record({"n": "log", "src": item})
-
-    def record(self, obj: dict):
-        if not self.recording or self._rec_fh is None:
-            return
-        try:
-            with self.lock:
-                self._rec_fh.write(json.dumps(obj, ensure_ascii=False) + "\n")
-                self._rec_fh.flush()
-                if obj.get("n") == "telem":
-                    self.rec_samples += 1
-        except Exception:
-            pass
 
     # ------------------------------------------------------------------ 收发
     def next_seq(self) -> int:
@@ -327,7 +309,6 @@ class Console:
                     self.drive_report = dict(self.drive_cmd, **self.drive_report)
             ev = {"n": "telem", "src": t, "t_host": int(now_ms)}
             self.emit(ev)
-            self.record(ev)
         elif f.type == pr.T_HELLO:
             h = pr.decode_hello(f.payload)
             with self.lock:
@@ -436,7 +417,7 @@ class Console:
             "ok": True,
             "mode": st.get("mode"),
             "port": st.get("port") or None,
-            "baud": int(st.get("baud") or 921600),
+            "baud": int(st.get("baud") or 230400),
             "connected": bool(st.get("open")),
             "stats": {
                 "rx": int(st.get("rx_frames", 0)), "tx": int(st.get("tx_frames", 0)),
@@ -466,35 +447,6 @@ class Console:
                 busy = 0.0
         return {"stats": link["stats"], "telem_hz": link["telem_hz"],
                 "last_rx_ms": link["last_rx_ms"], "busy_pct": round(busy, 1)}
-
-    def record_status(self) -> dict:
-        with self.lock:
-            return {"ok": True, "recording": self.recording,
-                    "path": self.rec_path or None, "samples": self.rec_samples,
-                    "started_ms": self.rec_started}
-
-    def recordings(self) -> dict:
-        """`/api/recordings`：能拿来回放的录制文件（`--record` 写出的 JSONL）。
-
-        回放模式只能吃这些文件，所以列表直接给前端选，免得用户手打路径。
-        """
-        items = []
-        try:
-            names = os.listdir(self.log_dir)
-        except OSError:
-            names = []
-        for name in names:
-            if not name.lower().endswith(".jsonl"):
-                continue
-            path = os.path.join(self.log_dir, name)
-            try:
-                st = os.stat(path)
-            except OSError:
-                continue
-            items.append({"name": name, "path": path,
-                          "size": int(st.st_size), "mtime_ms": int(st.st_mtime * 1000)})
-        items.sort(key=lambda it: it["mtime_ms"], reverse=True)
-        return {"ok": True, "dir": self.log_dir, "items": items}
 
     def params_payload(self) -> dict:
         """`/api/params` 与 SSE `params` 的载荷：前端按 `.items` 读，别改成裸列表。"""
@@ -598,18 +550,29 @@ class Console:
                 "crc": pr.crc16_ccitt(bytes(buf[12:])) if len(buf) >= 12 else 0,
                 "name": (info or {}).get("name", "")}
 
-    @staticmethod
-    def _task_reply(r: dict, what: str) -> dict:
+    def _task_reply(self, r: dict, what: str) -> dict:
         """`send_wait()` 的结果 → 前端契约（必须带 ok/error/supported）。
 
         `send_wait` 的 `ok` 只在"收到 ACK 且状态码 0"时为真，且没有 `error` 字段；
         这里补上人话，否则页面只能显示 "HTTP 200"。
+
+        "没人应答"要分三种说（用户 2026-10-04 报的提示就是混成了一句话）：
+        链路没开 / 链路开着但收不到车帧 / 链路正常在收帧却没这条 ACK。
         """
         if r.get("ok"):
             return {**r, "supported": True}
         if not r.get("answered"):
-            return {**r, "ok": False, "supported": True,
-                    "error": f"{what}没人应答（车没连上/没上电，或固件不带任务功能）"}
+            link = self.link_payload()
+            age = link.get("last_rx_ms")
+            if not link.get("connected"):
+                why = "链路没打开（车没连上/没上电）"
+            elif age is None or age > 1500:
+                why = f"链路开着但 {age if age is not None else '一直'}ms 没收到车的帧（车没在发）"
+            else:
+                why = ("链路正常（刚 {0}ms 前还收到车帧），但这条没等到 ACK —— "
+                       "多半是固件不带任务功能（HELLO 的 HOST_CAP_TASK 未置位），"
+                       "也可能只是这一帧丢了，再试一次").format(age)
+            return {**r, "ok": False, "supported": True, "error": f"{what}没人应答：{why}"}
         return {**r, "ok": False, "supported": True,
                 "error": f"{what}被车拒绝：{r.get('status_name', '?')}（status={r.get('status')}）"}
 
@@ -683,40 +646,12 @@ class Console:
                 "stats": self.stats,
                 "hz": self.hz,
                 "telem_mode": self.telem_mode,
-                "recording": self.recording,
-                "rec_path": self.rec_path,
                 "presets": self.preset_list(),
                 "logs": list(self.logs),
                 "names": {"mode": MODE_NAMES, "nvram": NVRAM_NAMES},
             }
 
-    # ------------------------------------------------------------------ 录制
-    def record_start(self, path: str = "") -> str:
-        os.makedirs(self.log_dir, exist_ok=True)
-        if not path:
-            path = os.path.join(self.log_dir, time.strftime("rec_%Y%m%d_%H%M%S.jsonl"))
-        with self.lock:
-            if self._rec_fh is not None:
-                self._rec_fh.close()
-            self._rec_fh = open(path, "w", encoding="utf-8")
-            self.recording = True
-            self.rec_path = path
-            self.rec_samples = 0
-            self.rec_started = int(time.time() * 1000)
-        self.log("info", f"开始录制 → {path}")
-        return path
-
-    def record_stop(self) -> str:
-        with self.lock:
-            self.recording = False
-            if self._rec_fh is not None:
-                self._rec_fh.close()
-                self._rec_fh = None
-            p = self.rec_path
-            n = self.rec_samples
-        self.log("info", f"停止录制（{p}，{n} 帧）")
-        return p
-
+    # ------------------------------------------------------------------ 日志文件
     def log_path(self) -> str:
         return os.path.join(self.log_dir, time.strftime("console_%Y%m%d.log"))
 

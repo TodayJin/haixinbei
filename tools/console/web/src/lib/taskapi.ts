@@ -115,8 +115,11 @@ export function createTaskApi(fetchImpl: Fetcher) {
     }
     if (!res.ok || env.ok === false) {
       const msg = typeof env.error === 'string' ? env.error : `HTTP ${res.status}`
-      // 固件没置 HOST_CAP_TASK 时桥会明确说不支持
-      const supported = !/不支持|no cap|unsupported|任务功能/i.test(msg)
+      // 桥在信封里给了 supported 就用它（比抠 error 文案准）；没有才退回文案判据。
+      // 固件没置 HOST_CAP_TASK 时桥会明确回 supported:false。
+      const supported = typeof env.supported === 'boolean'
+        ? env.supported
+        : !/不支持|no cap|unsupported|任务功能/i.test(msg)
       return { ok: false, error: msg, supported }
     }
     return { ok: true, data: env as T }
