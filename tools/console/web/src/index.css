@@ -153,13 +153,64 @@
   .car3d-body {
     background: linear-gradient(180deg, #24314b, #16203a);
   }
-  .car3d-cabin {
-    background: linear-gradient(180deg, #3b4a68, #212c46);
-    border-color: rgba(148, 163, 184, 0.3);
+  /* 履带：比车体深、比车体长（长条），纹路单独铺在顶面/外侧面，见 .car3d-tread-* */
+  .car3d-track {
+    background: linear-gradient(180deg, #1b2438, #0b1120);
+    border-color: rgba(148, 163, 184, 0.34);
   }
-  .car3d-stripe {
-    background: rgba(34, 211, 238, 0.5);
-    border-color: transparent;
+  /* 履带纹（横压条）：顶面的局部高度方向 = 车体 z（行进方向）⇒ 180deg 的竖纹；
+     侧面的局部宽度方向 = 车体 z ⇒ 90deg 的竖纹。两边都是"沿履带长度重复"。 */
+  .car3d-tread-y {
+    background: repeating-linear-gradient(
+      180deg,
+      #2b3852 0 4px,
+      #131c2e 4px 11px,
+      #0a0f1c 11px 14px
+    );
+  }
+  .car3d-tread-x {
+    background: repeating-linear-gradient(
+      90deg,
+      #2b3852 0 4px,
+      #131c2e 4px 11px,
+      #0a0f1c 11px 14px
+    );
+  }
+  /* 履带齿：比履带略宽（28 > 24）的亮边压条，压在履带顶上 */
+  .car3d-cleat {
+    background: linear-gradient(180deg, #465a7d, #26314a);
+    border-color: rgba(148, 163, 184, 0.45);
+  }
+  .car3d-deck {
+    background: linear-gradient(180deg, #33415e, #1d2740);
+    border-color: rgba(148, 163, 184, 0.32);
+  }
+  /* OLED 小屏：黑框 + 顶面发光（顶面在 Car3D 里换成 .car3d-screen-glow） */
+  .car3d-screen {
+    background: #0a1020;
+    border-color: rgba(34, 211, 238, 0.5);
+  }
+  .car3d-screen-glow {
+    background: linear-gradient(180deg, rgba(34, 211, 238, 0.85), rgba(14, 116, 144, 0.75));
+    border-color: rgba(34, 211, 238, 0.7);
+    box-shadow: 0 0 10px rgba(34, 211, 238, 0.55);
+  }
+  /* 车头灰度探头排：正面 8 格亮暗（8 路灰度），正面在 Car3D 里换成 .car3d-sensor-face */
+  .car3d-sensor {
+    background: linear-gradient(180deg, #2f3d59, #1b2436);
+    border-color: rgba(148, 163, 184, 0.35);
+  }
+  .car3d-sensor-face {
+    background: repeating-linear-gradient(
+      90deg,
+      #0b1120 0 3px,
+      #93c5fd 3px 6px
+    );
+  }
+  /* 摄像头：深色镜头 + 一点青色反光 */
+  .car3d-lens {
+    background: radial-gradient(closest-side, #22d3ee 0 22%, #060b16 30%, #0b1120 100%);
+    border-color: rgba(34, 211, 238, 0.55);
   }
   .car3d-lamp {
     background: #e0f2fe;
@@ -170,9 +221,15 @@
     background: #fb7185;
     border-color: rgba(251, 113, 133, 0.6);
   }
-  .car3d-tyre {
-    background: linear-gradient(180deg, #1b2438, #0c1322);
-    border-color: rgba(148, 163, 184, 0.28);
+  /* 天线：细杆 + 顶上一个小圆头 */
+  .car3d-antenna {
+    background: linear-gradient(180deg, #94a3b8, #475569);
+    border-color: transparent;
+  }
+  .car3d-antenna-tip {
+    background: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.6);
+    box-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
   }
   .car3d-road,
   .car3d-shadow,

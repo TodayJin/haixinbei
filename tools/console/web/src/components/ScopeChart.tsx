@@ -136,8 +136,9 @@ function ScopeLane({ channelKey, windowMs, paused, height = 96, onHover }: LaneP
     for (let i = 0; i < view.count; i++) xs[i] = (view.t[i] - t0) / 1000
     const data: uPlot.AlignedData = [xs, view.v]
     dataRef.current = data
-    u.setData(data, false)
-    // y 轴自动量程：加一点余量，避免贴边
+    // resetScales 必须是 true：建图时是空数据，量程还是 [null, null]，
+    // 传 false 就永远按空量程画 —— 画布在、坐标轴和曲线一条都没有（第一版起就空着）。
+    u.setData(data)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [version, ringFill, windowMs, paused, channelKey])
 
@@ -181,7 +182,7 @@ export function ScopeBoard({
 }: {
   windowMs: number
   paused: boolean
-  onHover?: (r: CursorReadout) => void
+  onHover?: (r: CursorReadout | null) => void
 }) {
   // 低频：通道开关是设置（meta），页面壳不该跟着 20Hz 的遥测重渲染
   const { settings } = useMeta()
@@ -194,7 +195,8 @@ export function ScopeBoard({
           channelKey={k}
           windowMs={windowMs}
           paused={paused}
-          onHover={(key, _idx, tSec, value) => onHover?.({ key, tSec, value })}
+          // 指针离开画布（idx = null）要清掉读数，否则页眉一直挂着上一条泳道的 "t --s"
+          onHover={(key, _idx, tSec, value) => onHover?.(tSec === null ? null : { key, tSec, value })}
         />
       ))}
     </div>

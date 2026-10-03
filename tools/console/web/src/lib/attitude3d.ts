@@ -2,22 +2,35 @@
  * IMU 页 3D 车模型的数学部分：纯函数，能单测（这才是"模型对不对"唯一能自证的地方，
  * 本机跑不了浏览器截图）。DOM 那边只管拼盒子，见 components/Car3D.tsx。
  *
- * 坐标系用 CSS 的约定：x 向右、y 向下、z 朝屏幕外。模型姿态的正方向跟固件的
- * 「用户约定」对齐（firmware/App/Src/app_ui.c:666）：
- *   +偏航 yaw   = 车头向左转（偏航角增大 = 向左转）
- *   +俯仰 pitch = 车头抬起（抬头）
- *   +横滚 roll  = 车身向左倾（+x 那一侧 = 车的左侧，下沉）
+ * 坐标系用 CSS 的约定：x 向右、y 向下、z 朝屏幕外；车头 = +z、车的左侧 = +x。
  *
- * 车的左右怎么定的：车头朝 +z（默认视角下正对观察者）时，车的左侧在 +x
- * （迎面看别人的车，车的左手边在你的右手边）。所以：
- *   左转 = 车头从 +z 转向 +x ⇒ CSS rotateY(+yaw)（绕 +y 转的矩阵把 (0,0,1) 送到 (sin,0,cos)）
- *   左倾 = +x 侧下沉        ⇒ CSS rotateZ(+roll)
- *   抬头 = 车头抬起来        ⇒ CSS rotateX(+pitch)
- * 三个符号只在 `carTransform()` 里出现一次：真车上发现哪个方向反了，改这里一行。
+ * 姿态口径**跟固件 OLED 屏上那个方框一致**（用户 m01390：「调整得跟固件里那个正方体一致
+ * 就可以」）。固件画方框的映射（firmware/App/Src/app_ui.c，默认轴档 M3）：
+ *   app_ui.c:179  `static uint8_t s_gyro_axis_mode = 2U;`          // 默认 M3 = bit1
+ *   app_ui.c:1417-1434 gyro_view_angles()：bit0=0 不换轴、bit1=1 横滚取反
+ *         a = g_live.pitch_x10; b = g_live.roll_x10;   // bit0 = 0：横滚取 SP、俯仰取 SR
+ *         if ((s_gyro_axis_mode & 2U) != 0U) a = -a;   // bit1 = 1：画面横滚取反
+ *         *r = a; *p = b;                              // ⇒ 画面横滚 r = -pitch、画面俯仰 p = +roll
+ *   方框的旋转是 app_ui.c:1449-1457 的 `M = Rz(y)·Ry(p)·Rx(r)`（y = +yaw），
+ *   投影 app_ui.c:1378-1379 只取旋转后的 X/Y：屏幕右 = 车体 +X（车头）、屏幕上 = 车体 +Y（车左），
+ *   观察者在 +Z ⇒ **画面横滚 r 绕车头轴、画面俯仰 p 绕车左轴**。
+ * 所以固件把遥测里的 pitch 喂给了横滚轴、roll 喂给了俯仰轴（= 传感器在车上装歪 90°那件事），
+ * 并且横滚取反：r = -telem.pitch、p = +telem.roll、y = +telem.yaw。
  *
- * 注意遥测里的 pitch/roll 是 JY61P 的**原始帧**，固件给 OLED 画图时另做了一次轴序交换 +
- * 取反（app_ui.c 的 s_gyro_axis_mode 八档，默认 M3，那是"传感器在车上怎么装的"的问题）。
- * 上位机这一页不做那个交换：模型和读数用同一把尺子，才不会出现"数字说横滚、车却在点头"。
+ * 换到 CSS 左手系（x 右、y 下、z 朝屏幕外）要一个个按右手定则算，别凭"屏幕右 = 车的右"想
+ * （那样会正好镜像）：
+ *   CSS rotateY(ψ) = 绕车竖直轴转 +ψ  ⇒ 左转   = rotateY(+yaw)   （与固件的 y 同号）
+ *   CSS rotateX(φ) = 绕车左轴转 -φ    ⇒ 抬头   = rotateX(+φ)
+ *   CSS rotateZ(θ) = 绕车头轴转 -θ    ⇒ 向左倾 = rotateZ(+θ)
+ * 要复刻 M3 就必须 `-φ = p = +roll`、`-θ = r = -pitch`，于是：
+ *   carTransform = rotateY(yaw) rotateX(-roll) rotateZ(+pitch)
+ * 注意这是**轴对调 + 符号**（pitch 去 rotateZ、roll 去 rotateX），纯改符号对不上方框。
+ * 三个旋转的顺序也跟固件同序（偏航在外、横滚在内），大角度下不会拧成麻花。
+ *
+ * 这里只定"模型口径"，**没有**动 Imu 页那两个读数：读数仍是遥测原始帧的 pitch/roll
+ * （跟波形页同一把尺子）。固件屏上右侧那三行数字走的是另一套取反习惯
+ * （app_ui.c:678-683 gyro_angles()：roll=-pitch、pitch=-roll），默认档下它跟方框的
+ * 俯仰符号本来就相反（固件接口规格.md §3.5 有记录）。
  */
 
 export interface Attitude {
@@ -79,12 +92,15 @@ export function stageTransform(v: ViewAngle): string {
 /**
  * 车姿态 -> CSS 变换。顺序和固件三维方框的 `R = Rz(y) Ry(p) Rx(r)` 同序：
  * 偏航在最外层（先横滚、再俯仰、最后偏航），大角度下车才不会拧成麻花。
+ *
+ * 轴映射见文件头：固件默认档 M3 把遥测的 pitch 喂给画面横滚（取反）、roll 喂给画面俯仰，
+ * 所以 pitch 进 rotateZ、roll 取负进 rotateX —— 是**轴对调 + 符号**，不是只翻一个符号。
  */
 export function carTransform(a: Attitude): string {
   return (
     `rotateY(${round1(a?.yaw).toFixed(1)}deg) ` +
-    `rotateX(${round1(a?.pitch).toFixed(1)}deg) ` +
-    `rotateZ(${round1(a?.roll).toFixed(1)}deg)`
+    `rotateX(${(-round1(a?.roll)).toFixed(1)}deg) ` +
+    `rotateZ(${round1(a?.pitch).toFixed(1)}deg)`
   )
 }
 

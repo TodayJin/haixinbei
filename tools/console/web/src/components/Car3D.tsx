@@ -1,10 +1,19 @@
 /**
  * 3D 车模型（IMU 页）：纯 CSS 3D，零依赖 —— 没有模型文件，也没有 three.js。
- * 车壳/车顶/四个轮子/灯都是 `Box` 拼出来的长方体（6 个面各一个 div），
- * 姿态换算全在 lib/attitude3d.ts（有单测，本机跑不了浏览器截图，只能靠那个自证）。
+ * 车壳都是 `Box` 拼出来的长方体（6 个面各一个 div），姿态换算全在 lib/attitude3d.ts
+ * （有单测；本机跑不了浏览器截图，只能靠那个自证）。
+ *
+ * 车型 = **两轮履带车**（用户 m01390：左右各一条很长的履带，不是四轮小车）：
+ *   左右各一条 `car3d-track` 长履带（d=210，比 150 长的车体前后都长出一截），
+ *   履带顶上压 5 对 `car3d-cleat` 履带齿，侧面/顶面用 CSS 重复渐变画履带纹；
+ *   中间夹扁平车体 `car3d-body`（w60 h26 d150），上面扣一层 `car3d-deck`，顶上是
+ *   OLED 小屏 `car3d-screen`；车头挂灰度探头排 `car3d-sensor` + 摄像头 `car3d-lens`
+ *   + 两个灯 `car3d-lamp`，车尾两个尾灯 `car3d-tail`，车顶一根天线 `car3d-antenna`。
  *
  * 坐标（CSS 约定）：x 右、y 下、z 朝屏幕外；车头 = +z、车的左侧 = +x、地面 = y0 平面。
  * 相机 = `.car3d-stage` 上的 `rotateY(az) rotateX(-el)`，拖鼠标/手指改 az/el。
+ * 姿态口径跟固件 OLED 屏上那个方框一致（默认轴档 M3）—— 为什么是"轴对调 + 符号"，
+ * 见 lib/attitude3d.ts 文件头（那边引了 app_ui.c 的行号）。
  */
 import React from 'react'
 import { DEFAULT_VIEW, carTransform, orbitView, stageTransform, type ViewAngle } from '../lib/attitude3d'
@@ -62,6 +71,16 @@ const TICKS: { label: string; t: string; lt: string }[] = [
   { label: '180°', t: 'translate3d(0px, 0px, -116px) rotateX(90deg)', lt: 'translate3d(0px, 0px, -146px) rotateX(90deg)' },
   { label: '270°', t: 'translate3d(-116px, 0px, 0px) rotateX(90deg) rotateZ(90deg)', lt: 'translate3d(-146px, 0px, 0px) rotateX(90deg)' },
 ]
+
+/* 履带尺寸：长 210 > 车体 150，前后各长出一大截（这是"履带车"最认得出来的特征）。
+   履带底面正好落在 y=0 地面上（和旧版四个轮子一样），顶上压履带齿。 */
+const TRACK_X = 45
+const TRACK_W = 24
+const TRACK_H = 34
+const TRACK_D = 210
+const CLEAT_Y = -36.2
+/** 履带齿沿 z 的位置（左右各压 5 条） */
+const CLEAT_Z = [-84, -42, 0, 42, 84]
 
 export function Car3D({
   yaw,
@@ -121,19 +140,51 @@ export function Car3D({
           </React.Fragment>
         ))}
 
-        {/* 车：车头 +z、车左 +x；+偏航 = 左转、+俯仰 = 抬头、+横滚 = 向左倾 */}
+        {/* 车：车头 +z、车左 +x。姿态口径 = 固件方框（默认档 M3）：俯仰读数进 rotateZ、
+            横滚读数取负进 rotateX；+偏航仍是左转。见 lib/attitude3d.ts 文件头。 */}
         <div className="car3d-car" style={{ transform: carTransform({ yaw: yaw ?? 0, pitch: pitch ?? 0, roll: roll ?? 0 }) }}>
-          <Box w={86} h={26} d={170} y={-37} cls="car3d-body" />
-          <Box w={76} h={20} d={76} y={-60} z={-14} cls="car3d-cabin" />
-          <Box w={16} h={2} d={150} y={-51} cls="car3d-stripe" />
-          <Box w={14} h={6} d={3} x={-25} y={-41} z={86} cls="car3d-lamp" />
-          <Box w={14} h={6} d={3} x={25} y={-41} z={86} cls="car3d-lamp" />
-          <Box w={10} h={5} d={3} x={-28} y={-41} z={-86} cls="car3d-tail" />
-          <Box w={10} h={5} d={3} x={28} y={-41} z={-86} cls="car3d-tail" />
-          <Box w={12} h={32} d={32} x={-49} y={-16} z={55} cls="car3d-tyre" />
-          <Box w={12} h={32} d={32} x={49} y={-16} z={55} cls="car3d-tyre" />
-          <Box w={12} h={32} d={32} x={-49} y={-16} z={-55} cls="car3d-tyre" />
-          <Box w={12} h={32} d={32} x={49} y={-16} z={-55} cls="car3d-tyre" />
+          {/* 左右两条长履带：外侧面 car3d-tread-x、顶面 car3d-tread-y 是履带纹 */}
+          <Box
+            w={TRACK_W}
+            h={TRACK_H}
+            d={TRACK_D}
+            x={-TRACK_X}
+            y={-17}
+            cls="car3d-track"
+            face={{ top: 'car3d-tread-y', left: 'car3d-tread-x' }}
+          />
+          <Box
+            w={TRACK_W}
+            h={TRACK_H}
+            d={TRACK_D}
+            x={TRACK_X}
+            y={-17}
+            cls="car3d-track"
+            face={{ top: 'car3d-tread-y', right: 'car3d-tread-x' }}
+          />
+          {/* 履带齿：比履带略宽（28 > 24）地横压在履带顶上 */}
+          {CLEAT_Z.map((z) => (
+            <React.Fragment key={z}>
+              <Box w={28} h={3.5} d={12} x={-TRACK_X} y={CLEAT_Y} z={z} cls="car3d-cleat" />
+              <Box w={28} h={3.5} d={12} x={TRACK_X} y={CLEAT_Y} z={z} cls="car3d-cleat" />
+            </React.Fragment>
+          ))}
+          {/* 底盘：夹在两条履带中间（60 宽 < 履带内沿 66），上面再扣一层甲板 */}
+          <Box w={60} h={26} d={150} y={-33} cls="car3d-body" />
+          <Box w={52} h={10} d={84} y={-51} z={-6} cls="car3d-deck" />
+          {/* 顶上的 OLED 小屏（顶面发光） */}
+          <Box w={30} h={2} d={22} y={-57.2} z={-6} cls="car3d-screen" face={{ top: 'car3d-screen-glow' }} />
+          {/* 车头：灰度探头排（正面 8 格亮暗）＋ 摄像头 ＋ 两个前灯 */}
+          <Box w={48} h={7} d={5} y={-33} z={77.5} cls="car3d-sensor" face={{ front: 'car3d-sensor-face' }} />
+          <Box w={9} h={9} d={5} y={-41.5} z={78} cls="car3d-lens" />
+          <Box w={9} h={5} d={3} x={-22} y={-26} z={76.5} cls="car3d-lamp" />
+          <Box w={9} h={5} d={3} x={22} y={-26} z={76.5} cls="car3d-lamp" />
+          {/* 车尾两个尾灯 */}
+          <Box w={9} h={5} d={3} x={-22} y={-28} z={-76.5} cls="car3d-tail" />
+          <Box w={9} h={5} d={3} x={22} y={-28} z={-76.5} cls="car3d-tail" />
+          {/* 车顶天线（甲板左后方）＋ 顶上的小圆头 */}
+          <Box w={2.5} h={32} d={2.5} x={-22} y={-72} z={-34} cls="car3d-antenna" />
+          <Box w={5} h={5} d={5} x={-22} y={-90.5} z={-34} cls="car3d-antenna-tip" />
         </div>
       </div>
 

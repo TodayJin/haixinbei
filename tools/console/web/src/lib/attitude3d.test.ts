@@ -3,8 +3,12 @@
  *
  * 本机跑不了浏览器，3D 长什么样只能靠用户肉眼；能自证的只有这里：
  * 把"哪个方向是正"钉死成字符串断言，符号写反了测试就红。
- *   1. 车的左侧 = +x（车头朝 +z 时）⇒ **左转 = rotateY(正)**、**左倾 = rotateZ(正)**、
- *      抬头 = rotateX(正)。这三个符号写反过（当初按"屏幕右 = 车的右"想，正好是镜像的）。
+ *   1. 模型口径 = 固件 OLED 方框的默认轴档 M3（firmware/App/Src/app_ui.c:179
+ *      `s_gyro_axis_mode = 2U`；映射在 app_ui.c:1417-1434 gyro_view_angles()）：
+ *      画面横滚 r = -遥测 pitch、画面俯仰 p = +遥测 roll、偏航 y = +遥测 yaw，
+ *      渲染 M = Rz(y)Ry(p)Rx(r)。换到 CSS 后 ⇒ **pitch 进 rotateZ(正)**、
+ *      **roll 以负号进 rotateX**、**yaw 进 rotateY(正)**（左转、抬头、向左倾分别为正）。
+ *      这是轴对调 + 符号；上一版是 rotateX(+pitch) rotateZ(+roll)，正好把俯仰/横滚画反了。
  *   2. 方位角进 rotateY、俯角以**负角**进 rotateX（负角才是从上方看下去）。
  *   3. 遥测断流（NaN/undefined）时模型不许散架，一律当 0。
  */
@@ -42,18 +46,19 @@ describe('车姿态 -> CSS 变换', () => {
     expect(carTransform(att({ yaw: -45 }))).toContain('rotateY(-45.0deg)')
   })
 
-  it('+俯仰 = 抬头 = rotateX 取正；+横滚 = 向左倾 = rotateZ 取正', () => {
-    expect(carTransform(att({ pitch: 12.34 }))).toContain('rotateX(12.3deg)')
-    expect(carTransform(att({ roll: -8 }))).toContain('rotateZ(-8.0deg)')
+  it('+俯仰 = 模型向左倾 = rotateZ 取正；+横滚 = 模型低头 = rotateX 取负（固件 M3 的轴对调）', () => {
+    expect(carTransform(att({ pitch: 12.34 }))).toContain('rotateZ(12.3deg)')
+    expect(carTransform(att({ pitch: 12.34 }))).not.toContain('rotateX(12.3deg)')
+    expect(carTransform(att({ roll: -8 }))).toContain('rotateX(8.0deg)')
     expect(carTransform(att({ yaw: 10, pitch: 5, roll: 3 }))).toBe(
-      'rotateY(10.0deg) rotateX(5.0deg) rotateZ(3.0deg)',
+      'rotateY(10.0deg) rotateX(-3.0deg) rotateZ(5.0deg)',
     )
   })
 
   it('偏航在最外层（先横滚、再俯仰、最后偏航），大角度也不会拧成麻花', () => {
     // 变换列表从左到右 = 矩阵从外到内，所以偏航必须排第一
     expect(carTransform(att({ yaw: 170, pitch: 40, roll: -25 }))).toBe(
-      'rotateY(170.0deg) rotateX(40.0deg) rotateZ(-25.0deg)',
+      'rotateY(170.0deg) rotateX(25.0deg) rotateZ(40.0deg)',
     )
   })
 

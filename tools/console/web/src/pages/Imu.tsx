@@ -83,13 +83,18 @@ function AttitudeCard() {
           tone="cyan"
           hint={`罗盘 ${compassText(yaw ?? undefined, 0)}`}
         />
-        <Stat label="俯仰" value={fmt(pitch, 1)} unit="°" tone="violet" hint="+ = 抬头" />
-        <Stat label="横滚" value={fmt(roll, 1)} unit="°" tone="mint" hint="+ = 向左倾" />
+        <Stat label="俯仰" value={fmt(pitch, 1)} unit="°" tone="violet" hint="模型：+ = 向左倾" />
+        <Stat label="横滚" value={fmt(roll, 1)} unit="°" tone="mint" hint="模型：+ = 低头" />
       </div>
       <div className="mt-2 text-[11px] leading-relaxed text-slate-500">
-        模型和读数用同一把尺子（遥测原始帧）：<span className="text-slate-400">+偏航 = 左转、+俯仰 = 抬头、+横滚 = 向左倾</span>
-        。固件给 OLED 画图时另做了一次轴序交换（<span className="text-slate-400">app_ui.c 的 M1..M8，默认 M3</span>），
-        真车上哪个方向反了，就是 <span className="text-slate-400">lib/attitude3d.ts</span> 里一行符号的事。
+        3D 模型跟固件 OLED 上那个方框同口径（<span className="text-slate-400">app_ui.c 的 gyro_view_angles()，默认档 M3</span>）：
+        固件把遥测的 <span className="text-slate-400">pitch 当横滚源（取反）、roll 当俯仰源</span>，
+        所以模型是 <span className="text-slate-400">rotateZ(+pitch) rotateX(−roll)</span>
+        —— 俯仰读数变大车向左倾、横滚读数变大车低头。
+      </div>
+      <div className="mt-1 text-[11px] leading-relaxed text-slate-500">
+        两个读数的取值没动，仍是遥测原始帧的 pitch/roll（跟波形页同一把尺子）；
+        固件屏上右侧那三行数字走的是另一套取反习惯，默认档下跟方框的符号并不一致。
       </div>
     </Card>
   )
