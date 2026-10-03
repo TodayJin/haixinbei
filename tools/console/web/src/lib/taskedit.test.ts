@@ -44,6 +44,7 @@ import {
   seqRows,
   serializeTaskFile,
   setMain,
+  stateChoices,
   truncateNameUtf8,
   updateBlock,
   type Where,
@@ -117,6 +118,32 @@ describe('块库元数据', () => {
     expect(modeLabel(7)).toContain('7');
     // 新拖进来的「切换模式」默认是循迹（三层串级）
     expect(defaultsFor(OP.SET_MODE).p0).toBe(MODE.TRACE_GYRO);
+  });
+
+  it('「跳到状态」的目标只列真实状态（没有"继续往下跑"这种空操作），「等条件」的超时后才留着它', () => {
+    const goto = OP_SPECS.find((s) => s.op === OP.GOTO)!;
+    const wait = OP_SPECS.find((s) => s.op === OP.WAIT_COND)!;
+    expect(goto.fields.find((f) => f.key === 'p0')?.allowNoState).toBeUndefined();
+    expect(wait.fields.find((f) => f.key === 'p3')?.allowNoState).toBe(true);
+
+    // 跳转块：3 个状态 ⇒ 就三条，一件多余都没有
+    expect(stateChoices(0, 3, false).map((o) => o.value)).toEqual([0, 1, 2]);
+    expect(stateChoices(0, 3, false).map((o) => o.label)).toEqual(['状态 0', '状态 1', '状态 2']);
+    // 超时后：多一条 0xFFFF「继续往下跑」（= 超时也不改道）
+    expect(stateChoices(NO_STATE, 3, true).map((o) => o.value)).toEqual([NO_STATE, 0, 1, 2]);
+    expect(stateChoices(NO_STATE, 3, true)[0].label).toBe('继续往下跑');
+    // 老文件把跳转目标存成 0xFFFF / 状态被删掉 ⇒ 临时补一条标出来的项，选框不会空
+    expect(stateChoices(NO_STATE, 3, false).at(-1)?.label).toContain('（旧）');
+    expect(stateChoices(9, 3, false).at(-1)?.label).toContain('不存在');
+    // 删状态时不会把 0xFFFF 越修越偏（0xFFFE/0xFFFF 这种占位原样留着）
+    const prog: TaskProgram = {
+      main: 0,
+      states: [
+        { name: 'a', enter: [], body: [blk(OP.GOTO, NO_STATE)] },
+        { name: 'b', enter: [], body: [] },
+      ],
+    };
+    expect(removeState(prog, 1).states[0].body[0].p0).toBe(NO_STATE);
   });
 
   it('拖拽 MIME 是自定义类型（免得拖到浏览器里变成开新标签）', () => {

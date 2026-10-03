@@ -54,6 +54,10 @@ export interface FieldSpec {
   unit?: string
   /** 只在满足条件时显示（比如两轮直给才有左右轮） */
   showIf?: (b: TaskBlock) => boolean
+  /** kind === 'state' 时：是否允许选「继续往下跑」(0xFFFF = 不跳转)。
+   *  只有「等条件」的"超时后"该有它（= 超时也不改道）；「跳到状态」的目标是个真状态，
+   *  那里给 0xFFFF 等于加了个什么都不做的块（固件 task_run.c:214 的 GOTO 分支会跳过它）。 */
+  allowNoState?: boolean
 }
 
 export interface OpSpec {
@@ -114,11 +118,11 @@ export const OP_SPECS: OpSpec[] = [
       { key: 'p0', label: '条件', kind: 'cond', lo: 1, hi: 9 },
       { key: 'p1', label: '阈值', kind: 'int', lo: -32768, hi: 32767 },
       { key: 'p2', label: '超时', kind: 'int', lo: 0, hi: 60000, unit: 'ms' },
-      { key: 'p3', label: '超时后', kind: 'state', lo: 0, hi: 0xffff },
+      { key: 'p3', label: '超时后', kind: 'state', lo: 0, hi: 0xffff, allowNoState: true },
     ],
   },
   { op: OP.CROSS_CLEAR, name: 'CROSS_CLEAR', label: '清横线', group: '等待', doc: '把横线计数清零（条件 4 满足时也会自动清）', fields: [] },
-  { op: OP.GOTO, name: 'GOTO', label: '跳到状态', group: '流程', doc: '立刻切换，不等待；新状态从它的 enter 序列重新开始', fields: [{ key: 'p0', label: '目标', kind: 'state', lo: 0, hi: 0xfffe }] },
+  { op: OP.GOTO, name: 'GOTO', label: '跳到状态', group: '流程', doc: '立刻切换，不等待；新状态从它的 enter 序列重新开始。目标只能是真实状态（下拉里没有"继续往下跑"——对跳转块来说那等于什么都不做）', fields: [{ key: 'p0', label: '目标', kind: 'state', lo: 0, hi: 0xfffe }] },
   { op: OP.END, name: 'END', label: '结束任务', group: '流程', doc: '停车并结束整个任务', fields: [] },
 ]
 
@@ -170,6 +174,19 @@ export function modeLabel(v: number): string {
 export function modeChoices(cur: number): { value: number; label: string }[] {
   if (MODE_OPTIONS.some((m) => m.value === cur)) return MODE_OPTIONS
   return [...MODE_OPTIONS, ...MODE_LEGACY.filter((m) => m.value === cur)]
+}
+
+/** 「目标状态」下拉要显示的项：真实状态 0..stateCount-1；allowContinue（只有「等条件」的"超时后"）再加一条
+ *  「继续往下跑」= 0xFFFF = 超时也不改道。当前值不在列表里（老文件把跳转目标存成了 0xFFFF，或目标状态
+ *  后来被删了）就临时补一条标出来的项，别让选框空着 —— 固件对越界/0xFFFF 的跳转是"跳过这一块"，不会写坏程序。 */
+export function stateChoices(cur: number, stateCount: number, allowContinue: boolean): { value: number; label: string }[] {
+  const out: { value: number; label: string }[] = []
+  if (allowContinue) out.push({ value: NO_STATE, label: '继续往下跑' })
+  for (let i = 0; i < stateCount; i++) out.push({ value: i, label: `状态 ${i}` })
+  if (!out.some((o) => o.value === cur)) {
+    out.push({ value: cur, label: cur === NO_STATE ? '（旧）继续往下跑' : `状态 ${cur}（不存在）` })
+  }
+  return out
 }
 
 /** 该块默认长什么样（从块库拖进序列时用这个） */
@@ -394,10 +411,13 @@ export function removeState(p: TaskProgram, i: number): TaskProgram {
   out.states.splice(i, 1)
   const fallback = Math.min(i, out.states.length - 1)
   const fix = (ref: number): number => (ref === i ? fallback : ref > i ? ref - 1 : ref)
+  /* 只修真正指向某个状态的引用：0xFFFF（"继续往下跑"）与越界的占位值（老文件）原样留着，
+     免得 0xFFFF 被减成 0xFFFE、越修越偏 */
+  const fixRef = (ref: number): number => (ref === NO_STATE || ref >= out.states.length + 1 ? ref : fix(ref))
   for (const st of out.states) {
     for (const b of [...st.enter, ...st.body]) {
-      if (b.op === OP.GOTO) b.p0 = fix(b.p0)
-      if (b.op === OP.WAIT_COND && b.p3 !== NO_STATE) b.p3 = fix(b.p3)
+      if (b.op === OP.GOTO) b.p0 = fixRef(b.p0)
+      if (b.op === OP.WAIT_COND) b.p3 = fixRef(b.p3)
     }
   }
   out.main = i < out.main ? out.main - 1 : i === out.main ? fallback : out.main

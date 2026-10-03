@@ -48,6 +48,7 @@ import {
   seqRows,
   serializeTaskFile,
   setMain,
+  stateChoices,
   duplicateBlock,
   updateBlock,
   type SeqName,
@@ -158,10 +159,9 @@ function FieldEditor({
               <label key={f.key} className="flex items-center gap-2 text-[12px] text-slate-400">
                 <span className="w-14 shrink-0">{f.label}</span>
                 <select className="field flex-1" value={v} onChange={(e) => setField(f.key, Number(e.target.value))}>
-                  <option value={0xffff}>继续往下跑</option>
-                  {Array.from({ length: stateCount }, (_, i) => (
-                    <option key={i} value={i}>
-                      状态 {i}
+                  {stateChoices(v, stateCount, !!f.allowNoState).map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
                     </option>
                   ))}
                 </select>
