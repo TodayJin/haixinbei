@@ -6,12 +6,16 @@
 firmware/build-*/
 .work/
 
+# 固件主机测试的可执行文件（run_tests.ps1 本地重建）
+firmware/test/build/
+
 # 台架/上位机临时输出（日志、CSV、图片、抓屏）
 out/
 
 # Python
 **/__pycache__/
 *.py[cod]
+.pytest_cache/
 
 # 旧 Haixin（FreeRTOS 参考工程）的 Keil 构建输出
 Haixin/MDK-ARM/Objects/
