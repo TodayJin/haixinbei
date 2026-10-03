@@ -14,6 +14,23 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-04
+完成：修掉真机「一提交任务 App 就 HardFault」的两个根因：①`firmware/App/Svc/task_store.c` 直接写 `FLASH->CR` 却从没 `HAL_FLASH_Unlock()`（上电后 CR.LOCK=1，硬件静默忽略写、STRT 没被接受，擦除"成功"却页没变，只剩后面那道页首 0xFFFFFFFF 检查翻车）；②擦除目标公式 `page - 32` 在本板（4KB 块粒度）会擦到固件自己的页 54/55/56。现在 `ts_block_erase(block)` 用块号（页号/2）、等待改成 BSY 落 + 目标块首字真为 0xFFFFFFFF、`store_flash_write()` 自己解锁；布局改页 58 目录 + 页 59..61、`.ld` 116K；桩 `firmware/test/stub/host_hal.c` 换成同一套块模型（含 CR.LOCK 语义）。验证：`pwsh -File firmware/test/run_tests.ps1` 通过 13 / 失败 0（t_taskstore 556 项，新增 ⑭ 上锁语义、⑮「别擦掉固件自己」；把块号公式临时改回 page-32 时第 ⑮ 节立刻失败）；`make -C firmware -j8` text 115840 / data 364 / bss 33944、bin 116212 B（MD5 A0D5080FAA9EAB2AFDA1ACF0B9694ECA）、`tools/flash.ps1` 回读 firstDiff=none；真车（用户桥上 8770 → COM26 @230400）首次提交 / 覆盖写 / 删除 / 再提交四次全 `status 0 OK`，每次 `/api/tasks/get` 回读逐字节一致，J-Link 逐页 dump 证明页 54/55/56 与页 62/63 全程一个字节没动。提交 `60d1f3a`
+未完成：任务在真车上的 RUN/STOP/开机自启还没跑过（本轮只验了存储读写删）
+下一步：上车跑 RUN/STOP/开机自启（会动车：先把轮子架空或放赛道上），再按 docs/任务编程.md §8.2 全流程对拍一次
+
+## 2026-10-04
+完成：IMU 页 3D 车模型改成用户要的两轮履带车外观（`tools/console/web/src/components/Car3D.tsx` + `index.css`），姿态口径改成跟固件 OLED 方框一致：固件默认轴档 M3 把遥测 pitch 当横滚源（取反）、roll 当俯仰源 ⇒ `carTransform = rotateY(yaw) rotateX(-roll) rotateZ(+pitch)`（轴对调 + 符号，不是只翻符号；推导与 app_ui.c 行号写在 `web/src/lib/attitude3d.ts` 文件头，单测跟着改）；顺带修波形页 uPlot 量程：`u.setData(data, false)` 改成 `u.setData(data)`（resetScales 必须为 true，否则建图时空量程 [null,null] 永远画不出坐标轴和曲线），以及泳道指针离开画布时清掉游标读数（`onHover` 允许 null）。验证：`npx tsc --noEmit` 干净 + `npm run build` 成功（dist 重建 `index-CQ74MyRI.js` / `index-CBDvorbl.css`）；`npx vitest run` = 19 文件 / 177 项 passed（**注意 8770 上现在跑的是用户那台真车桥，`contract.test.ts`/`ssrPreview.test.tsx` 打 8770 会假红**：要起 `PORT=8788 node mock/server.mjs` 并设 `CONSOLE_BASE=http://127.0.0.1:8788` 再跑才是有效绿）
+
+## 2026-10-04
+完成：给上位机桥加了一键启动并提交 dc4bcf1（8 files, +213）：tools/console/launch.ps1（唯一逻辑：自己找 Python py -3/python 并验 pyserial、预检 HTTP 端口占用、真车模式先试开一次串口给人话警告、前台起桥由桥开浏览器、-Pause 让双击窗口不闪退）、三个纯 ASCII 的 .bat（tools/console/启动上位机.bat 真车自动找串口 @230400 / 启动上位机-仿真.bat / 启动上位机-列串口.bat）、仓库根同名转发 bat（可带 -Sim/-ListPorts/-HttpPort）。验证：launch.ps1 -ListPorts 与根 bat 都打出 COM26(←车上的)/COM12/COM4；经根 bat 起仿真桥 -Sim -NoBrowser -HttpPort 8799 后 /api/health = sim:true link_open:true frames_seen:321 web_built:true；同端口再启动被拦、报占用者 PID、退出码 3。顺手订正 docs/API.md 的 --port COM26 笔误（--port 是 HTTP 端口，串口是 --serial），跑法写进 PROJECT.md「东西都在哪」。
+未完成：没有实测「真车自动找串口后成功打开 COM26」这一条 —— 当时用户自己的桥占着 COM26（PermissionError）；只验证到「报出打不开 + 桥照起」。
+下一步：等用户关掉 8770 上的旧桥后，双击 tools/console/启动上位机.bat 走一遍真车路径（应无黄色警告、/api/link connected:true）。
+
+## 2026-10-04
+完成：踩坑并按规则改掉：给 launch.ps1 补 UTF-8 BOM 时用了 Get-Content -Raw -Encoding UTF8 + [IO.File]::WriteAllText，结果文件被写成 0 字节（size=0），而 PowerShell 语法检查对空文件照样报 OK，于是「静默退出、exit=0、无任何输出」查了好几轮才定位。补 BOM 的可靠写法：先 [IO.File]::ReadAllBytes 断言非空，再 Encoding.UTF8.GetString + WriteAllText(UTF8Encoding($true))。
+下一步：凡是脚本补 BOM/重写后，先看 size + 行数，再跑一次真实调用（-ListPorts 之类）确认有输出，别只信 Parser::ParseFile。
+
+## 2026-10-04
 完成：用户 m22973 三条全部落地并提交 `c7de56e`（44 files, +1303/−1305）：①删录制/回放与波形 CSV（桥 `ReplayLink`/`--replay`/`--record`/`/api/record(s|ings)`、网页 `csv.ts`/`replay.test.ts`/`csv.test.ts`、`tools/console/tests/test_replay_link.py`，mock 同步，保留 `--sim`）②网页↔桥↔固件核对：命令名统一 `state.py:CMD_NAMES`、删死表 `CMD_BY_NAME`、清空日志真清桥侧（`POST /api/log/clear`）、波特率默认全线 230400、任务提示分三种 ③卡顿+IMU 抖动：`SeriesRing.view()`/`nextRange()`/窄订阅（拷贝点 4000~12000 → 236~1023）。验证：`pytest -q`（workdir tools\console）= 164 passed；`npx vitest run`（workdir tools\console\web）= 19 文件/177 项 passed；`npm run build`（tsc --noEmit + vite build）干净并重建 `dist`；起 `node mock/server.mjs` 后 contract+ssrPreview = 2 文件/8 项 passed（不起 mock 时它们是 skip 不报错）；真桥 sim 端到端：`GET /api/link` baud 230400、`POST /api/cmd {"cmd":"set_telem_hz","arg":200}` = OK(cmd 8)、`{"cmd":"telem_hz"}` = 用户报的那条 `没有这个命令：telem_hz`；`_task_reply` 三分支文案逐一打印核对。提交信息走 `out\commit-msg-console.txt` + `git commit -F`（pwsh 无 heredoc）。
 未完成：记忆文件已就地订正（`memory/PROJECT.md` 里 `--replay`/`pytest 142|167`/`vitest 174`/「桥默认 921600」/「回放之后 link.port」五处）；**历史目标仍未完成**：跑 921600（需普通 USB-TTL 接 U12）、m19448 旧内置长流程真板实跑、m20490 任务编排模型 A/B/C/D 等用户选。
 下一步：把 c7de56e 的数字与证据（pytest 164 / vitest 177 / 拷贝点对照 / 两条 toast 的根因与现状）报给用户；若用户要更彻底的卡顿优化，再拆 `Overview/Drive/Sensors/Servo/Control` 这 5 个仍整页 `useStore()` 的页面。
@@ -1138,24 +1155,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：未实测灰度模块 I2C 空闲电压；RES# 的 100nF 未补；7.4V 轨的 R30 未上台调。
 下一步：进 PCB 布局；需要时出分区草图 / 2oz 走线宽度 / AT8236 散热过孔估算。
 
-## 2026-09-18
-完成：**工作区整理**（用户要求：清缓存 + 以后新文件不许丢根目录）。新建 `docs/datasheets/`（4 本手册移入：stm32g474re / SSD1306 / SSD1315 / GME12864-41）、`tools/`（5 个脚本重写并移入，新增 `_paths.py` 统一用仓库根定位路径、`tools/README.md`）、`out/`（渲染产物目录，`render_gme.py` 现在写到这里）。删除 7 张一次性渲染图（gme_p3x/iic_*/cp_zoom）。**删除 `Haixin_FreeRtos (2).zip`（32MB）**——先对 1115 个文件逐个比 MD5，与 `Haixin/` 全部一致（checked=1115, mismatch=0）才删。**已验证**：`python tools/i2c_bus.py` / `render_gme.py 31` / `extract_pins.py` 均能跑通（输出数字正确，控制台中文乱码是环境问题）。根目录现在只剩 AGENTS.md、固件接口规格.md 和 6 个目录。规则写进 `AGENTS.md` 的「文件放置」节。
-未完成：`pcb/主板选型与设计.md` 已被 `固件接口规格.md` 大部分取代，去留未定；`pcb/111111111.zip`（嘉立创 Gerber 包）保留未动。
-下一步：把 `固件接口规格.md` 里 3.7 节 OLED 裸屏内容与实际屏幕再对一遍；然后进 PCB 布局。
-
-## 2026-09-18
-完成：把 **OLED 裸屏接法写进 `固件接口规格.md` 3.7 节**（此前该节还写着「4 针模组 SSD1306」）：改名「OLED：裸屏 U16（I2C1）」，补 30 脚逐脚接法表（C39/C40 飞电容、VBAT/VDD=3V3、BS1=3V3+BS2=GND→I2C、CS/A0/WR/RD 接地、D1+D2 短接=SDA、**IREF 脚26 悬空用内部 IREF**、**VCC 脚28 只接 4.7µF 绝不能接电源**）、I2C 控制字节（0x00 命令 / 0x40 数据）、屏厂初始化序列（AE…8D 14…AD 30…AF）、上下电顺序（VDD→VBAT→RES#→8Dh→AFh，约 100ms 点亮）、显存/刷新速率，以及「**做 FPC 封装必须按厂家脚位，立创EDA 通用 SSD1306 符号 2–5/10/29 脚定义不同**」的警告。另修正 3.4 节 I2C 实测判据：**4.7k 时若模块 10k 接 5V，空闲电压是 3.84V（不是此前写的 3.61V）**。
-未完成：仍未实测灰度模块 I2C 空闲电压；RES# 的 100nF 未补。
-下一步：上电实测 I2C 空闲电平；确认后可定是否拆模块上拉。
-
-## 2026-09-16
-完成：诊断「Tailscale 为何走 DERP 中继而非直连」。本机 `tailscale netcheck`：**UDP: true、MappingVariesByDestIP: false（本机是易穿透 NAT）、IPv4 61.149.135.62、UPnP/PMP/PCP 全为 false** → 路由器（网关 192.168.77.1，**360 路由**，HTTP 可开）**不做任何自动端口映射**，只能靠打洞，对端 `cai` 是硬 NAT 时失败，回落 `DERP(tok)`，RTT 300~430ms。**本机无需改设置**：`Get-NetUDPEndpoint` 显示 tailscaled 已固定监听 **UDP 41641**（0.0.0.0 与 ::），所以不需要 `tailscale set --port`。修复路径：路由器开 **UPnP**，或手动**端口映射 UDP 41641 → 192.168.77.125:41641**；只需一侧可达即可 P2P，故 `cai` 不用改。⚠️ 前提是路由器 WAN 拿到的是公网 IP 而非 CGNAT(100.64.x/10.x)。若双端 CGNAT 则无解，退路=找联通要公网 IP 或自建 derper。
-未完成：用户尚未改路由器端口映射/UPnP；直连未验证
-下一步：用户改完路由器后：`tailscale netcheck` 应显示 UPnP: true，`tailscale ping 100.71.106.46` 的 via 应从 DERP(tok) 变为直连 IP
-
-## 2026-09-16
-完成：**避坑**：本机系统代理开着（`HKCU Internet Settings` → `ProxyEnable=1, ProxyServer=127.0.0.1:7897`，Clash/Mihomo 类）。因此用 HTTPS 查出口 IP（api.ipify）得到 **112.120.48.227（香港）**，而 `tailscale netcheck` 的 STUN 得到 **61.149.135.62（北京联通）**。两者不一致是正常的：Tailscale 走 UDP、不经 HTTP 代理。已确认机器上**无 Clash TUN 虚拟网卡**在运行（网卡仅 WLAN/Tailscale/VMware VMnet1&8/蓝牙/以太网169.254），故代理未劫持 Tailscale。**若将来开启 Clash TUN 模式会吞掉 Tailscale UDP、直连必挂**，需加绕过规则。
-未完成：无
-下一步：若用户报 Tailscale 直连失效，先确认是否开了 Clash TUN
-
-> 更早的会话条目已归档到 199 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 203 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。

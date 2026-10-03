@@ -1,3 +1,27 @@
+## 2026-09-18
+完成：**工作区整理**（用户要求：清缓存 + 以后新文件不许丢根目录）。新建 `docs/datasheets/`（4 本手册移入：stm32g474re / SSD1306 / SSD1315 / GME12864-41）、`tools/`（5 个脚本重写并移入，新增 `_paths.py` 统一用仓库根定位路径、`tools/README.md`）、`out/`（渲染产物目录，`render_gme.py` 现在写到这里）。删除 7 张一次性渲染图（gme_p3x/iic_*/cp_zoom）。**删除 `Haixin_FreeRtos (2).zip`（32MB）**——先对 1115 个文件逐个比 MD5，与 `Haixin/` 全部一致（checked=1115, mismatch=0）才删。**已验证**：`python tools/i2c_bus.py` / `render_gme.py 31` / `extract_pins.py` 均能跑通（输出数字正确，控制台中文乱码是环境问题）。根目录现在只剩 AGENTS.md、固件接口规格.md 和 6 个目录。规则写进 `AGENTS.md` 的「文件放置」节。
+未完成：`pcb/主板选型与设计.md` 已被 `固件接口规格.md` 大部分取代，去留未定；`pcb/111111111.zip`（嘉立创 Gerber 包）保留未动。
+下一步：把 `固件接口规格.md` 里 3.7 节 OLED 裸屏内容与实际屏幕再对一遍；然后进 PCB 布局。
+
+## 2026-09-18
+完成：把 **OLED 裸屏接法写进 `固件接口规格.md` 3.7 节**（此前该节还写着「4 针模组 SSD1306」）：改名「OLED：裸屏 U16（I2C1）」，补 30 脚逐脚接法表（C39/C40 飞电容、VBAT/VDD=3V3、BS1=3V3+BS2=GND→I2C、CS/A0/WR/RD 接地、D1+D2 短接=SDA、**IREF 脚26 悬空用内部 IREF**、**VCC 脚28 只接 4.7µF 绝不能接电源**）、I2C 控制字节（0x00 命令 / 0x40 数据）、屏厂初始化序列（AE…8D 14…AD 30…AF）、上下电顺序（VDD→VBAT→RES#→8Dh→AFh，约 100ms 点亮）、显存/刷新速率，以及「**做 FPC 封装必须按厂家脚位，立创EDA 通用 SSD1306 符号 2–5/10/29 脚定义不同**」的警告。另修正 3.4 节 I2C 实测判据：**4.7k 时若模块 10k 接 5V，空闲电压是 3.84V（不是此前写的 3.61V）**。
+未完成：仍未实测灰度模块 I2C 空闲电压；RES# 的 100nF 未补。
+下一步：上电实测 I2C 空闲电平；确认后可定是否拆模块上拉。
+
+> 更早的会话条目已归档到 201 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-16
+完成：诊断「Tailscale 为何走 DERP 中继而非直连」。本机 `tailscale netcheck`：**UDP: true、MappingVariesByDestIP: false（本机是易穿透 NAT）、IPv4 61.149.135.62、UPnP/PMP/PCP 全为 false** → 路由器（网关 192.168.77.1，**360 路由**，HTTP 可开）**不做任何自动端口映射**，只能靠打洞，对端 `cai` 是硬 NAT 时失败，回落 `DERP(tok)`，RTT 300~430ms。**本机无需改设置**：`Get-NetUDPEndpoint` 显示 tailscaled 已固定监听 **UDP 41641**（0.0.0.0 与 ::），所以不需要 `tailscale set --port`。修复路径：路由器开 **UPnP**，或手动**端口映射 UDP 41641 → 192.168.77.125:41641**；只需一侧可达即可 P2P，故 `cai` 不用改。⚠️ 前提是路由器 WAN 拿到的是公网 IP 而非 CGNAT(100.64.x/10.x)。若双端 CGNAT 则无解，退路=找联通要公网 IP 或自建 derper。
+未完成：用户尚未改路由器端口映射/UPnP；直连未验证
+下一步：用户改完路由器后：`tailscale netcheck` 应显示 UPnP: true，`tailscale ping 100.71.106.46` 的 via 应从 DERP(tok) 变为直连 IP
+
+## 2026-09-16
+完成：**避坑**：本机系统代理开着（`HKCU Internet Settings` → `ProxyEnable=1, ProxyServer=127.0.0.1:7897`，Clash/Mihomo 类）。因此用 HTTPS 查出口 IP（api.ipify）得到 **112.120.48.227（香港）**，而 `tailscale netcheck` 的 STUN 得到 **61.149.135.62（北京联通）**。两者不一致是正常的：Tailscale 走 UDP、不经 HTTP 代理。已确认机器上**无 Clash TUN 虚拟网卡**在运行（网卡仅 WLAN/Tailscale/VMware VMnet1&8/蓝牙/以太网169.254），故代理未劫持 Tailscale。**若将来开启 Clash TUN 模式会吞掉 Tailscale UDP、直连必挂**，需加绕过规则。
+未完成：无
+下一步：若用户报 Tailscale 直连失效，先确认是否开了 Clash TUN
+
+> 更早的会话条目已归档到 199 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
 ## 2026-09-16
 完成：复测 `100.71.106.46`（Tailscale 节点 `cai`）：**已上线**（`tailscale status` 无 offline 标记，`tailscale ping` 有 pong，但经 **DERP(tok) 中继**，RTT 约 320–430ms，`direct connection not established`）。**但 SSH 仍不通**，且根因已从「机器离线」变为「对端没有 SSH 服务」：ICMP 通、**TCP 22 超时（超时=被防火墙丢弃，不是 refused）**；端口扫描 22/2222/3389/5985/5986/80/443/8080 全不通，**仅 445(SMB) OPEN**。ssh -v 显示 `Connecting to 100.71.106.46 port 22 ... Connection timed out`。结论：对端是 Windows，未装/未启动 OpenSSH Server（或防火墙未放行 22），与本机 SSH 客户端、用户名、密钥都无关。
 未完成：需要在 `cai` 那台机上启动 OpenSSH 服务并放行 22（或改用其他通道）；用户名与认证方式仍未知
