@@ -44,6 +44,9 @@ $deps = @{
 't_gyrotest'  = @('App/Svc/gyro_control.c')
 't_motion'    = @('App/Svc/motion.c', 'App/Svc/jy61p.c')
 't_bushealth' = @('App/Svc/bus_health.c')
+  # 全工程唯一会擦写 Flash 的模块：真 nvram.c + 真 trace_cal 标定，
+  # 其余外部依赖（g_cfg/UI 三函数/动作表/参数表）由 t_nvram.c 自己做最小替身
+  't_nvram'    = @('App/Svc/nvram.c', 'App/Svc/trace_cal.c')
 }
 $stubs = @('host_hal.c', 'host_board.c', 'host_rtt.c') | ForEach-Object { Join-Path $stub $_ }
 
