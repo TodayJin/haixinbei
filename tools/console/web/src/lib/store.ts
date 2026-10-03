@@ -162,6 +162,7 @@ class ConsoleStore {
   private lastHotBump = 0
   private hotDirty = false
   private hotTimer: ReturnType<typeof setTimeout> | null = null
+  private hotRaf: number | null = null
 
   // ---- 订阅（useSyncExternalStore） ----
   subscribe = (fn: () => void): (() => void) => {
@@ -197,9 +198,28 @@ class ConsoleStore {
     this.listeners.forEach((fn) => fn())
   }
 
-  /** telem 是 100Hz，界面按 HOT_MS(50ms) 合并刷新（波形自己按窗口取数，不吃这个节流）。
-   *  用全局 `setTimeout` 而不是 `window.setTimeout`：SSR 预览生成器（Node 里跑）
-   *  喂遥测时也要能走同一条节流路径。 */
+  /** 通知热订阅者：浏览器里挂到**下一次绘制帧**（rAF）—— 同一帧内的多次通知合并成
+   *  一次渲染，而且标签页切到后台时 rAF 根本不触发（不白醒、不白算波形），切回来
+   *  时下一次 rAF 一次补上最新数据。Node（SSR 预览生成器 / 单测）里没有 window，
+   *  直接同步通知，行为与从前一致。 */
+  private renderHot(): void {
+    const raf = typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function'
+      ? window.requestAnimationFrame
+      : null
+    if (!raf) {
+      this.emitHotNow()
+      return
+    }
+    if (this.hotRaf !== null) return
+    this.hotRaf = raf(() => {
+      this.hotRaf = null
+      this.emitHotNow()
+    })
+  }
+
+  /** telem 是 100Hz，界面按 HOT_MS(50ms) 合并刷新、渲染挂在 rAF 上（波形自己按窗口
+   *  取数，不吃这个节流）。用全局 `setTimeout` 而不是 `window.setTimeout`：SSR 预览
+   *  生成器（Node 里跑）喂遥测时也要能走同一条节流路径。 */
   private emitHot(): void {
     this.hotDirty = true
     const now = Date.now()
@@ -210,7 +230,7 @@ class ConsoleStore {
           if (this.hotDirty) {
             this.hotDirty = false
             this.lastHotBump = Date.now()
-            this.emitHotNow()
+            this.renderHot()
           }
         }, HOT_MS - (now - this.lastHotBump))
       }
@@ -218,7 +238,7 @@ class ConsoleStore {
     }
     this.hotDirty = false
     this.lastHotBump = now
-    this.emitHotNow()
+    this.renderHot()
   }
 
   // ---- toast ----

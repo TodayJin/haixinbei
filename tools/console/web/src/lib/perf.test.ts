@@ -95,6 +95,44 @@ describe('遥测热路径的刷新成本（用户 m20705「感觉卡卡的」）
     }
   })
 
+  it('浏览器里热渲染挂在 rAF 上：同一帧内的遥测合并成一次，帧没到就不渲染', () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('window', {
+      requestAnimationFrame: (fn: FrameRequestCallback) => {
+        frames.push(fn)
+        return frames.length
+      },
+    })
+    vi.useFakeTimers()
+    vi.advanceTimersByTime(500) // 冲掉上一个测试遗留的节流窗口与定时器
+    frames.length = 0
+    let full = 0
+    const off = store.subscribe(() => {
+      full += 1
+    })
+    try {
+      store.feedTelem(mkTelem(300))
+      store.feedTelem(mkTelem(301))
+      expect(frames.length).toBe(1) // 两帧遥测只排一次绘制
+      expect(full).toBe(0) // 绘制帧还没到：一次渲染都没有
+      frames.shift()!(0)
+      expect(full).toBe(1) // 一帧到了，合并成一次渲染
+
+      // 窗口内的尾帧：定时器到点后也走 rAF，而不是同步渲染
+      store.feedTelem(mkTelem(302))
+      vi.advanceTimersByTime(60)
+      expect(full).toBe(1)
+      expect(frames.length).toBe(1)
+      frames.shift()!(0)
+      expect(full).toBe(2)
+      // 合并只是少刷，最后一帧不能丢
+      expect(store.getSnapshot().telem?.t).toBe(T0 + 302 * 10)
+    } finally {
+      off()
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('meta 快照在热路径上保持同一引用（React 直接 bail out，不重渲染）', () => {
     vi.useFakeTimers()
     const before = store.getMetaSnapshot()
