@@ -17,6 +17,8 @@
 - 唯一会让**所有**数字都动的是 Windows 计时器精度：不提高（系统默认 ~15.6ms）时
   `LinkRunner` 的 5ms 轮询实际只有 ~64 次/s，100Hz 遥测会被攒成串。桥默认会提高，
   本工具的子进程也默认提高；对照组加 `--low-res-timer`。
+- `--serial` 开的是 J-Link 的 CDC VCOM 时，>230400 会被**拦住**（实测那颗探针试 460800/921600
+  会把 USB 栈打进 bootloader 态，只能物理拔插）。确实要试加 `--force-baud`。
 
 判定/汇总逻辑（`parse_sse` / `pct` / `summarize` / `format_report` / `serial_verdict`）都是纯函数，
 由 `tools/console/tests/test_bench.py` 钉住；这里只有 socket / 子进程 / Windows API 是 I/O。
@@ -35,6 +37,9 @@ import subprocess
 import sys
 import time
 import urllib.request
+
+from .console_io import harden_stdio
+from .serial_safety import check_baud
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONSOLE = os.path.dirname(HERE)
@@ -477,6 +482,7 @@ def format_serial(b: dict) -> list[str]:
 
 
 def main(argv=None) -> int:
+    harden_stdio()          # 判定行里的 ⇒ 在 GBK 控制台上编不出来
     ap = argparse.ArgumentParser(prog="bench",
                                  description="主机侧承载量测（帧率/抖动/丢帧/CPU/延迟）")
     g = ap.add_mutually_exclusive_group(required=True)
@@ -485,6 +491,8 @@ def main(argv=None) -> int:
     g.add_argument("--sim", action="store_true", help="自己起桥跑仿真车：量指令往返")
     g.add_argument("--replay", action="store_true", help="自己起桥跑定频回放：量主机侧承载")
     ap.add_argument("--baud", type=int, default=921600, help="--serial 用的波特率")
+    ap.add_argument("--force-baud", action="store_true", dest="force_baud",
+                    help="不拦 J-Link CDC 口上 >230400 的波特率（会让探针崩进 bootloader 态，慎用）")
     ap.add_argument("--hz", default="50,100,200", help="--replay 的定频档位，逗号分隔")
     ap.add_argument("--seconds", type=float, default=6.0, help="每档量多久，默认 6s")
     ap.add_argument("--low-res-timer", action="store_true",
@@ -513,6 +521,11 @@ def main(argv=None) -> int:
         return 0
 
     if args.serial:
+        err = check_baud(args.serial, args.baud, args.force_baud)
+        if err:
+            print("  拒绝：%s" % err)
+            print("=" * 100)
+            return 2
         b = bench_serial(args.serial, args.baud, args.seconds, args.low_res_timer, batch)
         for line in format_report(b["rep"], "%s @%d" % (args.serial, args.baud)):
             print(line)

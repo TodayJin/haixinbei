@@ -120,6 +120,9 @@ def _main_with(monkeypatch, results):
     from bridge import probe as pb
     it = iter(results)
     monkeypatch.setattr(pb, "probe", lambda *a, **k: next(it))
+    # 汇总逻辑跟"本机那条口是什么型号"无关：串口安全闸换成照单全收
+    # （闸自己的判定在 tests/test_serial_safety.py 里钉；接线在下面两条钉）
+    monkeypatch.setattr(pb, "cap_bauds", lambda port, bauds, force=False: (list(bauds), ""))
     return pb.main
 
 
@@ -154,3 +157,37 @@ def test_summary_picks_highest_usable(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "最高可用波特率 = 921600" in out
+
+
+# ------------------------------------------- 串口安全闸的接线（假的 cap_bauds）
+def test_main_hands_the_ladder_to_the_safety_gate(monkeypatch, capsys):
+    from bridge import probe as pb
+
+    gate: list[tuple] = []
+    probed: list[int] = []
+
+    def fake_gate(port, bauds, force=False):
+        gate.append((port, list(bauds), force))
+        return [230400], "闸：跳过 921600"
+
+    monkeypatch.setattr(pb, "cap_bauds", fake_gate)
+    monkeypatch.setattr(pb, "probe",
+                        lambda port, baud, sec, hello: (probed.append(baud), Result(baud=baud))[1])
+
+    rc = pb.main(["--port", "COM26", "--bauds", "921600,230400"])
+    err = capsys.readouterr().err
+    assert gate == [("COM26", [921600, 230400], False)]     # 用户给的梯子原样进闸
+    assert probed == [230400]                               # 只听闸放行的档
+    assert "闸：跳过 921600" in err                          # 警告走 stderr，不混进结论
+    assert rc == 1                                          # 一帧没解出（0 字节）
+
+
+def test_force_baud_reaches_the_gate(monkeypatch, capsys):
+    from bridge import probe as pb
+
+    seen: list[bool] = []
+    monkeypatch.setattr(pb, "cap_bauds",
+                        lambda port, bauds, force=False: (seen.append(force), (list(bauds), ""))[1])
+    monkeypatch.setattr(pb, "probe", lambda port, baud, sec, hello: Result(baud=baud))
+    pb.main(["--port", "COM26", "--bauds", "921600", "--force-baud"])
+    assert seen == [True]

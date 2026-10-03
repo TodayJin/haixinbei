@@ -1,4 +1,4 @@
-"""链路体检：不启动桥、不起网页，直接按一串波特率静听串口，报每个波特率下
+r"""链路体检：不启动桥、不起网页，直接按一串波特率静听串口，报每个波特率下
 「收到多少字节 / 解出多少合法帧 / CRC 错几次」。
 
 为什么需要它：2026-10-03 把 LPUART1 从 115200 提到 **921600** 之后，真车桥在 921600 下
@@ -11,9 +11,14 @@
 一次性扫完，不用反复改桥参数、反复看网页。判定逻辑（`decode_bytes` / `verdict`）
 是纯函数，由 `tools/console/tests/test_probe.py` 用合成字节钉住。
 
-安全：**默认只收不发**，一个字节都不往线上写。加 `--hello` 才会在监听结束后补发
+安全（不带电）：**默认只收不发**，一个字节都不往线上写。加 `--hello` 才会在监听结束后补发
 一帧 HELLO_REQ（只读命令，固件回 T_HELLO）。波特率不匹配时那串字节在车上看来是
 乱码，理论上极小概率被解析成别的帧类型 —— 所以默认关；要开请先把车轮架空。
+
+安全（波特率）：**J-Link 的 CDC VCOM 实测上限 230400** —— 试 460800/921600 不但打不开，
+还会把探针打进 bootloader 态（`USB\VID_1366&PID_0101`，只能物理拔插 USB 才能恢复）。
+所以 J-Link 口上超过 230400 的档会被自动跳过（`bridge/serial_safety.py`），
+警告打在 stderr；确实要试请显式 `--force-baud`。
 
 用法（工作目录必须是 `tools/console`）：
 
@@ -35,7 +40,9 @@ except ImportError:  # pragma: no cover - 环境问题，不是逻辑问题
     serial = None  # type: ignore[assignment]
     list_ports = None  # type: ignore[assignment]
 
+from .console_io import harden_stdio
 from .protocol import TYPE_NAMES, Frame, FrameDecoder, decode_hello, frame_hello_req
+from .serial_safety import cap_bauds
 
 # 回退梯子：从用户要的 921600 一路降到历史值
 DEFAULT_BAUDS = (921600, 460800, 230400, 115200)
@@ -153,6 +160,7 @@ def _report(r: Result) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    harden_stdio()          # 结论行里的 ⇒ 在 GBK 控制台上编不出来，会崩在最后一行
     ap = argparse.ArgumentParser(
         prog="python -m bridge.probe",
         description="链路体检：按一串波特率静听串口，报收了多少字节、解出多少合法帧",
@@ -164,6 +172,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--hello", action="store_true",
                     help="监听后再补发一帧 HELLO_REQ（默认只收不发；开之前把车轮架空）")
     ap.add_argument("--list", action="store_true", help="只列出本机串口")
+    ap.add_argument("--force-baud", action="store_true", dest="force_baud",
+                    help="不跳过 J-Link CDC 口上 >230400 的档（会让探针崩进 bootloader 态，慎用）")
     args = ap.parse_args(argv)
 
     if list_ports is not None and (args.list or not args.port):
@@ -182,6 +192,10 @@ def main(argv: list[str] | None = None) -> int:
         tok = tok.strip()
         if tok:
             bauds.append(int(tok))
+
+    bauds, warn = cap_bauds(args.port, bauds, args.force_baud)
+    if warn:
+        print("警告：%s" % warn, file=sys.stderr)
 
     print("端口 %s，每档听 %.1fs，%s" % (args.port, args.seconds,
                                        "监听后补发 HELLO_REQ" if args.hello else "只收不发"))

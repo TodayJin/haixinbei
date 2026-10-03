@@ -13,7 +13,9 @@ import threading
 import time
 import webbrowser
 
+from .console_io import harden_stdio
 from .link import available_ports, find_default_port
+from .serial_safety import check_baud
 from .server import Bridge, serve, SSE_BATCH_MS_DEFAULT
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -63,10 +65,13 @@ def parse_args(argv=None):
     ap.add_argument("--sse-batch-ms", type=int, default=SSE_BATCH_MS_DEFAULT, metavar="N",
                     help=f"SSE 按 N 毫秒攒批，连续遥测合成一条 telem_batch（默认 "
                          f"{SSE_BATCH_MS_DEFAULT}；0 = 不合并，一事件一报文）")
+    ap.add_argument("--force-baud", action="store_true", dest="force_baud",
+                    help="不拦 J-Link CDC 口上 >230400 的波特率（会让探针崩进 bootloader 态，慎用）")
     return ap.parse_args(argv)
 
 
 def main(argv=None) -> int:
+    harden_stdio()          # 横幅/判定里的 ⇒ 在 GBK 控制台上编不出来
     args = parse_args(argv)
     if args.list_ports:
         ports = available_ports()
@@ -80,6 +85,11 @@ def main(argv=None) -> int:
         return 0
 
     mode = "sim" if args.sim else ("replay" if args.replay else "serial")
+    if mode == "serial":
+        err = check_baud(args.serial or find_default_port(), args.baud, args.force_baud)
+        if err:
+            print(f"启动失败：{err}")
+            return 2
     hi_res = False if args.low_res_timer else raise_timer_resolution()
     b = Bridge(mode=mode, port=args.serial or "", baud=args.baud,
                replay=args.replay or "", replay_speed=args.replay_speed,
