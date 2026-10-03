@@ -12,6 +12,21 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-03 — 把 firmware/test/stub/host_hal.c 的假 Flash 用 VirtualAlloc 真映射到 0x08000000（失败则退回 RAM 数组，并用 host_flash_uses_real_addr() 暴露），从而能在主机上测真 nvram.c
+选择：把 firmware/test/stub/host_hal.c 的假 Flash 用 VirtualAlloc 真映射到 0x08000000（失败则退回 RAM 数组，并用 host_flash_uses_real_addr() 暴露），从而能在主机上测真 nvram.c
+放弃：改 nvram.c 的读写走 HAL/宏（动产品代码，且失去'真代码原样被测'的意义），或在测试里复制一份 nvram.c 改地址（两份代码必然漂移）
+因为：nvram.c 是按地址直读 Flash 的（const nvram_record_t *rec = (const nvram_record_t *)0x0801F800、memcmp((const void*)NVRAM_PAGE_ADDR,...)），不走 HAL_FLASH_*；不真映射就一读一崩（gdb 定位到 nvram.c:399）
+
+## 2026-10-03 — 在 host_hal.c 的 HAL_GetTick() 里兑现 FLASH->CR 的擦除请求（见 PER|STRT 就按 PNB/BKER 把那页抹成 0xFF 并清 STRT）
+选择：在 host_hal.c 的 HAL_GetTick() 里兑现 FLASH->CR 的擦除请求（见 PER|STRT 就按 PNB/BKER 把那页抹成 0xFF 并清 STRT）
+放弃：让测试自己调 host_flash_reset()/FLASH_PageErase() 来模拟擦除（等于替固件把活干了，测不出'写前必须擦'）；也否决了改用 HAL_FLASHEx_Erase（nvram.c 的注释明确说本板 FLASH_OPTR.DBANK 读出为 0、必须绕开它）
+因为：真代码 nvram_page_erase() 是手写 CR=BKER|PNB=31|PER|STRT 后立刻 t0 = HAL_GetTick()，再查 SR——主机上 HAL_GetTick() 是唯一能观察'擦除已发出'的时刻；不仿真它，页不擦、第二次保存必然卡在 nvram.c:367 的 ==0xFFFFFFFF 复验上
+
+## 2026-10-03 — firmware/test/t_nvram.c 只链真 App/Svc/nvram.c + 真 App/Svc/trace_cal.c，其余外部依赖（app_settings_t g_cfg、app_ui_gyro_axis_mode/set/loaded、trace_read_channel、Motion_GetMode、SpeedControl_IsEnabled、GyroControl_IsEnabled、14 项动作表、13 个 v5 标定量的 host_param_get/set_local/bounds）全部在本文件内做最小替身
+选择：firmware/test/t_nvram.c 只链真 App/Svc/nvram.c + 真 App/Svc/trace_cal.c，其余外部依赖（app_settings_t g_cfg、app_ui_gyro_axis_mode/set/loaded、trace_read_channel、Motion_GetMode、SpeedControl_IsEnabled、GyroControl_IsEnabled、14 项动作表、13 个 v5 标定量的 host_param_get/set_local/bounds）全部在本文件内做最小替身
+放弃：再给 host_appstub.c 加一组 #ifndef HOST_REAL_NVRAM 开关（改动共享桩，10 个既有测试都要重跑回归）
+因为：共享桩 host_appstub.c 里已经有假 nvram_touch（t_hostext 靠它计数），把它链进来必然与真 nvram.c 符号冲突；自包含替身既不动共享桩、又不影响既有 10 个测试
+
 ## 2026-10-03 — 用「把真固件协议层编成字节管道进程（firmware/test/pipe_hostlink.c）+ bridge/protocol.py 直接对话」来验协议一致性
 选择：用「把真固件协议层编成字节管道进程（firmware/test/pipe_hostlink.c）+ bridge/protocol.py 直接对话」来验协议一致性
 放弃：再写一份字段对照文档、或只做源码解析（解析到的是源码文本，不是运行时字节）

@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-03
+完成：真 nvram.c（全工程唯一擦写 Flash 的模块）有了主机测试 firmware/test/t_nvram.c（42 项检查，已提交 2deb921）：①空 Flash 不加载；②改 g_cfg/参数表/动作表 → nvram_touch → poll 得 BUSY → service 得 DONE 落盘 → 把 RAM 全清掉再 nvram_init() → nvram_loaded()==1 且 trace_speed/line_kp_x100/speed_kp_x100/轴映射档/HP_PIVOT_KD/HP_GYRO_ANG_KP/HP_GYRO_SETTLE_DEG/HP_PIVOT_KP + 三个动作角度(170,12)/(30,60)/(0,0) 全回来，app_ui_settings_loaded 被调 1 次；③值一致时 poll+service 不擦页（记录外 1900 偏移的哨兵 0x5A 还在）；④1.5s 防抖（1.4s 仍 IDLE、1.6s 才 BUSY）；⑤运动中 poll 不排队、已排队再动起来 service 撤回（1950 哨兵 0x3C 还在）、改回上次存过的值不算变化（1951 哨兵 0x5A 还在）；⑥payload 翻一位或 version=9 → loaded==0、不被坏记录盖。验证：pwsh -File firmware/test/run_tests.ps1 → 通过 11/失败 0/编译失败 0（原 10 个全绿）；C:\Python314\python.exe -m pytest tools/console/tests -q → 60 passed；变异验证：把 nvram.c:280 的 Servo_SetActionPose 回填改成 (void)0 → t_nvram 8 处失败，还原后全绿。
+未完成：host_hal.c 的擦除仿真只覆盖'PER|STRT'这一种写法；若将来有代码用 HAL_FLASHEx_Erase 或 MER1/MER2 全片擦，主机上不会生效（目前无此代码）。
+下一步：把真 nvram.c 也链进 firmware/test/pipe_hostlink.c 的字节管道（host_pipestub.c 补 g_cfg/app_ui_* 等 5 个符号、关掉 host_appstub.c 的假 nvram_touch、加 nvram_poll/service 调用与 --flash/--dump-flash 文件参数），做协议层端到端：T_PARAM_SAVE → 真落盘 → 重开进程带上 flash 镜像 → 参数 dump 出新值。
+
+## 2026-10-03
 完成：真固件源码与上位机编解码器的字节级对拍落地并提交 9717fa0：新增 firmware/test/pipe_hostlink.c（stdin 每字节喂真 host_link.c，推进 5ms 假时钟，回帧从 stdout 出）、firmware/test/stub/host_pipestub.c、tools/console/tests/test_firmware_pipe.py（9 项）、protocol.py 的 param_table_crc(items)，以及让管道构建链真 servo.c 的配套 ifdef 与假 HAL 头补齐（__HAL_TIM_SET_COMPARE + 旧拼法）。验证方式：C:\Python314\python.exe -m pytest tools/console/tests -q ⇒ 60 passed；pwsh -File firmware/test/run_tests.ps1 ⇒ 通过 10 / 失败 0。硬证据：参数 dump 43 项 id 集合与默认值全部等于 bridge/params.py、按 dump 顺序复算的 param_crc == 固件 HELLO 报的 577（按界面 PARAMS 顺序算得 30734，证明顺序敏感）、动作表运行值 == servo.c 的 k_action_default、角度 >180 与中位偏差 ±999 被协议层回 ST_OUT_OF_RANGE 且不落表、驾驶静默 960ms 触发看门狗自动停车。
 未完成：真车只读链路仍待硬件（用户决定）；本机拿不到像素级截图，只能用 out/console/ssr/ 的 SSR 快照替代。桩 host_appstub.c 里的 k_def[] 仍是旧台架值，t_hostext 测的是桩自己的动作表（出厂表由 test_firmware_pipe.py 覆盖）。
 下一步：把这一轮结果告诉用户（怎么自己复核：pytest tools/console/tests/test_firmware_pipe.py -q；没装 gcc 的机器会自动 skip），然后按目标清单找下一个还没自主验证的缺口。
@@ -1162,9 +1167,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：DRV 板载/外接未定、五向键型号未定、灰度主用总线未定
 下一步：等用户确认后继续辅助：核引脚冲突、走线宽度/散热、布局分区、BOM、驱动移植要点（不生成原理图）
 
-## 2026-09-14
-完成：更新文档到 v0.4：电机走主板 6P（新增驱动输出 KF128-4P 与布局大电流要求、XH2.54 3A 边界提示）；编码器 5V 电平处理（直连/分压三焊盘跳线）；舵机 2 路 7.4V；灰度预留 I2C2(PC4/PC5)+UART 通用循迹接口；引脚表加入 I2C2。
-未完成：第 10 节：驱动型号、灰度总线、板尺寸、保留外设
-下一步：确认后出完整原理图连接表（网络表）
-
-> 更早的会话条目已归档到 160 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 161 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
