@@ -4,6 +4,7 @@
  */
 #include "app_ui.h"
 #include "board.h"
+#include "disp_heal.h"     /* 屏幕故障自愈的决策逻辑（纯逻辑，主机侧 t_dispheal.c 单测） */
 #include "kk_font.h"
 #include "kk_icons.h"
 #include "kk_oled.h"
@@ -180,6 +181,17 @@ static uint8_t s_gyro_axis_mode = 2U;
 static uint8_t s_nv_last;           /* 上一次看到的 Flash 保存状态（用于弹提示） */
 static uint8_t s_nv_lock;           /* 1 = "正在保存"已真的画上屏，按键才锁 */
 static uint8_t s_adapt_applied = 0xFFU;  /* 「自动判线」上一次推给 trace_cal 的值（0xFF = 还没推） */
+
+/* ---- 屏幕故障自愈（用户 m26333：屏幕有时候特别卡、帧率特别低）----
+ * KK_UI 只要 latch 一次显示错误（OLED 传输报错，或者一次传输拖过
+ * KK_UI_DISPLAY_TIMEOUT_MS=250ms），kk_ui.c:731 之后每一拍都直接 return：
+ * 不画、不收按键，看着就是"卡住了"，只能断电。而它的恢复入口
+ * KK_UI_RecoverDisplay() 在整个工程里没有任何调用者（死代码）。
+ * 什么时候该去自愈由 App/Svc/disp_heal.c 决定（纯逻辑、主机侧有 t_dispheal.c）；
+ * 这里只负责把动作做出来：调 KK_UI_RecoverDisplay()，必要时先叫一次
+ * board_i2c_bus_recover()（它会把速率与 DMA 一起复位），免得
+ * "屏已经能画了但总线还歪着"时无限打转。自愈次数进 1Hz RTT 诊断行。 */
+static disp_heal_t s_disp_heal;
 
 /* KK_UI 过渡动画的水平位移，由 KK_UI_CustomOnDraw 每帧设定。
  * 内置页都是"内容坐标 += x_offset + 窗口按 clip 裁"，自定义页原来把
@@ -2837,6 +2849,7 @@ void app_ui_init(void)
 {
     g_live.sysclk_hz = HAL_RCC_GetHCLKFreq();
     s_test_sel = 0U;
+    disp_heal_init(&s_disp_heal);   /* 屏幕故障自愈：从"没故障、没重试"开始 */
     pull_pid_params();          /* host_link 参数表 -> 菜单镜像（host_link_init 已跑过） */
     (void)KK_UI_Init(&k_app);
 }
@@ -2884,7 +2897,23 @@ void app_ui_tick(uint32_t now_ms)
         KK_UI_Invalidate();     /* 别等 20ms 的帧节拍，这一拍就画上去 */
     }
 
-    (void)KK_UI_Update(now_ms, app_ui_read_input());
+    {
+        KK_UI_Status ui_st = KK_UI_Update(now_ms, app_ui_read_input());
+        disp_heal_action_t act;
+
+        /* 显示故障自愈，见文件上部 s_disp_heal 的说明。注意 KK_UI_Update 在故障期间
+         * 每拍都返回同一个错误码，所以"什么时候该动手"全靠 disp_heal 自己记节拍。 */
+        act = disp_heal_step(&s_disp_heal,
+                             (ui_st == KK_UI_DISPLAY_ERROR ||
+                              ui_st == KK_UI_DISPLAY_TIMEOUT) ? 1U : 0U,
+                             now_ms);
+        if (act.bus_recover && !OLED_IsBusy()) {
+            board_i2c_bus_recover();       /* 自愈几次都不成：总线（速率 + DMA）复位一次 */
+        }
+        if (act.try_recover && KK_UI_RecoverDisplay() == KK_UI_OK) {
+            disp_heal_recovered(&s_disp_heal);   /* 真的清了故障、下一拍就重画全屏 */
+        }
+    }
 
     /* 循迹传感器极性：菜单里的「循迹反转」跟随生效（第五代模块默认压黑线=高） */
     trace_invert = g_cfg.trace_invert ? 1U : 0U;
@@ -2910,6 +2939,14 @@ void app_ui_tick(uint32_t now_ms)
             push_pid_params();  /* 菜单里刚改完的 PID/基准速度写回控制环的参数表 */
         }
     }
+}
+
+/* 上电以来屏幕自愈（KK_UI_RecoverDisplay）成功了几次 —— 只给 1Hz RTT 诊断行用。
+ * 一直是 0 说明屏从来没 latch 过显示错误；涨得快说明 OLED 通路（400kHz + DMA +
+ * 这条 I2C1 上的三个从机）确实在出错。 */
+uint32_t app_ui_display_recover_count(void)
+{
+    return disp_heal_count(&s_disp_heal);
 }
 
 /* 最小可见自检：不走 KK_UI，直接画一屏 */

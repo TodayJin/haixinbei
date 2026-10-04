@@ -116,6 +116,7 @@ extern app_settings_t g_cfg;
 void app_ui_setup_display(void);            /* 紧跟 OLED_Init() 之后调用，设置安装方向 */
 void app_ui_init(void);                     /* KK_UI_Init */
 void app_ui_tick(uint32_t now_ms);          /* 主循环每 5~10ms 调一次 */
+uint32_t app_ui_display_recover_count(void); /* 上电以来屏幕自愈次数（RTT 诊断用） */
 void app_ui_test_pattern(void);             /* 最小可见自检：直接画一屏 */
 
 /* ---- 供 Flash 存档（nvram.c）用的窗口 ----

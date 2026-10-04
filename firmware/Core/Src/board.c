@@ -178,6 +178,11 @@ static uint32_t i2c_timing(uint32_t pclk, uint32_t scl_hz)
   return (presc << 28) | (scldel << 24) | (sdadel << 20) | (sclh << 8) | scll;
 }
 
+/* 当前配置的 I2C1 速率（Hz）。board_i2c_init_hz() 每次成功都记下来，
+ * 唯一用途是让 board_i2c_bus_recover() 恢复后回到**同一个速率**（见那里的注释）。
+ * 默认值就是主程序要的 400kHz。 */
+static uint32_t s_i2c_scl_hz = 400000U;
+
 HAL_StatusTypeDef board_i2c_init_hz(uint32_t scl_hz)
 {
   GPIO_InitTypeDef io = {0};
@@ -208,12 +213,21 @@ HAL_StatusTypeDef board_i2c_init_hz(uint32_t scl_hz)
   hi2c1.Init.NoStretchMode   = I2C_NOSTRETCH_DISABLE;
   if (HAL_I2C_Init(&hi2c1) != HAL_OK) return HAL_ERROR;
 
+  s_i2c_scl_hz = scl_hz;     /* 记住这次配的速率，供总线恢复用 */
+
   return HAL_I2CEx_ConfigAnalogFilter(&hi2c1, I2C_ANALOGFILTER_ENABLE);
 }
 
+/* 只给自检固件（selftest.c / pa15test.c）用：100kHz 最保守。
+ * ★ 总线恢复不许调这个 —— 它会把主程序的 400kHz 顶掉，见 board_i2c_bus_recover()。 */
 HAL_StatusTypeDef board_i2c_init(void)
 {
-  return board_i2c_init_hz(100000U);   /* 自检固件用 100kHz，最保守 */
+  return board_i2c_init_hz(100000U);
+}
+
+uint32_t board_i2c_scl_hz(void)
+{
+  return s_i2c_scl_hz;
 }
 
 HAL_StatusTypeDef i2c_probe(uint8_t addr7)
@@ -310,7 +324,13 @@ void board_i2c_bus_recover(void)
   HAL_Delay(1);
   HAL_GPIO_WritePin(I2C1_SDA_PORT, I2C1_SDA_PIN, GPIO_PIN_SET);
   HAL_Delay(1);
-  (void)board_i2c_init();
+
+  /* ★ 按**当前配置的速率**重配，绝不能调 board_i2c_init()：那个函数是自检固件的
+   * 100kHz。主程序开机是 400kHz（main_app.c:80），恢复时降到 100kHz 的话屏的异步
+   * 搬运会慢 4 倍（满屏帧 ~23ms -> ~94ms），现象就是用户 m26333 报的"屏幕有时候
+   * 特别卡、帧率特别低"，而且断电重启才回得去 —— 而这台车恰恰会因为灰度模块掉线/
+   * ESD 之类的事触发恢复，谁也想不到屏变慢是"恢复"干的。 */
+  (void)board_i2c_init_hz(s_i2c_scl_hz);
 }
 
 /* ---------------- I2C 总线健康看门狗 ----------------

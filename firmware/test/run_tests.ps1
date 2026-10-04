@@ -50,6 +50,8 @@ $deps = @{
 't_gyrotest'  = @('App/Svc/gyro_control.c')
 't_motion'    = @('App/Svc/motion.c', 'App/Svc/jy61p.c')
 't_bushealth' = @('App/Svc/bus_health.c')
+  # 屏幕故障自愈的决策逻辑（KK_UI latch 之后原本没人恢复 => 屏永久冻住）
+  't_dispheal'  = @('App/Svc/disp_heal.c')
   # 任务编程：格式层 + 解释器，控制模块全用 host_appstub.c 的记录式替身；
   # 参数表用 host_paramstub.c（TaskRun_Start 要取 HP_TASK_SPEED）。单独一个文件是因为
   # 管道对拍构建里 host_link.c 是真源码，host_appstub.c 里放 host_param_get 会撞符号

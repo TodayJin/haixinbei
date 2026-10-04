@@ -104,10 +104,14 @@ void     board_i2c_bus_recover(void);
  *   连续失败 BOARD_I2C_FAIL_LIMIT(=5) 次就置"该恢复"标志，
  *   由 board_i2c_watchdog() 在**总线空闲**时真正执行恢复（bus_idle=0 就跳过，
  *   因为恢复会把 SCL/SDA 拉成 GPIO 手动打时钟，正在搬运的屏会被打断）。
- *   返回 1 = 这一次真的恢复了总线（会阻塞约 12ms：9 个时钟 + STOP，每个 1ms）。 */
+ *   返回 1 = 这一次真的恢复了总线（会阻塞约 12ms：9 个时钟 + STOP，每个 1ms）。
+ *   ★ 恢复后总线速率回到 board_i2c_scl_hz()（= board_i2c_init_hz() 最后一次配的值），
+ *   而不是 board_i2c_init() 的 100kHz（2026-10-05 修：以前恢复一次就把 400kHz 顶掉，
+ *   屏的搬运慢 4 倍 => "屏幕有时候特别卡"，用户 m26333）。 */
 void     board_i2c_report(uint8_t ok);
 uint8_t  board_i2c_watchdog(uint8_t bus_idle);
 uint32_t board_i2c_recover_count(void);   /* 上电以来恢复了几次（RTT 诊断用） */
+uint32_t board_i2c_scl_hz(void);          /* 当前配置的 SCL 频率（RTT 诊断用） */
 void     board_pa15_release(void);          /* PA15 -> 输入上拉（复位默认 JTDI） */
 void     board_pa15_od(uint8_t level);      /* PA15 -> 开漏输出 */
 void     pa15_test_run(void);               /* PA15 判决实验 */

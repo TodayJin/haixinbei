@@ -232,12 +232,14 @@ int main(void)
     /* 每秒报一次刷新耗时（us），用数据看"实时"到底改善了多少 */
     if (now - report_at >= 1000U) {
       report_at = now;
-      SEGGER_RTT_printf(0, "FRAME: update avg=%lu us max=%lu us (n=%lu) | oled tx_done=%lu err=%lu busy=%u st=%d\r\n",
+      SEGGER_RTT_printf(0, "FRAME: update avg=%lu us max=%lu us (n=%lu) | oled tx_done=%lu err=%lu busy=%u st=%d | i2c=%luHz disp_fix=%lu\r\n",
                         (unsigned long)(cyc_sum / (cyc_n ? cyc_n : 1U) / 170U),
                         (unsigned long)(cyc_max / 170U),
                         (unsigned long)cyc_n,
                         (unsigned long)g_oled_tx_done, (unsigned long)g_oled_tx_err,
-                        (unsigned)OLED_IsBusy(), (int)OLED_GetLastStatus());
+                        (unsigned)OLED_IsBusy(), (int)OLED_GetLastStatus(),
+                        (unsigned long)board_i2c_scl_hz(),
+                        (unsigned long)app_ui_display_recover_count());
       /* 运动环：ENC = 编码器 5ms 计数（手转轮子就能看到它动）；v = 轮缘线速度 mm/s；
        * tgt/out = 速度环的目标与实际 PWM；mode 见 motion.h（0=IDLE 1=GYRO 2=TRACE 3=TRACE_GYRO） */
       SEGGER_RTT_printf(0, "MOTION: mode=%d enc l=%d r=%d | v mm/s l=%d r=%d | tgt %d,%d out %d,%d | yaw=%d fault=%u\r\n",
