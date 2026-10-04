@@ -12,6 +12,36 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-04 — 滚动时动态降特效（挂 `html.is-scrolling`，松手 140ms 摘掉）+ 设置页一个常开的「低特效模式」（`settings.perfLite`，默认 false）
+选择：滚动时动态降特效（挂 `html.is-scrolling`，松手 140ms 摘掉）+ 设置页一个常开的「低特效模式」（`settings.perfLite`，默认 false）
+放弃：直接删掉 blur / 关掉脉冲（背离成文的设计契约）/ 给动画加 will-change 或改 steps()（本机实测 headless+headed 都无效，只有删 animation 才归零）/ 默认全站关特效（弱机器才需要，正常机器白丢外观）
+因为：用户 m03559 说滚动卡；实测每帧两笔白花开销 —— 滚动期间每个 backdrop-filter 元素重新糊（tasks 页合成器 DrawFrame 0.53ms/帧）、animate-pulseDot 无限动画在不做合成器动画的机器上每帧一次全文档样式重算（styleN ≈ 帧数）。但 `tools/console/docs/API.md:192` 把「玻璃拟态 + 状态点脉冲」写成了设计契约，不能直接删
+
+## 2026-10-04 — 灰度柱的高度不做 transition（`transition-[height] duration-150` → `transition-colors duration-150`，高度直接跳变）
+选择：灰度柱的高度不做 transition（`transition-[height] duration-150` → `transition-colors duration-150`，高度直接跳变）
+放弃：保留高度过渡只降遥测频率（会丢数据）/ 改成 transform 缩放（会动到柱子的数值映射与圆角视觉）/ 干脆不更新柱子（失去实时性）
+因为：20Hz 遥测不停重启这段 150ms 的**布局属性**过渡 ⇒ 过渡永远在跑 ⇒ 整个页面每帧重排一次（实测 layoutN 650→51、光栅化 247.6→32.0ms、主线程 taskPct 24.4→13.4）
+
+## 2026-10-04 — 把「本机 Chrome 不做合成器动画」当成量测前提写进 memory/PROJECT.md 的「坑」，而不是当成用户那边的结论
+选择：把「本机 Chrome 不做合成器动画」当成量测前提写进 memory/PROJECT.md 的「坑」，而不是当成用户那边的结论
+放弃：直接拿 headless 的「pulseDot 每帧重算」当成用户卡顿的根据（会修错地方）
+因为：在空白页 + 一个 10×10 div 的对照实验里，只动 opacity/transform 的无限动画也得到 styleN 240/240 帧（headed 一样）⇒ 这里的量测对动画代价偏悲观；反过来 screencast 数帧又会饱和在 ~100 帧/s。这台机还装四个虚拟显示驱动（向日葵/Parsec/Todesk/GameViewer）、主屏 1463×914，用户很可能是远程看画面
+
+## 2026-10-04 — 电量电压轴重锚到 [12.2V, 9.0V]：≥12.2V 一律 100%，表内逐段线性
+选择：电量电压轴重锚到 [12.2V, 9.0V]：≥12.2V 一律 100%，表内逐段线性
+放弃：保留公开 3S 曲线（12.6V 满）/ 干脆线性映射（低压段会虚高，且丢了「9.0V 以下为 0」的下端锚点）
+因为：用户 m03190 说「只要电压超过 12.2 基本就是满电」；旧的公开 3S 曲线在真车 12.111V 上只给 81~82%，用户看到满电电池却像掉了两成
+
+## 2026-10-04 — T_TASK_STATUS 的「内容一变就推」判变化时跳过 elapsed_ms（载荷第 6..9 字节），进度只靠 1Hz 心跳刷新
+选择：T_TASK_STATUS 的「内容一变就推」判变化时跳过 elapsed_ms（载荷第 6..9 字节），进度只靠 1Hz 心跳刷新
+放弃：把 elapsed_ms 改成秒或 100ms（仍会 10Hz 级灌帧、带宽被白吃）/ 保留整帧比较只加大节流窗口（丢的仍是带宽）
+因为：elapsed_ms 每毫秒都在变，整帧 memcmp 让判据退化成「每拍一帧」：2026-10-04 真车实测（自启任务在跑）链路被灌到 338 帧/s（遥测 100 + status 约 240）＝ 230400 的全部带宽，桥 8 秒丢 1904 帧、SSE 里 1922/2730 个事件是 task；修好后 101.2 帧/s、丢 5 帧、rtt 13.1→5.3ms
+
+## 2026-10-04 — 任何一次 J-Link 会话（flash / savebin / RTT logger，尤其被强杀的 RTT logger）之后，都当探针的 CDC VCOM 可能已经在 PC 侧变成死句柄：先取证再重启桥，不判 MCU 死机
+选择：任何一次 J-Link 会话（flash / savebin / RTT logger，尤其被强杀的 RTT logger）之后，都当探针的 CDC VCOM 可能已经在 PC 侧变成死句柄：先取证再重启桥，不判 MCU 死机
+放弃：判成 MCU 死机去反复复位/重烧（查了半天硬件其实没问题），或者一直等它自己恢复（死句柄不会自己活）
+因为：2026-10-04 实测：桥 rx 冻结、last_rx_ms 一路涨、crc 零星涨，但 IPSR/CFSR/HFSR 全 0、CycleCnt 在走、固件 s_stats 的 tx_frames 50750→52102 在涨而 rx_frames=0 ⇒ 车一直在发，是 PC 侧句柄死了；重启桥立刻恢复（rx 2558→3920）
+
 ## 2026-10-04 — 任务页把「车上正在跑什么」做成 1 Hz 常开轮询，不再挂在「监视」勾选后面。
 选择：任务页把「车上正在跑什么」做成 1 Hz 常开轮询，不再挂在「监视」勾选后面。
 放弃：保留原设计：只在勾了「监视」时才轮询 /api/tasks/status（省点 SSE/HTTP，但用户看不见危险状态）。

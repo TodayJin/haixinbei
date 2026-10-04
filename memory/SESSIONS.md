@@ -14,6 +14,24 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-04
+完成：用户 m03559（「我上下滚动就能感觉到这个画面是卡卡的」）的滚动流畅度优化已落地并提交 **250e652**（12 files, +582/−236）：新 `tools/console/web/src/lib/fx.ts`（滚动状态机：`is-scrolling` 挂/140ms 摘、`perf-lite` 常开两路）+ `index.css` 末尾关 blur/脉冲、header 转不透明 + `ui.tsx` 灰度柱 `transition-[height]`→`transition-colors` + `store.ts`/`Settings.tsx` 新增 `perfLite` 开关 + `fx.test.ts` 6 条 + `perf.test.ts` 2 条源码级护栏，dist 已重建（`assets/index-CXed0o4p.js` + `index-I5KCaTTu.css`）。验证：tsc 0；vitest **21 文件 194 条**全绿（跑在 8788 mock 上，contract/ssrPreview 未 skip）；bridge pytest **165 条**全绿；`out/pwshot.cjs` 实测滚动中 html class=`is-scrolling` + header backdrop none + 底色 `rgb(7,10,22)` + pulse 动画 none、松手 0.5s 全恢复、页面零 console 错误；同一套 bundle 的 A/B（`out/pwviz.cjs --damage --dmgms 4`，blurback 变体把模糊强行加回来）：合成器+raster 总耗时 1296ms → 263ms（每帧 2.17 → 0.54ms，4.9×）；逐页复量总览 layoutN 643→54 / taskPct 24.4→13.4 / 光栅化 247.6→32.0ms，传感器 layoutN 602→50 / 25.2→13.4 / 259.8→29.6ms，任务页滚动期间 DrawFrame 0.543→0.097ms/帧。
+未完成：这台机上复现不出用户所说的掉帧（p95 恒 4.3ms、over16/32 全 0）⇒ 修的是「每帧白花的开销」而不是「已观测到的卡顿」，真正的验收得看用户在他自己的显示环境上的体感。
+下一步：让用户刷新页面（桥按请求读盘、不用重启）后滚滚看；如果还卡：先确认是不是在远程/虚拟显示上，再让他打开设置页的「低特效模式」；仍不行就要继续减 `.glass` 元素数量或看 GPU 驱动/虚拟显示。
+
+## 2026-10-04
+完成：为了给“滚动卡”找证据，新增了三个可重用的量测脚本（都只读、放 `out/`）：`out/pwviz.cjs`（浏览器进程 CDP tracing + rAF 间隔 + Performance 指标增量 + CSS 变体对照 + `--damage/--dmgms` 把合成器喂满）、`out/pwshot.cjs`（类切换/样式验收 + 滚动中截图）、`out/pwlook.cjs`（有 blur / 去 blur 的外观对照）。关键教训：短页（任务页只多 152px）一次滚轮就到底、之后不再有 scroll 事件，140ms 后类就摘了 —— 验 `is-scrolling` 要用长页（调参 2535px）并在一次 `evaluate` 里同时读类和计算样式。
+下一步：以后改前端视觉/动画，先用 pwviz 在 tasks+params+scope 上跑 base 与对应变体，比“每帧 drawFrame/每帧合成器总 ms”，不要比总帧数。
+
+## 2026-10-04
+完成：用户 m03190 那一轮全部做完并提交 5d5ebbc（10 files）：①电量口径改「≥12.2V 满电」——固件 app_ui.c 的 kBv 电压轴从公开 3S 的 [12.6,9.0] 压到 [12.2,9.0]（v_new = 9000+(v_old-9000)*3200/3600），上位机新增 src/lib/battery.ts + battery.test.ts（6 条，用正则解析 app_ui.c 的 kBv/kBp 逐值对拍）并让 Overview 显示「V · NN% · mA」。②真车验证：J-Link 读 RAM 电量静态量 = s_bat_mv 12094 → s_bat_pct **95**（旧表同一电压 80%），s_bat_ma_ok/s_bat_ok 都 1。③顺手挖出并修掉一个真 bug：T_TASK_STATUS 的变化判据含 elapsed_ms ⇒ 每拍一帧，自启任务跑着时链路被灌到 338 帧/s、桥 8s 丢 1904 帧；改成跳过 elapsed_ms 后 bench --attach 量到 101.2 帧/s、丢 5 帧、rtt 13.1→5.3ms、事件 task 8/telem_batch 305。④开机自启端到端真车验证通过：烧一个**不含 SET_SPEED/SET_MODE/TURN_DEG/ACTION/SET_SERVO** 的测试任务（out/autotask.c 生成，2 状态 WAIT_MS+GOTO，len=89 crc16=0xD604）到 id 6 并 COMMIT flags=1，J-Link dump 页 58 确认 flags=0x01 AUTO；烧固件复位后 RTT 打出 `task auto: slot=6 load=0 / start=0`，桥侧 status = id 6 running true elapsed 递增、state 0/1 在换算、遥测 task_id=6、pwm_l/pwm_r 恒 0（车没动）。⑤按用户要求把测试任务删干净并取证：跑着时 DELETE 被拒（status 7 忙）→ stop（status 0）→ delete（status 0）；J-Link dump 页 58 现在 count=1 只剩 `#0 id=0 len=122 crc=0xF137 flags=0x00 常态循迹`，槽 1..7 全 FF；再 `r`+`go` 复位并等 3s/6s，task_run 静态量块（0x20001DD0..0x20001DEF）全 0 ⇒ 什么都不自启；桥侧 /api/tasks/status = id 65535 state 255 running false。验证链：make -C firmware（text 115908/data 364/bss 33944、bin 116280 B、MD5 E8187C1CFF2CF1C48B7298498164C95B，烧录回读 firstDiff=none）、主机测试 13/13、tsc 0、vitest 20 文件 186 条、npm run build（dist/assets/index-BiYDclBi.js + index-D6G-7ug6.css，桥已在发新产物、都 200）。
+未完成：用户之前列的历史项仍未做：参数写 Flash（PROJECT.md「未做」里那条已过时，需与用户确认）、921600 需换普通 USB-TTL 接 U12（4=GND/5=PC1/6=PC0）、m19448（旧内置长流程真板实跑）、m20490（任务编排模型 A/B/C/D 等用户选）。
+下一步：用户眼睛确认两处：刷新页面看「电池 / 电流」是否显示 96% 一类的百分比（车上 12.1V）、以及任务页「车上现有」只剩 #0 常态循迹且没有自启徽标。
+
+## 2026-10-04
+完成：为「自启会不会自己所有都测试了」做的安全取证（结论写进 memory/DECISIONS.md）：自启路径 firmware/Core/Src/main_app.c:155-181 每次复位都跑（TaskStore_Init → 逐槽打 RTT → TaskStore_AutoSlot → TaskStore_Load → TaskRun_Start）；TaskRun_Start（task_run.c:268-296）只调 Motion_SetSpeed（motion.c:53-56 只写 s_base、不使能速度环），mode 留在 MOTION_IDLE（motion.c:163-175 不写 PWM）⇒ 只含 WAIT_MS/GOTO 的任务车上不可能动。
+下一步：若以后还要在真车上放自启任务，沿用这套取证顺序：先 TaskProg_Validate 自检 + 只放等待类块，再看 RTT 的 task auto 行与 /api/state 的 pwm。
+
+## 2026-10-04
 完成：修掉用户报的「自启任务吓我一跳 + 改不了删不掉」。现场：车上任务 6（契约自检，flags bit0=自启）正在跑，固件对跑着时的 DELETE/COMMIT 一律回 ST_BUSY（host_link.c:967,999）→ 页面只显示「被车拒绝：忙」。清理：POST /api/tasks/stop（elapsed 停在 85622）→ POST /api/tasks/delete id=6 → status 0 OK；J-Link dump 页 58（out/_dirnow.jlink → out/dir_now.bin）只剩 id 0「常态循迹」、flags=0x00 ⇒ 车上已无自启任务。代码（提交 d6e2687）：Tasks.tsx 状态轮询改 1 Hz 常开 + 「正在跑」横幅不等监视 + 进页面自动静默读目录（refreshRemote(true)）+ 删/烧/换任务前先停车 + 自启徽标与警告；taskapi.ts 新增 delWithStop(id)（先删→被拒就停车→再删，回 {result, stopped}）。验证：npx tsc --noEmit 干净；vitest 19 文件 / 180 passed（taskapi 新增 3 例钉死请求顺序 delete,stop,delete）；npm run build 通过（dist/assets/index-DfKcBMOQ.js）；Playwright 只读探针 out/pwtasks.cjs 打开 http://127.0.0.1:8770/#/tasks（不点任何按钮）= 自动列出车上 #0 常态循迹、1 Hz /api/tasks/status 在跑、零 console 错误/零请求失败。
 未完成：暂无
 下一步：用户刷新任务页确认「车上现有」自动出现、开关不再被卡住。
@@ -1111,39 +1129,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：异步(DMA)刷新后的画面待人眼确认；旧上层(renwu/tracing/gyro/pid)尚未并入；五向键左(PC15)/中(PC3)仍未实测；5V/12V 侧全部未测。
 下一步：用户确认异步刷新画面 -> 把旧上层并入 App/Svc 并接入自定义页实时数据。
 
-## 2026-09-20
-完成：**启动"旧固件 -> 新板 + KK_UI"移植**。做完的事：
-1. 读完旧固件（`Haixin/`，F103+Keil）：上层= `renwu.c`(任务A/B状态机)/`tracing.c`/`PID_tracing.c`/`pid.c`/`gyro_control.c`；底层= `OLED.c`+`OLED_Data.c`(江协科技软件I2C 48KB)/`motor.c`/`servo.c`/`key.c`/`buzzer.c`/`rgb.c`/`jy61p.c`/`encoder.c`(整段注释掉了)。第 3 节列了**旧->新 引脚映射表**（循迹 PA4/PA5/PC4/PC5/PB0/PB1/PE7/PE8 -> PA0–PA7；电机 TIM8 PC6/PC7+PD6/PD7 -> PC6–PC9 双端输入；舵机 TIM1 PE13/PE14 -> PA8–PA11；按键 PC1/2/3 -> 五向键；蜂鸣器 PD10 -> PD2；OLED 软件I2C PB8/PB9 -> 硬件 I2C1 PA15/PB9 + SSD1315）。
-2. **装载运行库**：`kk_oled` + `kk_ui` 复制进 `firmware/Middlewares/`（不从 Skill 资产目录构建）；6 个供应商 Skill 装到 `.agents/skills/`（已被 harness 识别）。
-3. **按 kk-oled-port 契约重写驱动**：`kk_oled/driver/kk_oled_driver.c` 由 CH1116 改成 **SSD1315**（地址 0x3C、列偏移 0、初始化序列取屏厂手册含 `8D 14` 内部电荷泵与 `AD 30` 内部 IREF）。
-4. **字模**：按 `kk-oled-font` 技能走 LEDFont 在线 API 生成 `kk_font_body`(wenquanyi_9pt 12px,182字形,3721B) 与 `kk_font_home`(wenquanyi_11pt 15px,63字形,1372B)；首页 4 个 32×32 XBM 图标程序化生成。
-5. **写应用层**：`App/Src/app_ui.c` 定义页面拓扑（首页4入口 / 设置菜单10项 / 2个信息页 / 4个自定义页）、int/bool 变量绑定、`KK_UI_Texts`，并实现 KK_UI 要求的 5 个自定义页适配符号；输入归一化把五向键映射成 KK_UI 的 上/下/确定（上&左=UP、下&右=DOWN、中=OK）。
-6. **Makefile 改双目标**：`make`=主程序 `build-app/haixin-app.bin`（45KB text / 128KB Flash），`make SELFTEST=1`=自检。补了 `Core/Src/syscalls.c`（newlib `_sbrk` 等桩，缺了链接不过）。第一版用 **blocking 刷新**（`-DKK_UI_REFRESH_MODE=KK_UI_REFRESH_BLOCKING`）。
-7. **实机验证**：烧录后 RTT 打印 `CLK HSE=1 PLL=1 SYSCLK=170000000` / `OLED init OK` / `KK_UI init OK` —— **SSD1315 驱动初始化与 KK_UI 页面配置校验全部通过**，屏幕是否显示首页待人眼确认。
-
-（另一个待办：五向键的**左(PC15)/中(PC3)** 仍未实测；上次 240 秒补测窗口内没人按键，日志显示修好的计数 `cnt=0/0/0/0/0` 正确。）
-未完成：KK_UI 首页是否真显示待人眼确认；I2C 仍是 100kHz 阻塞刷新（动效会偏慢，待提到 400kHz 或改 IT/DMA）；旧上层(renwu/tracing/gyro/pid)尚未并入工程；五向键左/中未测；5V/12V 侧全部未测。
-下一步：用户确认首页画面 -> 提高 I2C 速率改善动效 -> 把旧上层并入 App/Svc 并接入自定义页实时数据。
-
-## 2026-09-20
-完成：**USART3 自环验证通过（PB10/PB11 焊接 + AF 复用 + 收发链路全对）**，OLED 经用户肉眼确认**已点亮**。自环做法：`make LOOPBACK=1` 后每 2 秒在 USART3 发一帧合成 JY61P 角度帧（roll=10°/pitch=−20°/yaw=90°），短接 **U1 的 2 脚(PB10/TX) 与 3 脚(PB11/RX)** 自收，实测 `bytes` 每帧 +11、`frames` 每帧 +1、`bad=0`、`resync=0`，解出 `roll=99 pitch=-200 yaw=900`（0.1°）—— 字段偏移与校验和也一并验证。
-
-**踩到并修掉一个自检固件 bug**：USART3 原来在主循环里 100ms 轮询 RDR，而 11 字节 1ms 内到齐，**只收到第 1 个字节、其余全溢出丢失**（`bytes=1`）。已改成 **USART3 中断接收 + 256 字节环形缓冲**（`board_jy61_start_rx()` / `board_jy61_get_byte()` / `HAL_UART_RxCpltCallback` / `USART3_IRQHandler`），JY61P 100Hz 连续输出才不会丢。
-
-**另一处自检逻辑 bug**：按键计数把 `last_keys` 初始化成 `0xFF`，循环第一次读到空闲 `0x00` 被算成"五键同时刚按下"，导致 `cnt` 每键虚高 1。因此上一轮记录的"五向键全通"**作废** —— 实际只有 **上(PC13)/下(PC14)/右(PC2)** 被按到，**左(PC15)、中(PC3) 未验证**。已改成进循环前先读一次，并重开录制补测。
-未完成：五向键的左(PC15)/中(PC3) 待补测；5V/12V 侧（蜂鸣器、编码器、循迹、AT8236 电机）因电源件未到全部未测。
-下一步：等补测日志；电源件到齐做 5V/7.4V/12V 相关测试。
-
-## 2026-09-20
-完成：**五向键实测通过**：给 `firmware/` 加了**按键锁存 + 每键计数**（不用赶录制窗口），用户短接 PC13/PC14/PC15/PC2/PC3 到 GND，RTT 读到 `seen=0x1F`、`cnt=2/2/1/2/1` —— **五个方向全部识别**（日志见 `out/rtt_loop.log`）。同时新增 `make LOOPBACK=1` 变体：每 2 秒在 USART3 发一帧**合成的 JY61P 角度帧（yaw=90.0°）**，把 **U1 的 2 脚(PB10/TX) 与 3 脚(PB11/RX) 短接**即可自收 —— 这是**不依赖 JY61 模块就能验证 USART3 收发 + AF 复用 + PB10/PB11 焊接**的办法（用户没有该模块）。本次录制里 `bytes=0`，说明用户未做该短接，USART3 仍未验证。
-未完成：OLED 是否真点亮仍待用户肉眼确认；USART3 自环未做；5V/12V 侧（蜂鸣器、编码器、循迹、AT8236 电机）因电源件未到全部未测。
-下一步：确认 OLED 画面；需要时重开录制让用户短接 U1 的 2/3 脚跑 UART 自环。
-
-## 2026-09-20
-完成：**主板第一次上电自检，焊接体检通过**。搭好 `firmware/` 自检工程（Makefile + 自写 RB 版链接脚本 + STM32CubeG4 HAL + SEGGER RTT），J-Link 烧录（loadbin/verifybin）后用 RTT 直连观测，实测得到：**HSE 25MHz 起振 OK、PLL 170MHz OK（SYSCLK/HCLK/PCLK1/PCLK2 全 170MHz、FLASH_LAT=4）、I2C1 扫到 0x3C(OLED)+0x40(INA226)、INA226 MFG_ID=0x5449("TI")/DIE_ID=0x2260** —— 即**晶振、I2C 总线与上拉、OLED 控制器、INA226 焊接全部正确**。OLED 驱动（SSD1315，按屏厂序列，含 8D 14 内部电荷泵 + AD 30 内部 IREF）37 条命令全通、8 页显存写入无错，屏幕图案待人眼确认。五向键空闲读到 KEYS=0x00（正确），按下待用户实测；JY61P 解析器就绪但模块未插（bytes=0）。
-
-**排查掉的假故障**：烧入带 I2C 的固件后 J-Link 一度完全连不上（`Failed to initialize DAP`，4 种速度 + JTAG/cJTAG 全试过）。**未能复现**：原样重烧同一固件、60 次连续探测全 OK；另外专门做了 PA15 判决实验（`make PA15TEST=2` 静态 I2C SCL、`=3` 开漏 GPIO 翻转、`=4` 完整 I2C 扫描后释放），SWD 全程都在。结论：**那次是调试会话偶发（stm32-dev 技能的 `rtt` 先起 GDB server，失败后留下的坏状态），不是板子/固件问题，也不是 PA15 与 SWCLK 连锡**。恢复手段：按住复位键 SW1 + J-Link 连上后烧 `make RESCUE=1` 的救援固件（已验证有效）。
-未完成：OLED 是否真点亮待用户肉眼确认；五向键待按；JY61P 模块待插；5V/12V 侧（蜂鸣器、编码器、循迹、AT8236 电机）因电源件未到全部未测。
-下一步：用户看屏/按键/插 JY61P 后读 RTT 日志确认；电源件到齐再做 5V/7.4V/12V 相关测试。
-
-> 更早的会话条目已归档到 207 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 211 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
