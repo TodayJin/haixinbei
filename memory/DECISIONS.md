@@ -12,6 +12,31 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-04 — 差速（修正量）上限随基准速度放大：新参数 `gyro_corr_ref`(0x0112，默认 3000，0=关闭)，`cap = s_corr_limit × max(1, |base|/ref)` 再夹到 ±MOTOR_PWM_MAX；曲线单独拆成 `GyroControl_CorrLimit()` 供主机测试直接钉
+选择：差速（修正量）上限随基准速度放大：新参数 `gyro_corr_ref`(0x0112，默认 3000，0=关闭)，`cap = s_corr_limit × max(1, |base|/ref)` 再夹到 ±MOTOR_PWM_MAX；曲线单独拆成 `GyroControl_CorrLimit()` 供主机测试直接钉
+放弃：直接调大 `s_corr_limit`（绝对限幅）；或在 PC 侧（操控页/`heading.ts`）自己算左右轮差速发下去
+因为：`s_corr_limit` 是绝对 PWM 刻度，而基准速度能到 MOTOR_PWM_MAX(7200) ⇒ 满速时 Δ/base 只剩 28%（基准 3000 时是 67%）。偏航角速度 ω≈Δv/轮距 与速度无关，但转弯半径 R=v/ω 随速度线性变大（3000≈0.2m → 7200≈0.47m），用户 m24215 的「满速按前进+左转就转不动」就是这个。调大绝对限幅会一起改掉原地转/收尾锁存的台架特性；放 PC 侧则要重建车上的角度环语义。基准 ≤ ref 时 max() 取 1 ⇒ 与旧行为逐位一致。
+
+## 2026-10-04 — nvram 加字段必须 `NVRAM_VERSION + 1`，并且**刻意留 pad 让 payload 变长**（v6 走 `int32_t gyro_corr_ref` + `uint8_t pad6[4]`，payload 152→160）
+选择：nvram 加字段必须 `NVRAM_VERSION + 1`，并且**刻意留 pad 让 payload 变长**（v6 走 `int32_t gyro_corr_ref` + `uint8_t pad6[4]`，payload 152→160）
+放弃：复用 `pad5` 里空着的字节（payload 长度不变）；或只改 struct、不动 NVRAM_VERSION
+因为：`nvram_init()` 只有对 `version < NVRAM_VERSION` 且 `0 < length <= sizeof` 的老记录才走「先 snapshot 铺当前默认值、再 memcpy 老前缀」那一支。payload 不变长就吃不到这一支：新字段会读到原 pad 区的 0（把差速放大静默关掉），或长度对不上整条记录作废。真车已验证：v5→v6 升级后 8 路灰度标定（`/api/cal`）与 14 个动作表（`/api/actions`）完好。回归用例 `firmware/test/t_nvram.c` 第 ⑦ 节盯着这条。
+
+## 2026-10-04 — 桥对语义性失败一律 `200 + {"ok":false,"error":人话}`，`error` 必须是人能读懂的一句话；前端兜底优先用 `status_name`/`answered` 拼句子，只有真·HTTP 错误才报状态码
+选择：桥对语义性失败一律 `200 + {"ok":false,"error":人话}`，`error` 必须是人能读懂的一句话；前端兜底优先用 `status_name`/`answered` 拼句子，只有真·HTTP 错误才报状态码
+放弃：用 4xx/5xx 表达业务失败；或让前端自己拼状态码兜底
+因为：用户 m24215 报的「每次操控弹出 HTTP…200」：`send_wait()` 失败时返回的字典没有 `error` 键，前端 `api.ts` 的兜底就打出「请求失败（HTTP 200）」—— 200 反而让用户以为后端坏了。改成按情形补人话（车上没应答（等 Ns 超时）/ 没回确认帧 / 车上拒绝了：<name>）并记 warn 日志；驾驶被 `TaskRun_IsRunning()` 拒（ST_NOT_READY）时直接说「先去任务页停掉任务再操控」。
+
+## 2026-10-04 — 操控的 toast 加去重窗口（err 8s / ok 1.5s），成功下发不再每帧弹确认（只有 `mode:'off'` 停车给一条 ok）
+选择：操控的 toast 加去重窗口（err 8s / ok 1.5s），成功下发不再每帧弹确认（只有 `mode:'off'` 停车给一条 ok）
+放弃：每帧都弹反馈；或干脆不弹任何操控反馈
+因为：操控是 10Hz 连续下发（`Drive.tsx` 每 100ms 一帧），车一拒绝就是 10 条/秒弹幕，把真实错误信息淹没；`TOAST_CAP = 4` 一挤掉就没有记录可看。
+
+## 2026-10-04 — 低特效（`html.perf-lite`）做成**默认**主题，用不透明分层面板替代玻璃模糊（侧栏 `#0d1428` < 顶栏 `#121a33` < 卡片 `#141d3d` + 顶部高光 + 1px 亮边），并明确禁止纯黑/`#070a16`
+选择：低特效（`html.perf-lite`）做成**默认**主题，用不透明分层面板替代玻璃模糊（侧栏 `#0d1428` < 顶栏 `#121a33` < 卡片 `#141d3d` + 顶部高光 + 1px 亮边），并明确禁止纯黑/`#070a16`
+放弃：保持玻璃拟态为默认（靠关模糊省开销）；或低特效下用纯黑/ink-900 面板
+因为：用户 m24215 实测「开了低特效确实非常流畅」并要求当默认，同时要求好看 —— 关掉模糊后原来的「半透明 + 黑底」既没层次又显脏（他原话是文字后面一片纯黑）。分层主题靠亮度差立起来，滚动时（`html.is-scrolling`）无论开关都临时停掉模糊与脉冲。
+
 ## 2026-10-04 — 滚动时动态降特效（挂 `html.is-scrolling`，松手 140ms 摘掉）+ 设置页一个常开的「低特效模式」（`settings.perfLite`，默认 false）
 选择：滚动时动态降特效（挂 `html.is-scrolling`，松手 140ms 摘掉）+ 设置页一个常开的「低特效模式」（`settings.perfLite`，默认 false）
 放弃：直接删掉 blur / 关掉脉冲（背离成文的设计契约）/ 给动画加 will-change 或改 steps()（本机实测 headless+headed 都无效，只有删 animation 才归零）/ 默认全站关特效（弱机器才需要，正常机器白丢外观）

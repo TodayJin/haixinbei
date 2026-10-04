@@ -1,4 +1,16 @@
 ## 2026-09-20
+完成：**按用户要求提升显示实时性**，两步都用实测数据验证：
+1. **I2C 100kHz -> 400kHz**：把 `board.c` 的 `i2c_timing_100k()` 泛化成 `i2c_timing(pclk, scl_hz)`（t_LOW=0.52/f、t_HIGH=0.48/f，向上取整保证不违反最小时间），新增 `board_i2c_init_hz()`；自检固件仍用 100kHz，主程序用 400kHz。整屏首帧 119ms -> **29.7ms**。
+2. **阻塞 -> 异步(IT+DMA)**：按官方 `NUCLEO-G474RE/I2C_TwoBoards_ComDMA` 例程接线 —— **I2C1_TX -> DMA1_Channel1 / DMA_REQUEST_I2C1_TX**，开 `I2C1_EV_IRQn`/`I2C1_ER_IRQn`/`DMA1_Channel1_IRQn`；`board_i2c_enable_dma()` + `board_i2c_dma_tx()`；中断向量在 `stm32g4xx_it.c`；新增 `App/Src/oled_glue.c` 把 `HAL_I2C_MemTxCpltCallback`/`HAL_I2C_ErrorCallback` 只转发给本显示实例（kk-oled-port 契约要求）；并把驱动 `OLED_DriverHandleMemTxComplete()` 的数据阶段改成**按 mode 选 IT 或 DMA**（原来硬编码 DMA）。
+3. 主循环加了 **DWT CYCCNT 打点**，每秒 RTT 打印 `FRAME: update avg/max`。实测：阻塞 400kHz 时 avg=105us/max=4716us；改异步后 **avg=max=30us**，每秒 334 次循环 —— 刷新彻底移到后台。
+
+用户已确认 400kHz 阻塞版的画面"图像都对了"；异步版的画面待用户再看一眼确认。
+未完成：异步(DMA)刷新后的画面待人眼确认；旧上层(renwu/tracing/gyro/pid)尚未并入；五向键左(PC15)/中(PC3)仍未实测；5V/12V 侧全部未测。
+下一步：用户确认异步刷新画面 -> 把旧上层并入 App/Svc 并接入自定义页实时数据。
+
+> 更早的会话条目已归档到 211 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-20
 完成：**启动"旧固件 -> 新板 + KK_UI"移植**。做完的事：
 1. 读完旧固件（`Haixin/`，F103+Keil）：上层= `renwu.c`(任务A/B状态机)/`tracing.c`/`PID_tracing.c`/`pid.c`/`gyro_control.c`；底层= `OLED.c`+`OLED_Data.c`(江协科技软件I2C 48KB)/`motor.c`/`servo.c`/`key.c`/`buzzer.c`/`rgb.c`/`jy61p.c`/`encoder.c`(整段注释掉了)。第 3 节列了**旧->新 引脚映射表**（循迹 PA4/PA5/PC4/PC5/PB0/PB1/PE7/PE8 -> PA0–PA7；电机 TIM8 PC6/PC7+PD6/PD7 -> PC6–PC9 双端输入；舵机 TIM1 PE13/PE14 -> PA8–PA11；按键 PC1/2/3 -> 五向键；蜂鸣器 PD10 -> PD2；OLED 软件I2C PB8/PB9 -> 硬件 I2C1 PA15/PB9 + SSD1315）。
 2. **装载运行库**：`kk_oled` + `kk_ui` 复制进 `firmware/Middlewares/`（不从 Skill 资产目录构建）；6 个供应商 Skill 装到 `.agents/skills/`（已被 harness 识别）。

@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-04
+完成：用户 m24215 的三条诉求全部改完并验证：①固件新增 `gyro_corr_ref` 让差速天花板随基准速度放大（nvram 升 v6 保住标定）②桥/前端把「每帧弹 HTTP 200」改成说人话的错误 + toast 去重 ③低特效当默认并把面板改成不透明分层主题。验证：`firmware/test/run_tests.ps1` 13/13（t_gyrotest 48044 检查、t_nvram 47 含新的 v5→v6 升级用例）；`tools/console` pytest 167；web `tsc --noEmit` 0 + vitest 21 文件/200 条；真车 J-Link 烧录回读逐字节一致（扇区 63 未擦）、复位后遥测恢复、桥 44 项参数 `param_crc=45399` 与车上一致、`0x0112=3000` 在位、`/api/cal` 与 `/api/actions` 完好；浏览器验收 `node out/looklite.cjs` 全过（默认挂 perf-lite、三层不透明有层次、无纯黑、关掉开关回到模糊+脉冲），截图 `out/lite-overview.png` / `out/lite-params.png`。提交 4452987。
+未完成：满速「前进+左转」的真实转弯半径只能由用户在真车上按 W+A 复测（给车发非零速度是被禁止的，没法自证）；低特效主题在用户屏幕上的主观观感也待他确认。
+下一步：等用户复测结果；若仍嫌转弯半径大就调 `gyro_corr_ref`（调小=放大更猛，0=退回旧行为）
+
+## 2026-10-04
 完成：用户 m03559（「我上下滚动就能感觉到这个画面是卡卡的」）的滚动流畅度优化已落地并提交 **250e652**（12 files, +582/−236）：新 `tools/console/web/src/lib/fx.ts`（滚动状态机：`is-scrolling` 挂/140ms 摘、`perf-lite` 常开两路）+ `index.css` 末尾关 blur/脉冲、header 转不透明 + `ui.tsx` 灰度柱 `transition-[height]`→`transition-colors` + `store.ts`/`Settings.tsx` 新增 `perfLite` 开关 + `fx.test.ts` 6 条 + `perf.test.ts` 2 条源码级护栏，dist 已重建（`assets/index-CXed0o4p.js` + `index-I5KCaTTu.css`）。验证：tsc 0；vitest **21 文件 194 条**全绿（跑在 8788 mock 上，contract/ssrPreview 未 skip）；bridge pytest **165 条**全绿；`out/pwshot.cjs` 实测滚动中 html class=`is-scrolling` + header backdrop none + 底色 `rgb(7,10,22)` + pulse 动画 none、松手 0.5s 全恢复、页面零 console 错误；同一套 bundle 的 A/B（`out/pwviz.cjs --damage --dmgms 4`，blurback 变体把模糊强行加回来）：合成器+raster 总耗时 1296ms → 263ms（每帧 2.17 → 0.54ms，4.9×）；逐页复量总览 layoutN 643→54 / taskPct 24.4→13.4 / 光栅化 247.6→32.0ms，传感器 layoutN 602→50 / 25.2→13.4 / 259.8→29.6ms，任务页滚动期间 DrawFrame 0.543→0.097ms/帧。
 未完成：这台机上复现不出用户所说的掉帧（p95 恒 4.3ms、over16/32 全 0）⇒ 修的是「每帧白花的开销」而不是「已观测到的卡顿」，真正的验收得看用户在他自己的显示环境上的体感。
 下一步：让用户刷新页面（桥按请求读盘、不用重启）后滚滚看；如果还卡：先确认是不是在远程/虚拟显示上，再让他打开设置页的「低特效模式」；仍不行就要继续减 `.glass` 元素数量或看 GPU 驱动/虚拟显示。
@@ -1119,14 +1124,4 @@ Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身�
 未完成：黑屏根因未定 —— 需用户在四组合诊断固件上确认哪些字母有画面；旧上层(renwu/tracing/gyro/pid)尚未并入；五向键左(PC15)/中(PC3)未实测；5V/12V 侧未测。
 下一步：用户报告 A/B/C/D 哪些能显示 → 据此定位是速率还是 DMA → 修复后回到主程序。
 
-## 2026-09-20
-完成：**按用户要求提升显示实时性**，两步都用实测数据验证：
-1. **I2C 100kHz -> 400kHz**：把 `board.c` 的 `i2c_timing_100k()` 泛化成 `i2c_timing(pclk, scl_hz)`（t_LOW=0.52/f、t_HIGH=0.48/f，向上取整保证不违反最小时间），新增 `board_i2c_init_hz()`；自检固件仍用 100kHz，主程序用 400kHz。整屏首帧 119ms -> **29.7ms**。
-2. **阻塞 -> 异步(IT+DMA)**：按官方 `NUCLEO-G474RE/I2C_TwoBoards_ComDMA` 例程接线 —— **I2C1_TX -> DMA1_Channel1 / DMA_REQUEST_I2C1_TX**，开 `I2C1_EV_IRQn`/`I2C1_ER_IRQn`/`DMA1_Channel1_IRQn`；`board_i2c_enable_dma()` + `board_i2c_dma_tx()`；中断向量在 `stm32g4xx_it.c`；新增 `App/Src/oled_glue.c` 把 `HAL_I2C_MemTxCpltCallback`/`HAL_I2C_ErrorCallback` 只转发给本显示实例（kk-oled-port 契约要求）；并把驱动 `OLED_DriverHandleMemTxComplete()` 的数据阶段改成**按 mode 选 IT 或 DMA**（原来硬编码 DMA）。
-3. 主循环加了 **DWT CYCCNT 打点**，每秒 RTT 打印 `FRAME: update avg/max`。实测：阻塞 400kHz 时 avg=105us/max=4716us；改异步后 **avg=max=30us**，每秒 334 次循环 —— 刷新彻底移到后台。
-
-用户已确认 400kHz 阻塞版的画面"图像都对了"；异步版的画面待用户再看一眼确认。
-未完成：异步(DMA)刷新后的画面待人眼确认；旧上层(renwu/tracing/gyro/pid)尚未并入；五向键左(PC15)/中(PC3)仍未实测；5V/12V 侧全部未测。
-下一步：用户确认异步刷新画面 -> 把旧上层并入 App/Svc 并接入自定义页实时数据。
-
-> 更早的会话条目已归档到 211 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 212 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
