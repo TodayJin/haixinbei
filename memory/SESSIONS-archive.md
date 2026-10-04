@@ -1,3 +1,35 @@
+## 2026-09-20
+完成：为 STM32G474RBT6 主板搭好**自检固件工程** `firmware/`（按 stm32-dev 技能流程）。构建链：arm-none-eabi-gcc 14.3 + GNU Make + 本地 STM32Cube_FW_G4_V1.6.3（只引用不复制）+ SEGGER J-Link V974（烧录用 JLink.exe loadbin/verifybin）。观测走 **SEGGER RTT**（J-Link 一条 SWD 就够；RTT 源码取自 github.com/SEGGERMicro/RTT 的 RTT/ 目录，缺的 SEGGER_RTT_Conf.h 自写）；链接脚本按 **RB 版 128K Flash/96K RAM/32K CCM** 自写（Cube 模板是 RET6，不能直接用）。
+
+**里程碑1 通过（已验证）**：RTT 收到 `CLK: HSE=OK(25MHz) PLL=OK(170MHz) SYSCLK=170000000 HCLK=170000000 PCLK1/2=170000000 FLASH_LAT=4` + 1 秒心跳 —— **工具链/烧录/校验/25MHz 晶振/170MHz PLL/RTT 全通**。
+
+**里程碑2 把调试口搞挂了（关键故障，未解决）**：烧入带 `board_i2c_init()`（PA15=I2C1_SCL / PB9=SDA）的固件后 **J-Link 再也连不上**：`Failed to initialize DAP`，4000k/1000k/200k/100k、SWD/JTAG/cJTAG 全试过均失败；VTref=3.289V 正常（板子有电）。唯一变量就是 PA15。**PA15 = LQFP64 第51脚，与 SWCLK(PA14=第50脚) 相邻** → 高度怀疑这两脚连锡短路（里程碑1 时 PA15 是复位默认 JTDI 高阻+上拉，不干扰 SWCLK；配成 I2C SCL 后一拉低就把 SWCLK 拽下去）。已建 `make RESCUE=1` 救援固件（只跑时钟+RTT、不碰外设）和 45 次自动重连后台脚本；用户当时未按复位键，未恢复。**待用户：断电量 MCU 第50/51脚是否导通 + 按住 SW1 让后台循环连上并烧救援固件。**
+未完成：调试口未恢复；I2C/INA226/OLED/按键/JY61P 全部未测；5V/12V 侧外设因电源件未到暂缓。
+下一步：用户按住 SW1 → 后台循环烧 build-rescue/haixin-rescue.bin → 连上后依次做 I2C 扫描、INA226、OLED、按键、JY61P；并查清 PA15/SWCLK 是否短路。
+
+> 更早的会话条目已归档到 206 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-20
+完成：回答「只上 3.3V 会不会出问题」。结论：**不会烧任何东西**（倒灌只有 0.2mA 量级），但 4 条使用注意：5V 侧外设要拔掉（欠压会让模块跑飞、搅乱 I2C）、别输出电机 PWM（AT8236 未上电却被驱动）、别在此状态标定 INA226/电源、注意调试器 3.3V 的带载能力（板子 3.3V 侧约 60–100mA，带不动会掉压复位）。已写进 `固件接口规格.md` 坑清单第 12 条。
+
+**顺带查出一个文档错误（重要）**：解析 v6 网表发现 **U3.4 / U4.4 接的是 VCC3V3（不是 GND）**，U3.7/U3.9 接 GND。查 AT8236 手册确认脚位：GND=1、IN2=2、IN1=3、**VREF=4**、VM=5、OUT1=6、**ISEN=7**、OUT2=8、PPAD=9。即 **ISEN 直接接地（=不启用限流，手册原话「若不需要限流，直接接地」）、VREF 接 3.3V**（推荐范围 0.5–4V 内，因 ISEN 接地实际不起作用）。此前两份文档都写「ISEN/VREF 都接 GND」，**已改正**。同时发现关键采购约束：**AT8236 与 AT8236N 第 4 脚定义不同**（VREF vs nFAULT 开漏输出），本板 4 脚硬接 3.3V，**换成 AT8236N 会把 3.3V 对地短路** → 已写进 DECISIONS 与两份文档。另确认 U5=INA226AIDGSR(C49851)、U9=RT9013-33GB(C47773)、U7/U8=SP1N28STER。
+未完成：未实测只上 3.3V 时 U9 的 1 脚电压；未评估是否给 ISEN 加检流电阻（要割线，暂不做）。
+下一步：用户实测 U9.1 ≈2.6–2.8V 确认倒灌路径；后续 PCB 布局按附录 D 做 AT8236 EPAD 散热。
+
+## 2026-09-20
+完成：排查「只从调试口接 3.3V，5V 指示灯也亮」。**用 v6 网表严格证明路径**：VCC3V3 与 VCC5V 两条网络上**唯一共有的元件是 U9（RT9013 LDO）**（其余元件都只挂在一条轨上）；LED6+R24 在 VCC5V、LED7+R26 在 VCC3V3、D5.2=VCC5V / D5.1=buck 输出节点。结论：**PMOS LDO 的体二极管从 OUT 倒灌到 IN**，把 5V 轨顶到约 2.6–2.8V → LED6 只分到约 0.2mA（正常约 1mA）→ 微亮。**不是故障、不用改板**；12V/7.4V 灯不亮（D5 与关断的 buck 挡住）。佐证：下载并解析 Richtek 官方 RT9013 手册（`docs/datasheets/RT9013.pdf`，10 页），**全文搜 "reverse" 零命中** —— 既无反向电流规格也无反灌保护。已写进 `固件接口规格.md` 坑清单第 11 条 + `pcb/主板选型与设计.md` §2。
+未完成：用户未实测 U9 的 1 脚电压（预期 2.6–2.8V）确认；未定是否把 LED6 挪到 D5 之前。
+下一步：等用户量 U9.1 对地电压确认；若不想被误导，可把 LED6 从 VCC5V 挪到 D5 前（U8 输出侧）。
+
+## 2026-09-18
+完成：**把 `pcb/主板选型与设计.md` 从 v0.8 重写成 v1.0 并与 `固件接口规格.md` 同步**。做法：直接解析 v6 网表（`pcb/Netlist_Schematic1_2026-09-16.tel`，UTF-8，124 元件，`$PACKAGES` + `$NETS`）取**真实位号与真实网络**，不再靠记忆。查出并修掉的旧文档错误：电源芯片还是 SY8205/MP2315/AP2112K（实为 **U7/U8 SP1N28STER + U9 RT9013**）、还有 RGB/WS2812、INA226 ALERT 接 PB12、BOOT0 跳线、OLED 是 4 针模组、无线下载器挂 UART4（实为 **LPUART1 接 U12**）、连接器位号 J1–J12 全是虚构的（实为 **CN1/U1/U11/U12/U13/U14/U15/U16/U33/U34/H1/H2/H3**）。同步后 `固件接口规格.md` 改 5 处：附录 A 编码器不在 7.4V 轨（走 5V）、附录 B 电机座 **U33/U34 的 1 脚与 6 脚名字写反了**（实为 1=motorA2 / 6=motorA1）、OLED1 4P 行删掉换成 U16 裸屏、补 U1 JY61P 座脚位、补「I2C 座 U14/H3 第 1 脚给的是 5V」提醒。
+
+**网表核对结论（v6 与规格书一致的部分，已逐条核对）**：MOTA_IN1/2 = U2.38/39 = PC6/PC7，MOTB_IN1/2 = U2.40/41 = PC8/PC9；舵机 U2.42–45 = PA8–PA11；编码器 U2.57–60 = PB4–PB7（TIM3=电机A、TIM4=电机B）；huidu1–8 = U2.12/13/14/17/18/19/20/21 = PA0–PA7；I2C 上拉 R5→U2.51(PA15)、R4→U2.62(PB9)；INA226 U5 高侧 U5.10=IN+、U5.9=IN−、U5.8=VBUS 全在 12V_PROT_OUT，**U5.3(ALERT) 确认悬空**；R2 5mΩ 在保护之后、U5 取样之前。**两处网名与实际相反（功能无影响，代码按实际写）**：`I2C2_SCL/SDA` 实为 I2C1；`LPUART1_TX`=PC0、`LPUART1_RX`=PC1（G4 上 PC0=RX、PC1=TX）。
+未完成：未实测灰度模块 I2C 空闲电压；RES# 的 100nF 未补；7.4V 轨的 R30 未上台调。
+下一步：进 PCB 布局；需要时出分区草图 / 2oz 走线宽度 / AT8236 散热过孔估算。
+
+> 更早的会话条目已归档到 203 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
 ## 2026-09-18
 完成：**工作区整理**（用户要求：清缓存 + 以后新文件不许丢根目录）。新建 `docs/datasheets/`（4 本手册移入：stm32g474re / SSD1306 / SSD1315 / GME12864-41）、`tools/`（5 个脚本重写并移入，新增 `_paths.py` 统一用仓库根定位路径、`tools/README.md`）、`out/`（渲染产物目录，`render_gme.py` 现在写到这里）。删除 7 张一次性渲染图（gme_p3x/iic_*/cp_zoom）。**删除 `Haixin_FreeRtos (2).zip`（32MB）**——先对 1115 个文件逐个比 MD5，与 `Haixin/` 全部一致（checked=1115, mismatch=0）才删。**已验证**：`python tools/i2c_bus.py` / `render_gme.py 31` / `extract_pins.py` 均能跑通（输出数字正确，控制台中文乱码是环境问题）。根目录现在只剩 AGENTS.md、固件接口规格.md 和 6 个目录。规则写进 `AGENTS.md` 的「文件放置」节。
 未完成：`pcb/主板选型与设计.md` 已被 `固件接口规格.md` 大部分取代，去留未定；`pcb/111111111.zip`（嘉立创 Gerber 包）保留未动。
