@@ -195,6 +195,18 @@ function AngleLoopCard() {
   )
 }
 
+/** 车上上报的"支持哪些功能"：只让人看功能名，bit 号/十六进制留到悬停说明里 */
+const FW_CAPS: { bit: number; name: string }[] = [
+  { bit: 0x01, name: '遥测' },
+  { bit: 0x02, name: '动作表' },
+  { bit: 0x04, name: '舵机' },
+  { bit: 0x08, name: '上位机驾驶' },
+  { bit: 0x10, name: '标定' },
+  { bit: 0x20, name: 'Flash 读写' },
+  { bit: 0x40, name: '看门狗' },
+  { bit: 0x80, name: '任务' },
+]
+
 /** 温度/状态（如果有）：固件节拍与模式 */
 function StatusCard() {
   const telemHz = useHotSelect((s) => s.link?.telem_hz ?? null)
@@ -211,8 +223,14 @@ function StatusCard() {
         <Stat label="整车模式" value={`${mode ?? '--'}`} hint={`当前任务 ${taskText(taskId ?? undefined)}`} />
         <Stat label="动作号" value={`${action ?? '--'}`} />
       </div>
-      <div className="mt-3 text-[12px] text-slate-500">
-        固件能力位 0x{fwCaps.toString(16)}（bit0 遥测2 / bit1 动作表 / bit2 舵机 / bit3 驾驶 / bit4 标定 / bit5 Flash / bit6 看门狗 / bit7 任务）
+      <div
+        className="mt-3 text-[12px] text-slate-500"
+        title={
+          `车上固件的能力位（内部编号 0x${fwCaps.toString(16)}）：\n` +
+          FW_CAPS.map((c) => `${fwCaps & c.bit ? '✓' : '✗'} ${c.name}`).join('\n')
+        }
+      >
+        车上支持的功能：{FW_CAPS.filter((c) => fwCaps & c.bit).map((c) => c.name).join(' · ') || '--（车上固件没上报）'}
       </div>
     </Card>
   )

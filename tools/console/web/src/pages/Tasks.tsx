@@ -34,6 +34,8 @@ import {
   describeBlock,
   dropPayload,
   encodeDrag,
+  fieldHint,
+  fieldLegend,
   importTaskFile,
   insertBlock,
   loadTaskFile,
@@ -51,6 +53,7 @@ import {
   stateChoices,
   duplicateBlock,
   updateBlock,
+  type FieldSpec,
   type SeqName,
   type TaskDef,
   type TaskFileJSON,
@@ -97,15 +100,17 @@ function FieldEditor({
   b,
   at,
   stateCount,
+  stateNames,
   onChange,
 }: {
   b: TaskBlock
   at: Where
   stateCount: number
+  stateNames: string[]
   onChange: (patch: Partial<TaskBlock>) => void
 }) {
   const spec = OP_BY_CODE.get(b.op)
-  if (!spec) return <div className="text-[12px] text-neon-rose">未知块 0x{b.op.toString(16)}（固件会当非法程序拒收）</div>
+  if (!spec) return <div className="text-[12px] text-neon-rose">这个块网页不认识（编号 {b.op}），固件会当非法程序拒收</div>
 
   const setField = (key: 'p0' | 'p1' | 'p2' | 'p3', v: number) => {
     // 两轮直给要同时点亮 flags.bit0（固件靠它区分"模式 4"与"模式 0"）
@@ -116,76 +121,107 @@ function FieldEditor({
     onChange({ [key]: v } as Partial<TaskBlock>)
   }
 
+  /* 一行的外壳：标题（鼠标停上去弹说明）+ 控件 + 下面一行"这个值是什么意思"（常显，不用悬停也能看到）。
+     注意是**普通函数**不是组件：写成内联组件会让 React 每次渲染换一个类型、输入框一打字就丢焦点。 */
+  const fieldRow = (f: FieldSpec, control: React.ReactNode) => (
+    <div key={f.key} className="grid gap-0.5">
+      <label className="flex items-center gap-2 text-[12px] text-slate-400" title={f.hint}>
+        <span className="w-14 shrink-0 cursor-help border-b border-dotted border-slate-500/50">{f.label}</span>
+        {control}
+      </label>
+      <div className="pl-16 text-[11px] leading-snug text-slate-400">{fieldHint(f, b)}</div>
+    </div>
+  )
+
   return (
     <div className="mt-1.5 grid gap-1.5 rounded-lg bg-black/20 p-2">
-      {spec.doc && <div className="text-[11px] text-slate-500">{spec.doc}</div>}
+      {spec.doc && (
+        <div className="text-[11px] text-slate-400" title="这块是干什么用的">
+          <span className="text-neon-cyan/80">{spec.label}</span> —— {spec.doc}
+        </div>
+      )}
       {b.op === OP.TURN_DEG && (
-        <Toggle on={(b.flags & 1) !== 0} onChange={(v) => onChange({ flags: v ? b.flags | 1 : b.flags & ~1 })} label={<span className="text-[12px]">相对当前朝向（关掉 = 绝对角度）</span>} />
+        <Toggle
+          on={(b.flags & 1) !== 0}
+          onChange={(v) => onChange({ flags: v ? b.flags | 1 : b.flags & ~1 })}
+          label={
+            <span className="text-[12px]" title="开 = 从车现在朝着的方向再转这么多（转完就保持新朝向）；关 = 不管现在朝哪，转到罗盘上的那个绝对角度">
+              相对当前朝向（关掉 = 转到绝对角度）
+            </span>
+          }
+        />
       )}
       {spec.fields
         .filter((f) => !f.showIf || f.showIf(b))
         .map((f) => {
           const v = b[f.key]
           if (f.kind === 'mode') {
-            return (
-              <label key={f.key} className="flex items-center gap-2 text-[12px] text-slate-400">
-                <span className="w-14 shrink-0">{f.label}</span>
-                <select className="field flex-1" value={v} onChange={(e) => setField(f.key, Number(e.target.value))}>
-                  {modeChoices(v).map((m) => (
-                    <option key={m.value} value={m.value}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+            return fieldRow(
+              f,
+              <select
+                className="field flex-1"
+                value={v}
+                title={fieldLegend(f, b, stateCount, stateNames)}
+                onChange={(e) => setField(f.key, Number(e.target.value))}
+              >
+                {modeChoices(v).map((m) => (
+                  <option key={m.value} value={m.value} title={m.hint}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>,
             )
           }
           if (f.kind === 'cond') {
-            return (
-              <label key={f.key} className="flex items-center gap-2 text-[12px] text-slate-400">
-                <span className="w-14 shrink-0">{f.label}</span>
-                <select className="field flex-1" value={v} onChange={(e) => setField(f.key, Number(e.target.value))}>
-                  {COND_SPECS.map((c) => (
-                    <option key={c.cond} value={c.cond}>
-                      {c.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+            return fieldRow(
+              f,
+              <select
+                className="field flex-1"
+                value={v}
+                title={fieldLegend(f, b, stateCount, stateNames)}
+                onChange={(e) => setField(f.key, Number(e.target.value))}
+              >
+                {COND_SPECS.map((c) => (
+                  <option key={c.cond} value={c.cond} title={c.hint}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>,
             )
           }
           if (f.kind === 'state') {
-            return (
-              <label key={f.key} className="flex items-center gap-2 text-[12px] text-slate-400">
-                <span className="w-14 shrink-0">{f.label}</span>
-                <select className="field flex-1" value={v} onChange={(e) => setField(f.key, Number(e.target.value))}>
-                  {stateChoices(v, stateCount, !!f.allowNoState).map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+            return fieldRow(
+              f,
+              <select
+                className="field flex-1"
+                value={v}
+                title={fieldLegend(f, b, stateCount, stateNames)}
+                onChange={(e) => setField(f.key, Number(e.target.value))}
+              >
+                {stateChoices(v, stateCount, !!f.allowNoState, stateNames).map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>,
             )
           }
           if (f.kind === 'servo') {
-            return (
-              <label key={f.key} className="flex items-center gap-2 text-[12px] text-slate-400">
-                <span className="w-14 shrink-0">{f.label}</span>
-                <select className="field flex-1" value={v} onChange={(e) => setField(f.key, Number(e.target.value))}>
-                  <option value={1}>1 号</option>
-                  <option value={2}>2 号</option>
-                </select>
-              </label>
+            return fieldRow(
+              f,
+              <select className="field flex-1" value={v} title={fieldLegend(f, b, stateCount, stateNames)} onChange={(e) => setField(f.key, Number(e.target.value))}>
+                <option value={1}>1 号</option>
+                <option value={2}>2 号</option>
+              </select>,
             )
           }
-          return (
-            <label key={f.key} className="flex items-center gap-2 text-[12px] text-slate-400">
-              <span className="w-14 shrink-0">{f.label}</span>
+          return fieldRow(
+            f,
+            <>
               <NumberField value={v} min={f.lo} max={f.hi} onChange={(nv) => setField(f.key, nv)} className="w-24" />
               {f.unit && <span className="text-[11px] text-slate-600">{f.unit}</span>}
-              {f.unit === 'PWM 刻度' && v > 0 && v < 2600 && <Badge tone="amber">可能推不动（&lt;35% 死区）</Badge>}
-            </label>
+              {f.unit === '油门刻度' && v > 0 && v < 2600 && <Badge tone="amber">可能推不动（&lt;35% 死区）</Badge>}
+            </>,
           )
         })}
       <div className="flex items-center gap-2 text-[10px] text-slate-600">
@@ -211,6 +247,7 @@ function BlockChip({
   b,
   at,
   stateCount,
+  stateNames,
   open,
   current,
   onToggle,
@@ -222,6 +259,7 @@ function BlockChip({
   b: TaskBlock
   at: Where
   stateCount: number
+  stateNames: string[]
   open: boolean
   current: boolean
   onToggle: () => void
@@ -244,8 +282,8 @@ function BlockChip({
         <GripVertical size={13} className="shrink-0 cursor-grab text-slate-600" />
         <span className="num text-[10px] text-slate-600">{at.index}</span>
         <button className="min-w-0 flex-1 truncate text-left text-[12px] text-slate-200" onClick={onToggle} title="点一下改参数">
-          <span className="text-neon-cyan/90">{spec?.label ?? `0x${b.op.toString(16)}`}</span>
-          <span className="ml-1.5 text-slate-400">{describeBlock(b, stateCount)}</span>
+          <span className="text-neon-cyan/90">{spec?.label ?? `不认识的块（编号 ${b.op}）`}</span>
+          <span className="ml-1.5 text-slate-400">{describeBlock(b, stateCount, stateNames)}</span>
         </button>
         <button className="text-slate-600 hover:text-slate-300" title="左移" onClick={() => onMove(-1)}>
           <ArrowLeft size={12} />
@@ -260,7 +298,7 @@ function BlockChip({
           <X size={12} />
         </button>
       </div>
-      {open && <FieldEditor b={b} at={at} stateCount={stateCount} onChange={onPatch} />}
+      {open && <FieldEditor b={b} at={at} stateCount={stateCount} stateNames={stateNames} onChange={onPatch} />}
     </div>
   )
 }
@@ -360,6 +398,7 @@ function StateCard({
                   b={r.block}
                   at={{ state: i, seq, index: r.index }}
                   stateCount={prog.states.length}
+                  stateNames={prog.states.map((s) => s.name)}
                   open={!!open && open.state === i && open.seq === seq && open.index === r.index}
                   current={!!cur && seq === 'body' && cur.state === i && cur.block === r.index}
                   onToggle={() => onToggleBlock({ state: i, seq, index: r.index })}
@@ -720,10 +759,13 @@ export function TasksPage() {
         >
           {!remote && <div className="text-[12px] text-slate-500">点「读目录」看车上存了哪些任务（需要固件/桥支持）。</div>}
           {remote && !remote.supported && (
-            <div className="rounded-lg bg-neon-amber/10 p-2 text-[11px] leading-relaxed text-neon-amber">
-              桥或固件还没实现任务帧（0x60–0x69），这一栏暂时只有编辑与编译可用。
+            <div
+              className="rounded-lg bg-neon-amber/10 p-2 text-[11px] leading-relaxed text-neon-amber"
+              title="车上固件没有上报「任务」这项能力（内部编号 0x60–0x69 的任务帧、能力位 bit7）"
+            >
+              车上这套固件还不支持读写任务，这一栏暂时只有编辑与编译可用。
               <br />
-              等固件开了 <span className="num">HOST_CAP_TASK</span> 就能烧写。
+              要烧写，得先给车上刷一份带任务功能的固件。
             </div>
           )}
           {remote && remote.supported && remote.items.length === 0 && <div className="text-[12px] text-slate-500">车上一个任务都没有。</div>}
@@ -893,10 +935,18 @@ export function TasksPage() {
                     }}
                     onClick={() => paletteAdd(s.op)}
                     className="cursor-grab rounded-lg border border-white/10 bg-white/[0.03] px-2 py-1.5 hover:border-neon-cyan/40"
-                    title={s.doc}
+                    title={
+                      s.fields.length
+                        ? `${s.label}：${s.doc}\n\n可设置（鼠标停在左边那块的具体字段上也有说明）：\n` +
+                          s.fields.map((f) => `· ${f.label}：${f.hint}`).join('\n')
+                        : `${s.label}：${s.doc}`
+                    }
                   >
                     <div className="text-[12px] text-neon-cyan/90">{s.label}</div>
-                    <div className="text-[10px] leading-snug text-slate-500">{s.doc}</div>
+                    <div className="text-[10px] leading-snug text-slate-400">{s.doc}</div>
+                    {s.fields.some((f) => !f.showIf) && (
+                      <div className="mt-0.5 text-[10px] text-slate-600">可设置：{s.fields.filter((f) => !f.showIf).map((f) => f.label).join(' / ')}</div>
+                    )}
                   </div>
                 ))}
               </div>

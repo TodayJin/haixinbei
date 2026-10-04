@@ -48,6 +48,10 @@ export type FieldKind = 'int' | 'mode' | 'cond' | 'state' | 'servo'
 export interface FieldSpec {
   key: FieldKey
   label: string
+  /** **给用户看的一句人话**（鼠标停在标题上 / 显示在这一格下面）。
+   *  规矩：只讲"这个数会改变车的什么行为"，不出现 p0/p1/p2/p3、flags.bit0、0xFFFF、
+   *  tracing_cross() 这类固件里的名字 —— 用户 m25776 就是被这些看不懂才要求重写的。 */
+  hint: string
   kind: FieldKind
   lo: number
   hi: number
@@ -60,6 +64,13 @@ export interface FieldSpec {
   allowNoState?: boolean
 }
 
+/** 下拉选项：值 + 界面上的名字 + 一句人话（鼠标停在选项/选中项下面显示） */
+export interface Choice {
+  value: number
+  label: string
+  hint: string
+}
+
 export interface OpSpec {
   op: number
   name: string
@@ -69,28 +80,36 @@ export interface OpSpec {
   fields: FieldSpec[]
 }
 
-const speed = (key: FieldKey, label: string): FieldSpec => ({ key, label, kind: 'int', lo: 0, hi: 7200, unit: 'PWM 刻度' })
+const speed = (key: FieldKey, label: string, hint: string): FieldSpec => ({ key, label, hint, kind: 'int', lo: 0, hi: 7200, unit: '油门刻度' })
 
-/** 10 个基础块的字段语义 —— 与 docs/任务编程.md 的块表逐条对应 */
+/** 10 个基础块的字段语义 —— 与 docs/任务编程.md 的块表逐条对应。
+ *  文案规矩（用户 m25776）：`doc` 只说"这块是干什么的"，字段 `hint` 只说"这个数改变车的什么行为"，
+ *  一律写物理现象与人话；固件内部名字（p0~p3、flags.bit0、0xFFFF、tracing_cross()）**不许出现**。 */
 export const OP_SPECS: OpSpec[] = [
   {
     op: OP.SET_SPEED,
     name: 'SET_SPEED',
     label: '设定速度',
     group: '运动',
-    doc: '0~7200 是 PWM 刻度（不是 mm/s）：约 45% 才动得起来',
-    fields: [speed('p0', '速度')],
+    doc: '给两个轮子定一个基准速度（快慢）',
+    fields: [
+      speed(
+        'p0',
+        '速度',
+        '0 = 停；0~7200 是油门刻度（不是 mm/s），满刻度 7200 ≈ 516 mm/s。低于 2600（35%）还在电机死区里、车不会动；倒车写负数。旧流程里的「900」就是这里的 6480。',
+      ),
+    ],
   },
   {
     op: OP.SET_MODE,
     name: 'SET_MODE',
     label: '切换模式',
     group: '运动',
-    doc: '停车=停；角度环=角度+速度环（进障碍后的那两层）；循迹=三层串级（正常循迹）',
+    doc: '决定车接下来怎么控制自己',
     fields: [
-      { key: 'p0', label: '模式', kind: 'mode', lo: 0, hi: 4 },
-      { key: 'p1', label: '左轮', kind: 'int', lo: -7200, hi: 7200, unit: '刻度', showIf: (b) => b.p0 === MODE.WHEELS },
-      { key: 'p2', label: '右轮', kind: 'int', lo: -7200, hi: 7200, unit: '刻度', showIf: (b) => b.p0 === MODE.WHEELS },
+      { key: 'p0', label: '模式', hint: '选一种控制方式；下面那行小字写的就是你现在选中的这个是什么意思。', kind: 'mode', lo: 0, hi: 4 },
+      { key: 'p1', label: '左轮', hint: '左轮油门刻度，负数 = 反转。', kind: 'int', lo: -7200, hi: 7200, unit: '刻度', showIf: (b) => b.p0 === MODE.WHEELS },
+      { key: 'p2', label: '右轮', hint: '右轮油门刻度，负数 = 反转。左右给相反的数就能原地转。', kind: 'int', lo: -7200, hi: 7200, unit: '刻度', showIf: (b) => b.p0 === MODE.WHEELS },
     ],
   },
   {
@@ -98,32 +117,32 @@ export const OP_SPECS: OpSpec[] = [
     name: 'TURN_DEG',
     label: '转角度',
     group: '运动',
-    doc: 'flags.bit0=1 表示 p1 是相对角（正=左转）；p2 是容差，单位 0.1°',
+    doc: '把车头转到一个角度（原地转）',
     fields: [
-      { key: 'p0', label: '超时', kind: 'int', lo: 0, hi: 60000, unit: 'ms' },
-      { key: 'p1', label: '角度', kind: 'int', lo: -360, hi: 360, unit: '度' },
-      { key: 'p2', label: '容差', kind: 'int', lo: 0, hi: 100, unit: '0.1°' },
+      { key: 'p0', label: '超时', hint: '最多等这么久；到点还没转到位也往下走，不会卡死在这里。', kind: 'int', lo: 0, hi: 60000, unit: 'ms' },
+      { key: 'p1', label: '角度', hint: '要转多少度：正数 = 左转，负数 = 右转。', kind: 'int', lo: -360, hi: 360, unit: '度' },
+      { key: 'p2', label: '容差', hint: '误差比它小就算"转到位了"，单位 0.1°：填 10 = 允许差 1.0°。', kind: 'int', lo: 0, hi: 100, unit: '0.1°' },
     ],
   },
-  { op: OP.ACTION, name: 'ACTION', label: '舵机动作', group: '动作', doc: '播车上存的第 n 套动作（1~14），p2 是之后再等 ms', fields: [{ key: 'p0', label: '动作号', kind: 'int', lo: 1, hi: 14 }, { key: 'p2', label: '之后等待', kind: 'int', lo: 0, hi: 60000, unit: 'ms' }] },
-  { op: OP.SET_SERVO, name: 'SET_SERVO', label: '直接摆舵机', group: '动作', doc: '通道 1/2，角度 0~180（绕过动作表）', fields: [{ key: 'p0', label: '通道', kind: 'servo', lo: 1, hi: 2 }, { key: 'p1', label: '角度', kind: 'int', lo: 0, hi: 180, unit: '度' }] },
-  { op: OP.WAIT_MS, name: 'WAIT_MS', label: '等待', group: '等待', doc: '纯延时，不改变任何输出', fields: [{ key: 'p0', label: '时间', kind: 'int', lo: 0, hi: 60000, unit: 'ms' }] },
+  { op: OP.ACTION, name: 'ACTION', label: '舵机动作', group: '动作', doc: '播车上存好的那套舵机动作', fields: [{ key: 'p0', label: '动作号', hint: '车上动作表里的第几套（1~14），就是你在车上用五向键录的那些。', kind: 'int', lo: 1, hi: 14 }, { key: 'p2', label: '之后等待', hint: '动作播完后先等这么久再往下走（舵机自己在动，程序不等它）。', kind: 'int', lo: 0, hi: 60000, unit: 'ms' }] },
+  { op: OP.SET_SERVO, name: 'SET_SERVO', label: '直接摆舵机', group: '动作', doc: '不经过动作表，直接给舵机一个角度', fields: [{ key: 'p0', label: '通道', hint: '车上的第 1 号或第 2 号舵机通道。', kind: 'servo', lo: 1, hi: 2 }, { key: 'p1', label: '角度', hint: '舵机摆到多少度（0~180），调试用。', kind: 'int', lo: 0, hi: 180, unit: '度' }] },
+  { op: OP.WAIT_MS, name: 'WAIT_MS', label: '等待', group: '等待', doc: '死等一段时间，什么都不改', fields: [{ key: 'p0', label: '时间', hint: '等多久。1000 = 1 秒；等的时候车保持当前速度和模式继续跑。', kind: 'int', lo: 0, hi: 60000, unit: 'ms' }] },
   {
     op: OP.WAIT_COND,
     name: 'WAIT_COND',
     label: '等条件',
     group: '等待',
-    doc: 'p2 超时（0 = 一直等）；p3 = 超时后改道到哪个状态，0xFFFF = 继续往下',
+    doc: '等到某个情况出现再往下走',
     fields: [
-      { key: 'p0', label: '条件', kind: 'cond', lo: 1, hi: 9 },
-      { key: 'p1', label: '阈值', kind: 'int', lo: -32768, hi: 32767 },
-      { key: 'p2', label: '超时', kind: 'int', lo: 0, hi: 60000, unit: 'ms' },
-      { key: 'p3', label: '超时后', kind: 'state', lo: 0, hi: 0xffff, allowNoState: true },
+      { key: 'p0', label: '条件', hint: '要等的那个情况（车底下发生什么才算等到）。', kind: 'cond', lo: 1, hi: 9 },
+      { key: 'p1', label: '阈值', hint: '这个条件的门槛，含义跟着上面的条件变（看选中那条的说明）；填 0 = 用固件默认（全白 60、回到线中间 5、转到指定角度 10）。压到横线 / 立即 / 车出故障 这三条用不到它。', kind: 'int', lo: -32768, hi: 32767 },
+      { key: 'p2', label: '超时', hint: '最多等多久。填 0 = 一直等（这时「超时后」那一栏完全不起作用）。', kind: 'int', lo: 0, hi: 60000, unit: 'ms' },
+      { key: 'p3', label: '超时后', hint: '等超时了改跳到哪个状态；选「继续往下跑」就等于没超时，接着执行这一块的下一行。', kind: 'state', lo: 0, hi: 0xffff, allowNoState: true },
     ],
   },
-  { op: OP.CROSS_CLEAR, name: 'CROSS_CLEAR', label: '清横线', group: '等待', doc: '把横线计数清零（条件 4 满足时也会自动清）', fields: [] },
-  { op: OP.GOTO, name: 'GOTO', label: '跳到状态', group: '流程', doc: '立刻切换，不等待；新状态从它的 enter 序列重新开始。目标只能是真实状态（下拉里没有"继续往下跑"——对跳转块来说那等于什么都不做）', fields: [{ key: 'p0', label: '目标', kind: 'state', lo: 0, hi: 0xfffe }] },
-  { op: OP.END, name: 'END', label: '结束任务', group: '流程', doc: '停车并结束整个任务', fields: [] },
+  { op: OP.CROSS_CLEAR, name: 'CROSS_CLEAR', label: '清横线', group: '等待', doc: '把"压过几条横线"的计数清零', fields: [] },
+  { op: OP.GOTO, name: 'GOTO', label: '跳到状态', group: '流程', doc: '立刻跳到另一个状态，不等任何东西', fields: [{ key: 'p0', label: '目标', hint: '跳到哪个状态；新状态会从它的「进门」序列重新开始。这里只能选真实状态。', kind: 'state', lo: 0, hi: 0xfffe }] },
+  { op: OP.END, name: 'END', label: '结束任务', group: '流程', doc: '停车，整个任务到此结束', fields: [] },
 ]
 
 export const OP_BY_CODE = new Map<number, OpSpec>(OP_SPECS.map((s) => [s.op, s]))
@@ -135,15 +154,15 @@ export interface CondSpec {
 }
 
 export const COND_SPECS: CondSpec[] = [
-  { cond: COND.LINE_CENTER, label: '回到中线', hint: '|循迹偏差-4.5| ≤ 阈值/10（默认 5 ⇒ 0.5）' },
-  { cond: COND.LINE_LOST, label: '丢线', hint: '8 路灰度全小于阈值（默认 60）' },
-  { cond: COND.LINE_FOUND, label: '找回线', hint: '任意一路 ≥ 阈值' },
-  { cond: COND.CROSS, label: '压到横线', hint: 'tracing_cross()≠0，满足后自动清' },
-  { cond: COND.CROSS_COUNT, label: '横线计数', hint: '累计 ≥ 阈值' },
-  { cond: COND.ANGLE_DONE, label: '角度到位', hint: '|航向误差| ≤ 阈值/10（默认 10 ⇒ 1.0°）' },
-  { cond: COND.DIST_MM, label: '走够里程', hint: '两轮编码器计数绝对值之和 ≥ 阈值' },
-  { cond: COND.FAULT, label: '出故障', hint: 'Motion_GetFault()≠0' },
-  { cond: COND.ALWAYS, label: '立即', hint: '恒真；配超时就是纯延时' },
+  { cond: COND.LINE_CENTER, label: '回到线中间', hint: '车又正对着线了（重心偏差回到 4.5 附近）。阈值 = 允许偏多少（单位 0.1）：填 50 = 允许偏 5.0，填 0 用默认 5 = 允许偏 0.5。' },
+  { cond: COND.LINE_LOST, label: '探头全白', hint: '车底下 8 个探头一个都没看见黑线 —— 掉出赛道、车悬空、正在过一个障碍（坡 / 木刺 / 栅栏）时都是"全白"，也就是以前说的"丢线"。阈值 = 灰度门槛（0~255）：读数比它小就算白；填 0 用默认 60。' },
+  { cond: COND.LINE_FOUND, label: '又看见黑线', hint: '8 个探头里任意一个又看见黑线了（过完障碍、重新压回线上）。阈值 = 灰度门槛：读数 ≥ 它就算看见；填 0 用默认 60。' },
+  { cond: COND.CROSS, label: '压到横线', hint: '车底下压过一条横着的黑线（路口 / 停止线那种）。过一条就满足一次，而且满足后横线计数会自动清零。' },
+  { cond: COND.CROSS_COUNT, label: '压过几条横线', hint: '累计压过多少条横线才算等到。阈值 = 要几条：填 2 = 压过两条。' },
+  { cond: COND.ANGLE_DONE, label: '转到指定角度', hint: '车头已经转到了目标角度附近（前面「转角度」那个块设的目标）。阈值 = 允许差多少（单位 0.1°）：填 10 = 允许差 1.0°，填 0 用默认 10。' },
+  { cond: COND.DIST_MM, label: '走够距离', hint: '两个轮子转过的距离加起来够数了。阈值 = 编码器计数（不是毫米）。' },
+  { cond: COND.FAULT, label: '车出故障', hint: '控制环报错停机了（电机 / 编码器异常那种），一般放在收尾里保命。' },
+  { cond: COND.ALWAYS, label: '马上通过', hint: '立刻就算等到，不等任何东西；给它配一个「超时」就成了一个纯等待。' },
 ]
 
 export const COND_BY_CODE = new Map<number, CondSpec>(COND_SPECS.map((c) => [c.cond, c]))
@@ -154,16 +173,16 @@ export const COND_BY_CODE = new Map<number, CondSpec>(COND_SPECS.map((c) => [c.c
  *  旧比赛流程里"斜着蹭障碍 / 原地转"全靠它；没有它，旧流程既复现不了、也没法倒车。
  *  值 2 固件仍然认、老文件仍然解析执行，只是不再出现在下拉里。（老镜像里若真是这个值，
  *  下拉会临时补一条标着「（旧）」的项，不改动文件。） */
-export const MODE_OPTIONS: { value: number; label: string }[] = [
-  { value: MODE.IDLE, label: '停车' },
-  { value: MODE.GYRO, label: '角度环' },
-  { value: MODE.TRACE_GYRO, label: '循迹' },
-  { value: MODE.WHEELS, label: '两轮直给' },
+export const MODE_OPTIONS: Choice[] = [
+  { value: MODE.IDLE, label: '停车', hint: '什么都不输出，车靠惯性滑停；再给速度才会重新动。' },
+  { value: MODE.GYRO, label: '角度环', hint: '不看线，锁住车头方向直走：陀螺仪盯着航向，歪了就纠回来。转弯后直行、过障碍时用。' },
+  { value: MODE.TRACE_GYRO, label: '循迹', hint: '正常跟线跑（位置 → 速度 → 电流 三层一起调）。跑赛道就是这个。' },
+  { value: MODE.WHEELS, label: '两轮直给', hint: '绕过所有调节器，左右轮各拿一个油门值直接转 —— 唯一能左右分开给（还能倒车）的模式，"原地转"和"斜着蹭障碍"都靠它。' },
 ]
 
 /** 不在下拉里的旧值 → 人话（解析老文件用；执行语义固件一行没改） */
-export const MODE_LEGACY: { value: number; label: string }[] = [
-  { value: MODE.TRACE, label: '（旧）循迹环+速度环' },
+export const MODE_LEGACY: Choice[] = [
+  { value: MODE.TRACE, label: '（旧）循迹环+速度环', hint: '两级循迹（位置环 + 速度环，没有电流环）。老文件里还有这个值，新流程请改用「循迹」。' },
 ]
 
 /** 模式值 → 人话：先查下拉，再查旧值，最后退回数字 */
@@ -171,21 +190,38 @@ export function modeLabel(v: number): string {
   return MODE_OPTIONS.find((m) => m.value === v)?.label ?? MODE_LEGACY.find((m) => m.value === v)?.label ?? `模式 ${v}`
 }
 
+/** 模式值 → 这个模式到底把车怎么控制（选中项下面那行小字、以及鼠标停在选框上的提示） */
+export function modeHint(v: number): string {
+  return MODE_OPTIONS.find((m) => m.value === v)?.hint ?? MODE_LEGACY.find((m) => m.value === v)?.hint ?? ''
+}
+
+/** 条件号 → 这个条件在等什么（同上） */
+export function condHint(v: number): string {
+  return COND_BY_CODE.get(v)?.hint ?? ''
+}
+
 /** 下拉要显示的项：三个标准模式；若当前值不在其中（老文件用 2/4）就临时补一条，别让选框空着 */
-export function modeChoices(cur: number): { value: number; label: string }[] {
+export function modeChoices(cur: number): Choice[] {
   if (MODE_OPTIONS.some((m) => m.value === cur)) return MODE_OPTIONS
   return [...MODE_OPTIONS, ...MODE_LEGACY.filter((m) => m.value === cur)]
 }
 
+/** 状态的显示名：`状态 3 台阶2`（任务里给状态起的名字）。没有名字就只写编号。 */
+function stateLabel(i: number, names?: string[]): string {
+  const n = names?.[i]
+  return n ? `状态 ${i} ${n}` : `状态 ${i}`
+}
+
 /** 「目标状态」下拉要显示的项：真实状态 0..stateCount-1；allowContinue（只有「等条件」的"超时后"）再加一条
  *  「继续往下跑」= 0xFFFF = 超时也不改道。当前值不在列表里（老文件把跳转目标存成了 0xFFFF，或目标状态
- *  后来被删了）就临时补一条标出来的项，别让选框空着 —— 固件对越界/0xFFFF 的跳转是"跳过这一块"，不会写坏程序。 */
-export function stateChoices(cur: number, stateCount: number, allowContinue: boolean): { value: number; label: string }[] {
+ *  后来被删了）就临时补一条标出来的项，别让选框空着 —— 固件对越界/0xFFFF 的跳转是"跳过这一块"，不会写坏程序。
+ *  names 传进来时，每一项会带上状态名（光看编号根本不知道要跳到哪儿去）。 */
+export function stateChoices(cur: number, stateCount: number, allowContinue: boolean, names?: string[]): { value: number; label: string }[] {
   const out: { value: number; label: string }[] = []
   if (allowContinue) out.push({ value: NO_STATE, label: '继续往下跑' })
-  for (let i = 0; i < stateCount; i++) out.push({ value: i, label: `状态 ${i}` })
+  for (let i = 0; i < stateCount; i++) out.push({ value: i, label: stateLabel(i, names) })
   if (!out.some((o) => o.value === cur)) {
-    out.push({ value: cur, label: cur === NO_STATE ? '（旧）继续往下跑' : `状态 ${cur}（不存在）` })
+    out.push({ value: cur, label: cur === NO_STATE ? '（旧）继续往下跑' : `${stateLabel(cur, names)}（不存在）` })
   }
   return out
 }
@@ -218,33 +254,59 @@ export function defaultsFor(op: number): TaskBlock {
   }
 }
 
-/** 一行摘要（列表、块卡片用） */
-export function describeBlock(b: TaskBlock, stateCount: number): string {
-  const st = (n: number) => (n === NO_STATE ? '继续' : n < stateCount ? `状态 ${n}` : `状态 ${n}（不存在）`)
+/** 油门刻度 → "约百分之多少"，给用户一个能对上感觉的数字 */
+export function speedPct(v: number): string {
+  return `${v < 0 ? '倒车 ' : ''}约 ${Math.round((Math.abs(v) / 7200) * 100)}% 油门`
+}
+
+/** 一行摘要（列表、块卡片用）。同样只写人话：该带单位的带上，别只丢一个裸数字。
+ *  names = 状态名（跳到哪个状态用名字说，别只给编号）。 */
+export function describeBlock(b: TaskBlock, stateCount: number, names?: string[]): string {
+  const st = (n: number) => (n === NO_STATE ? '继续往下跑' : n < stateCount ? stateLabel(n, names) : `状态 ${n}（已不存在）`)
   switch (b.op) {
     case OP.SET_SPEED:
-      return `速度 ${b.p0}`
+      return b.p0 ? `速度 ${b.p0}（${speedPct(b.p0)}）` : '速度 0（停）'
     case OP.SET_MODE:
-      return b.p0 === MODE.WHEELS ? `两轮直给 左 ${b.p1} 右 ${b.p2}` : `模式 ${modeLabel(b.p0)}`
+      return b.p0 === MODE.WHEELS ? `两轮直给 左 ${b.p1} 右 ${b.p2}` : `模式：${modeLabel(b.p0)}`
     case OP.TURN_DEG:
-      return `${b.flags & 1 ? '相对' : '绝对'} ${b.p1}°±${(b.p2 / 10).toFixed(1)}° 最多 ${b.p0}ms`
+      return `${b.flags & 1 ? '从当前朝向转' : '转到固定角度'} ${b.p1}°（±${(b.p2 / 10).toFixed(1)}° 内算到位，最多 ${b.p0}ms）`
     case OP.ACTION:
-      return `动作 ${b.p0}${b.p2 ? ` 后等 ${b.p2}ms` : ''}`
+      return `摆第 ${b.p0} 套舵机动作${b.p2 ? `，然后等 ${b.p2}ms` : ''}`
     case OP.SET_SERVO:
-      return `舵机 ${b.p0} → ${b.p1}°`
+      return `${b.p0} 号舵机 → ${b.p1}°`
     case OP.WAIT_MS:
-      return `等 ${b.p0}ms`
+      return `等 ${b.p0}ms${b.p0 >= 1000 ? `（${(b.p0 / 1000).toFixed(2).replace(/\.?0+$/, '')} 秒）` : ''}`
     case OP.WAIT_COND:
-      return `等「${COND_BY_CODE.get(b.p0)?.label ?? b.p0}」${b.p2 ? `最多 ${b.p2}ms` : '不限时'}${b.p3 !== NO_STATE ? ` 超时→${st(b.p3)}` : ''}`
+      return `等「${COND_BY_CODE.get(b.p0)?.label ?? `条件 ${b.p0}`}」${b.p2 ? `最多 ${b.p2}ms` : '不限时'}${b.p3 !== NO_STATE ? `，超时后跳到 ${st(b.p3)}` : ''}`
     case OP.CROSS_CLEAR:
-      return '清横线计数'
+      return '把横线计数清零'
     case OP.GOTO:
       return `跳到 ${st(b.p0)}`
     case OP.END:
-      return '结束任务'
+      return '结束任务（停车）'
     default:
-      return `未知块 0x${b.op.toString(16)}`
+      return '这块网页不认识（固件会当非法程序拒收）'
   }
+}
+
+/** 一个字段**当前值**的人话解释：下拉项跟着选中的那一项走（用户 m25776 要的就是这个） */
+export function fieldHint(f: FieldSpec, b: TaskBlock): string {
+  if (f.kind === 'cond') return condHint(b[f.key]) || f.hint
+  if (f.kind === 'mode') return modeHint(b[f.key]) || f.hint
+  return f.hint
+}
+
+/** 一个下拉的**完整选项说明**：鼠标停在选框上时，原生提示框里逐行列出每个选项是什么意思 */
+export function fieldLegend(f: FieldSpec, b: TaskBlock, stateCount: number, names?: string[]): string {
+  if (f.kind === 'cond') return COND_SPECS.map((c) => `${c.label}：${c.hint}`).join('\n')
+  if (f.kind === 'mode') return modeChoices(b[f.key]).map((m) => `${m.label}：${m.hint}`).join('\n')
+  if (f.kind === 'state') {
+    const rows = stateChoices(b[f.key], stateCount, !!f.allowNoState, names).map((o) => o.label)
+    rows.push(f.allowNoState ? '「继续往下跑」= 超时也不改道，接着执行下一行' : '只能选真实状态')
+    return rows.join('\n')
+  }
+  if (f.kind === 'servo') return '1 号 / 2 号：车上那两路舵机通道'
+  return f.hint
 }
 
 /* ------------------------------------------------------------------ 名字 */

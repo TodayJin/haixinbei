@@ -25,7 +25,13 @@ function ParamRow({ p }: { p: ParamItem }) {
           {atEdge && <Badge tone="amber">贴边界</Badge>}
         </div>
         <div className="truncate text-[10px] text-slate-600">
-          {p.key} · id 0x{p.id.toString(16).toUpperCase()} {p.note ? `· ${p.note}` : ''}
+          {p.note ? `${p.note} · ` : ''}
+          <span
+            className="cursor-help text-slate-700"
+            title={`固件里的名字：${p.key}\n固件里的编号：0x${p.id.toString(16).toUpperCase().padStart(4, '0')}`}
+          >
+            {p.key}
+          </span>
         </div>
       </div>
 

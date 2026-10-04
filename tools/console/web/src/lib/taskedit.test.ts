@@ -155,13 +155,36 @@ describe('块库元数据', () => {
 describe('块摘要', () => {
   it('按块类型给出人话，两轮直给与超时改道都说得清', () => {
     expect(describeBlock(blk(OP.SET_SPEED, 6480), 3)).toContain('6480');
+    expect(describeBlock(blk(OP.SET_SPEED, 6480), 3)).toContain('90%'); // 顺带给个能对上感觉的百分比
     expect(describeBlock(blk(OP.SET_MODE, MODE.WHEELS, 300, -300), 3)).toContain('左 300 右 -300');
-    expect(describeBlock(blk(OP.TURN_DEG, 2000, -90, 10, NO_STATE, 1), 3)).toContain('相对');
-    expect(describeBlock(blk(OP.WAIT_COND, COND.CROSS, 0, 3000, 1), 3)).toContain('超时→状态 1');
+    expect(describeBlock(blk(OP.TURN_DEG, 2000, -90, 10, NO_STATE, 1), 3)).toContain('从当前朝向');
+    expect(describeBlock(blk(OP.WAIT_COND, COND.CROSS, 0, 3000, 1), 3)).toContain('超时后跳到 状态 1');
     expect(describeBlock(blk(OP.WAIT_COND, COND.CROSS, 0, 0, NO_STATE), 3)).toContain('不限时');
+    // 条件说的是车底下发生了什么，不是「条件 4」
+    expect(describeBlock(blk(OP.WAIT_COND, COND.CROSS, 0, 0, NO_STATE), 3)).toContain('压到横线');
     expect(describeBlock(blk(OP.GOTO, 9), 3)).toContain('不存在');
     expect(describeBlock(blk(OP.END), 3)).toContain('结束');
-    expect(describeBlock(blk(0x77), 3)).toContain('未知块');
+    expect(describeBlock(blk(0x77), 3)).toContain('不认识');
+    // 给了状态名，跳转目标就用名字说话（用户 m25776：光看编号看不懂要跳到哪儿）
+    expect(describeBlock(blk(OP.GOTO, 1), 3, ['进门', '台阶2', '木刺'])).toContain('状态 1 台阶2');
+    expect(stateChoices(1, 3, false, ['进门', '台阶2', '木刺'])[1].label).toBe('状态 1 台阶2');
+  });
+
+  it('界面文案里不许出现固件内部名字（用户 m25776 就是被这些看不懂才要求重写）', () => {
+    const bad = /(\bp[0-3]\b|flags\.|0x[0-9a-fA-F]|tracing_cross|Motion_GetFault|\bbit[0-7]\b)/;
+    for (const s of OP_SPECS) {
+      expect(bad.test(s.doc), `${s.label} 的说明里有内部名字：${s.doc}`).toBe(false);
+      for (const f of s.fields) {
+        expect(f.hint.length, `${s.label}.${f.label} 没有说明`).toBeGreaterThan(4);
+        expect(bad.test(f.hint), `${s.label}.${f.label} 的说明里有内部名字：${f.hint}`).toBe(false);
+      }
+    }
+    for (const c of COND_SPECS) {
+      expect(c.label.length).toBeGreaterThan(2);
+      expect(bad.test(c.hint), `${c.label} 的说明里有内部名字：${c.hint}`).toBe(false);
+    }
+    // 「丢线」用户明确说看不懂 ⇒ 界面上统一叫「探头全白」
+    expect(COND_SPECS.find((c) => c.cond === COND.LINE_LOST)?.label).toBe('探头全白');
   });
 });
 
