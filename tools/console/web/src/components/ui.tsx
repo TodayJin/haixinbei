@@ -244,6 +244,10 @@ export function Slider({
  *
  * 柱高就是原始值本身，所以**没黑到满量程时柱顶会留一段深色**——那是"到 255 还差多少"的
  * 余量，不是另一个元素（一度被当成 bug 问过）。加 `hint` 时在下面画一行图例把这件事写清楚。
+ *
+ * 注意：柱高的填充**不要**用 `transition-[height]`。20Hz 的遥测会不停重启这段 150ms 的
+ * **布局属性**过渡 ⇒ 过渡永远在跑 ⇒ 整页每帧重排一次（实测 layoutN 650→51、光栅化 8 倍、
+ * 主线程占用 24%→14%）。颜色可以过渡（那只是重绘），高度要么不带过渡、要么用 transform。
  */
 export function GrayArray({
   line,
@@ -271,7 +275,7 @@ export function GrayArray({
                 }`}
               >
                 <div
-                  className={`absolute bottom-0 left-0 w-full transition-[height] duration-150 ${
+                  className={`absolute bottom-0 left-0 w-full transition-colors duration-150 ${
                     active ? 'bg-neon-mint/80' : 'bg-slate-500/35'
                   }`}
                   style={{ height: `${Math.max(3, ink * 100)}%` }}
@@ -307,7 +311,7 @@ export function GrayBar({ value, active, label }: { value: number; active: boole
     <div className="flex flex-1 flex-col items-center gap-1">
       <div className="relative h-24 w-full overflow-hidden rounded-lg bg-ink-900/80 ring-1 ring-white/10">
         <div
-          className={`absolute bottom-0 left-0 w-full transition-[height] duration-150 ${
+          className={`absolute bottom-0 left-0 w-full transition-colors duration-150 ${
             active ? 'bg-neon-mint/80' : 'bg-slate-500/40'
           }`}
           style={{ height: `${Math.max(3, ink * 100)}%` }}

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 import { PAGES, navigateTo, usePage, type PageId } from '../lib/router'
 import { store, useHotSelect, useMeta } from '../lib/store'
+import { applyLiteFx, installScrollFx } from '../lib/fx'
 import { Badge, StatusDot } from './ui'
 import { ErrorBanner } from './Toasts'
 import { PageBoundary } from './PageBoundary'
@@ -93,8 +94,18 @@ export function Shell({ children }: { children: React.ReactNode }) {
       if (e.key === 'Escape') store.emergencyStop()
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    // 滚动期间自动关掉玻璃模糊/脉冲动效（省掉每帧重糊与每帧样式重算），松手后恢复
+    const disposeFx = installScrollFx(window, document)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      disposeFx()
+    }
   }, [])
+
+  // 「低特效模式」：把设置同步到 <html> 上的类（样式在 index.css 末尾）
+  React.useEffect(() => {
+    applyLiteFx(document.documentElement.classList, settings.perfLite)
+  }, [settings.perfLite])
 
   const cur = PAGES.find((p) => p.id === page)
   const dirtyParams = params?.items.filter((i) => i.dirty).length ?? 0

@@ -52,6 +52,11 @@ export interface Settings {
   driveSkipDead: boolean
   /** 是否显示"真车模式"安全提示 */
   safetyBanner: boolean
+  /**
+   * 低特效模式：常开地关掉玻璃模糊与脉冲动效（滚动时本来就会自动关，见 lib/fx.ts）。
+   * 给显卡弱/远程桌面的机器用 —— 那些机器上静止时也会卡。
+   */
+  perfLite: boolean
 }
 
 const SETTINGS_KEY = 'console.settings.v1'
@@ -63,6 +68,7 @@ const DEFAULT_SETTINGS: Settings = {
   driveStep: 100,
   driveSkipDead: true,
   safetyBanner: true,
+  perfLite: false,
 }
 
 function loadSettings(): Settings {

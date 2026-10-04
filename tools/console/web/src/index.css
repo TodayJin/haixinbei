@@ -307,3 +307,36 @@
     pointer-events: none;
   }
 }
+
+/*
+ * 滚起来别掉帧：`html.is-scrolling`（正在滚，松手 140ms 后摘掉，见 lib/fx.ts）
+ * 和 `html.perf-lite`（设置页里常开的「低特效模式」）两条路，做的是同一件事 ——
+ * 把"每帧都要重算"的玻璃模糊与无限脉冲动画关掉：
+ *   - backdrop-filter 在滚动中每帧重糊：tasks 页合成器 DrawFrame 332ms→55.7ms / 2.5s；
+ *   - animate-pulseDot（连接正常时 header 那个圆点一直亮着）在不做合成器动画的机器上
+ *     每帧一次全文档样式重算（styleN = 帧数）。
+ * 静止时两者都原样保留 —— 玻璃拟态和状态点脉冲是 API.md §5 定的视觉语言，不能直接删。
+ */
+html.is-scrolling header,
+html.is-scrolling aside,
+html.is-scrolling .glass,
+html.perf-lite header,
+html.perf-lite aside,
+html.perf-lite .glass {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* header 是 sticky、压在滚动内容上：模糊一去掉，底色必须变**不透明**，
+   否则底下的参数行会像幽灵一样透出来（0.94 都还能看见，实测截图确认过）*/
+html.is-scrolling header,
+html.perf-lite header {
+  background-color: rgb(7 10 22);
+}
+
+html.is-scrolling .animate-pulseDot,
+html.perf-lite *,
+html.perf-lite *::before,
+html.perf-lite *::after {
+  animation: none !important;
+}

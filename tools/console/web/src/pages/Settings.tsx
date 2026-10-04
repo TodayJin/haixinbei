@@ -128,6 +128,17 @@ export function SettingsPage() {
             <div className="flex items-center gap-2">
               <Toggle on={settings.safetyBanner} onChange={(v) => store.patchSettings({ safetyBanner: v })} label="操控页显示安全提示" />
             </div>
+            <div className="flex items-center gap-2">
+              <Toggle
+                on={settings.perfLite}
+                onChange={(v) => store.patchSettings({ perfLite: v })}
+                label="低特效模式（关掉玻璃模糊与脉冲动效）"
+              />
+            </div>
+            <div className="text-[12px] leading-relaxed text-slate-500">
+              滚动时本来就会自动降特效（松手 0.14s 后恢复）。显卡弱、或走远程桌面/虚拟显示时静止画面也会卡，
+              就把这个打开：卡片变成纯色面板、状态点不再脉冲，省掉每帧重新模糊与每帧样式重算。
+            </div>
             <div className="flex gap-2">
               <button className="btn-ghost" onClick={() => store.clearBuffers()}>
                 <Trash2 size={13} /> 清空缓冲

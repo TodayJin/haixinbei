@@ -17,13 +17,26 @@
  *   6. 页面壳/提示条改 `useMeta()`，读数改 `useHotSelect()` 窄订阅，IMU 页拆成叶子组件。
  *      账本在 `hotpath.test.tsx`，纵轴/抽稀的单元测试在 `sparkline.test.ts`。
  *
- * 这里把这三条钉死：谁把 telem 又塞回 meta 快照、或把节流拆掉、或让泳道退回
- * 全通道拷贝，测试立刻红。真机上的帧率/CRC/延迟另有 `tools/console/tests/` 的
- * 字节级对拍与真板实测（见 memory/SESSIONS.md）。
+ * 2026-10-04（用户 m03559「我上下滚动就能感觉到这个画面是卡卡的」）再加三条：
+ *   7. 滚动期间自动降特效：`html.is-scrolling` 一挂，玻璃模糊 + 脉冲动效全关（`lib/fx.ts`
+ *      的 140ms 空闲摘类）。实测同一套 bundle、同样 2.5s 滚动：滚动期间强开模糊的合成器
+ *      总耗时 1296ms vs 关掉 263ms（每帧 2.17 → 0.54ms），主线程 styleN 也从"每帧一次"归零；
+ *   8. 灰度柱的高度**不再做 transition**（`transition-[height]` → `transition-colors`）：
+ *      20Hz 遥测不停重启 150ms 的布局属性过渡 ⇒ 过渡永远在跑 ⇒ 每帧重排（layoutN 650→51、
+ *      光栅化 8 倍、主线程 24%→14%）；
+ *   9. 设置页多一个「低特效模式」开关（`settings.perfLite`），给显卡弱/远程桌面的机器常开。
+ *
+ * 这里把这几条钉死：谁把 telem 又塞回 meta 快照、或把节流拆掉、或让泳道退回
+ * 全通道拷贝、或把柱高过渡/滚动降特效改回去，测试立刻红。真机上的帧率/CRC/延迟另有
+ * `tools/console/tests/` 的字节级对拍与真板实测（见 memory/SESSIONS.md）。
  */
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { store } from './store'
 import { CHANNELS } from './channels'
+import { LITE_CLASS, SCROLLING_CLASS, SCROLL_IDLE_MS } from './fx'
 import type { Telem } from './types'
 
 const T0 = 1_700_000_000_000
@@ -176,5 +189,33 @@ describe('遥测热路径的刷新成本（用户 m20705「感觉卡卡的」）
     // 越界要钳位，不能崩（波形页允许改通道索引）
     expect(ring.snapshotField(10_000, 999, now).count).toBe(40)
     expect(ring.snapshotField(10_000, -5, now).v[0]).toBe(all.v[0][0])
+  })
+})
+
+describe('滚动流畅度（用户 m03559「上下滚动卡卡的」）', () => {
+  const WEB = new URL('../../', import.meta.url)
+  const src = (p: string) => readFileSync(fileURLToPath(new URL(p, WEB)), 'utf8')
+
+  it('滚动时降特效的两条路还接在页面壳上（is-scrolling 与 perf-lite）', () => {
+    const shell = src('src/components/Shell.tsx')
+    expect(shell).toContain('installScrollFx(window, document)')
+    expect(shell).toContain('applyLiteFx(document.documentElement.classList, settings.perfLite)')
+    const css = src('src/index.css')
+    for (const sel of [`html.${SCROLLING_CLASS} header`, `html.${LITE_CLASS} header`, `html.${SCROLLING_CLASS} .glass`]) {
+      expect(css).toContain(sel)
+    }
+    // 去掉模糊后 header 必须**不透明**（半透明会透出底下的参数行：0.94 都看得见）
+    expect(css).toMatch(/html\.is-scrolling header,[\s\S]{0,80}background-color: rgb\(7 10 22\);/)
+    expect(css).not.toContain('rgb(7 10 22 / 0.94)')
+    expect(SCROLL_IDLE_MS).toBeGreaterThanOrEqual(80)
+    expect(SCROLL_IDLE_MS).toBeLessThanOrEqual(400)
+  })
+
+  it('灰度柱的高度不带 transition（布局属性过渡 = 每帧重排）', () => {
+    const ui = src('src/components/ui.tsx')
+    // 只抓 className 里的实际用法（文档注释里提到 transition-[height] 是允许的）
+    expect(ui).not.toMatch(/className=\{`[^`]*transition-\[(height|max-height)\]/)
+    // 两条柱状图都还在（别为了省事把组件删了）
+    expect(ui.match(/transition-colors duration-150/g)?.length ?? 0).toBeGreaterThanOrEqual(2)
   })
 })
