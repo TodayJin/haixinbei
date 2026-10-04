@@ -45,6 +45,7 @@ import {
   serializeTaskFile,
   setMain,
   stateChoices,
+  stateLabel,
   truncateNameUtf8,
   updateBlock,
   type Where,
@@ -168,6 +169,16 @@ describe('块摘要', () => {
     // 给了状态名，跳转目标就用名字说话（用户 m25776：光看编号看不懂要跳到哪儿）
     expect(describeBlock(blk(OP.GOTO, 1), 3, ['进门', '台阶2', '木刺'])).toContain('状态 1 台阶2');
     expect(stateChoices(1, 3, false, ['进门', '台阶2', '木刺'])[1].label).toBe('状态 1 台阶2');
+    // 用户 m26176：状态明明有名字，下拉里却只有编号 ⇒ 传了名字就必须带名字
+    const named = ['进门', '台阶2', '木刺']
+    for (const o of stateChoices(0, 3, false, named)) {
+      expect(o.label, `下拉项 ${o.value} 没带名字：${o.label}`).toContain(named[o.value])
+    }
+    // 名字是空的（用户自己没起）⇒ 直说「没名字」，别让人以为是界面漏了（编号后面到底有没有名字，一眼要能分清）
+    expect(stateLabel(0, ['', '台阶2'])).toBe('状态 0（没名字）')
+    expect(describeBlock(blk(OP.GOTO, 0), 2, ['', '台阶2'])).toContain('状态 0（没名字）')
+    // 不传名字的纯计算场合保持原样（老调用点/老测试）
+    expect(stateLabel(0)).toBe('状态 0')
   });
 
   it('界面文案里不许出现固件内部名字（用户 m25776 就是被这些看不懂才要求重写）', () => {

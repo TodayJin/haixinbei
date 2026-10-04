@@ -122,7 +122,7 @@ export function validateTask(p: TaskProgram): ValidateResult {
 
   if (p.states.length === 0) errors.push('至少要有一个状态');
   if (p.states.length > TASK_MAX_STATES) errors.push(`状态数不能超过 ${TASK_MAX_STATES}`);
-  if (!(p.main >= 0 && p.main < p.states.length)) errors.push('主页状态号越界');
+  if (!(p.main >= 0 && p.main < p.states.length)) errors.push(`主页状态号越界（${p.main}，有效范围 0~${p.states.length - 1}）`);
 
   p.states.forEach((st, i) => {
     const tag = `状态 ${i}${st.name ? `「${st.name}」` : ''}`;
@@ -136,19 +136,20 @@ export function validateTask(p: TaskProgram): ValidateResult {
       errors.push(`${tag}：body 最后一块必须是「跳到状态 / 结束 / 带超时跳转的等待」`);
     }
     /* enter 序列是可选的（很多状态进门什么都不用做），故意不告警，免得噪声盖住真问题 */
-    if (!st.name) warnings.push(`${tag}：没有名字，监视时只能看编号`);
+    if (!st.name) warnings.push(`${tag}：没有名字，界面和监视里只能看编号`);
   });
 
   p.states.forEach((st, i) => {
+    const tag = `状态 ${i}${st.name ? `「${st.name}」` : ''}`;
     [...st.enter, ...st.body].forEach((b) => {
       if (b.op === OP.GOTO && !(b.p0 < p.states.length)) {
-        errors.push(`状态 ${i}：跳到状态 ${b.p0}，但没有这个状态`);
+        errors.push(`${tag}：跳到状态 ${b.p0}，但没有这个状态`);
       }
       if (b.op === OP.WAIT_COND && b.p3 !== NO_STATE && !(b.p3 < p.states.length)) {
-        errors.push(`状态 ${i}：超时改道到状态 ${b.p3}，但没有这个状态`);
+        errors.push(`${tag}：超时改道到状态 ${b.p3}，但没有这个状态`);
       }
       if (b.op === OP.SET_MODE && b.p0 === MODE.WHEELS && (b.p1 > 7200 || b.p2 > 7200)) {
-        errors.push(`状态 ${i}：两轮速度超出 ±7200`);
+        errors.push(`${tag}：两轮速度超出 ±7200`);
       }
     });
   });

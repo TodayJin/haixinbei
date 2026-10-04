@@ -206,10 +206,14 @@ export function modeChoices(cur: number): Choice[] {
   return [...MODE_OPTIONS, ...MODE_LEGACY.filter((m) => m.value === cur)]
 }
 
-/** 状态的显示名：`状态 3 台阶2`（任务里给状态起的名字）。没有名字就只写编号。 */
-function stateLabel(i: number, names?: string[]): string {
-  const n = names?.[i]
-  return n ? `状态 ${i} ${n}` : `状态 ${i}`
+/** 状态的显示名：`状态 3 台阶2`（任务里给状态起的名字）。
+ *  传了 names（界面上永远传）但那个状态还没起名字时，写成 `状态 3（没名字）` ——
+ *  光一个编号，用户既不知道跳到哪儿，也看不出"是我没起名字"还是"界面没显示"。
+ *  不传 names（纯计算/老测试）就只写编号。 */
+export function stateLabel(i: number, names?: string[]): string {
+  if (!names) return `状态 ${i}`
+  const n = (names[i] ?? '').trim()
+  return n ? `状态 ${i} ${n}` : `状态 ${i}（没名字）`
 }
 
 /** 「目标状态」下拉要显示的项：真实状态 0..stateCount-1；allowContinue（只有「等条件」的"超时后"）再加一条

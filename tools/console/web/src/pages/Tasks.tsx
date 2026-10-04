@@ -51,6 +51,7 @@ import {
   serializeTaskFile,
   setMain,
   stateChoices,
+  stateLabel,
   duplicateBlock,
   updateBlock,
   type FieldSpec,
@@ -358,7 +359,7 @@ function StateCard({
   return (
     <div className={`rounded-xl border p-2.5 ${live ? 'border-neon-mint/50 bg-neon-mint/5' : sel ? 'border-neon-cyan/40 bg-white/[0.02]' : 'border-white/10'}`} onMouseDown={onSelect}>
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="num text-[11px] text-slate-500">状态 {i}</span>
+        <span className="num text-[11px] text-slate-500" data-own-state="1" title={st.name ? `这个状态叫「${st.name}」，右边可以改` : '这个状态还没起名字，右边填一个'}>状态 {i}</span>
         <input
           className="field h-7 min-w-[140px] flex-1 text-[12px]"
           value={st.name}
@@ -483,6 +484,8 @@ export function TasksPage() {
   const info = compileInfo(prog)
   const bytes = encodeTask(prog).bytes
   const activeState = Math.min(selState, prog.states.length - 1)
+  /** 界面上凡是"提到某个状态"的地方都要带上名字（光编号没法看），统一从这里取 */
+  const stateNames = prog.states.map((s) => s.name)
 
   const updTask = (t: TaskDef) => setFile((f) => ({ ...f, tasks: f.tasks.map((x) => (x === task ? t : x)) }))
   const upd = (fn: (p: TaskProgram) => TaskProgram) => updTask({ ...task, prog: fn(task.prog) })
@@ -812,13 +815,13 @@ export function TasksPage() {
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             <Stat label="镜像长度" value={String(info.len)} unit="B" hint={`车上程序区 6 KB 里占 ${info.budgetPct}%`} />
             <Stat label="校验和" value={`0x${info.crc16.toString(16).toUpperCase().padStart(4, '0')}`} hint="从头 12 字节之后算起，烧完和车上回读的对比" />
-            <Stat label="状态 / 块" value={`${prog.states.length} / ${blockCount(prog)}`} hint={`主页 = 状态 ${prog.main}`} />
+            <Stat label="状态 / 块" value={`${prog.states.length} / ${blockCount(prog)}`} hint={`主页（任务从这里开始）= ${stateLabel(prog.main, stateNames)}`} />
             <Stat label="任务编号" value={`#${task.id}`} hint="车上的槽位号，0~7" />
           </div>
 
           {status?.running && (
             <div className="mt-2 rounded-lg bg-neon-mint/10 p-2 text-[11px] text-neon-mint">
-              正在跑：任务 #{status.id} · 状态 {status.state} · 第 {status.block} 块 · 已跑 {status.elapsedMs} ms
+              正在跑：任务 #{status.id} · {stateLabel(status.state, stateNames)} · 第 {status.block} 块 · 已跑 {status.elapsedMs} ms
               <span className="text-neon-amber">　跑着的时候车上拒收「烧写到车」和「删除」——先按「停车」。</span>
             </div>
           )}
@@ -886,7 +889,7 @@ export function TasksPage() {
                 key={i}
                 onClick={() => setSelState(i)}
                 onDragOver={() => setSelState(i)}
-                title={prog.main === i ? '任务启动时从这个状态开始' : `状态 ${i}`}
+                title={prog.main === i ? `任务启动时从这个状态开始（${stateLabel(i, stateNames)}）` : stateLabel(i, stateNames)}
                 className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] ${
                   activeState === i ? 'border-neon-cyan/50 bg-neon-cyan/10 text-neon-cyan' : 'border-white/10 text-slate-400 hover:border-neon-cyan/30'
                 }`}
@@ -920,7 +923,7 @@ export function TasksPage() {
 
       {/* 右：块库 */}
       <div className="grid content-start gap-3">
-        <Card title="块库" right={<span className="text-[10px] text-slate-600">拖到左边，或点一下加到状态 {activeState}</span>}>
+        <Card title="块库" right={<span className="text-[10px] text-slate-600">拖到左边，或点一下加到 {stateLabel(activeState, stateNames)}</span>}>
           {PALETTE_GROUPS.map((g) => (
             <div key={g} className="mb-2">
               <div className="mb-1 text-[10px] uppercase tracking-wider text-slate-500">{g}</div>
