@@ -125,6 +125,20 @@ export function createTaskApi(fetchImpl: Fetcher) {
     return { ok: true, data: env as T }
   }
 
+  const del = (id: number) => call<unknown>('/api/tasks/delete', { method: 'POST', body: { id } })
+  const stop = () => call<unknown>('/api/tasks/stop', { method: 'POST', body: {} })
+
+  /** 删车上的任务：跑着的任务固件对 DELETE 一律回「忙」（firmware/App/Svc/host_link.c:999），
+   *  所以第一次失败就停车再删一次。`stopped` 告诉调用方中间停过车（好写提示文案）。
+   *  单独放这里而不是塞进页面，是为了让 taskapi.test.ts 能把这段顺序钉死。 */
+  const delWithStop = async (id: number): Promise<{ result: Result<unknown>; stopped: boolean }> => {
+    const first = await del(id)
+    if (first.ok) return { result: first, stopped: false }
+    const s = await stop()
+    if (!s.ok) return { result: first, stopped: false }
+    return { result: await del(id), stopped: true }
+  }
+
   return {
     /** 车上现在有哪些任务（顺带回能力位） */
     list: async (): Promise<Result<{ supported: boolean; items: RemoteTaskInfo[] }>> => {
@@ -150,11 +164,13 @@ export function createTaskApi(fetchImpl: Fetcher) {
     commit: (id: number, len: number, crc: number, name?: string, flags?: number) =>
       call<unknown>('/api/tasks/commit', { method: 'POST', body: { id, len, crc, name, flags } }),
 
-    del: (id: number) => call<unknown>('/api/tasks/delete', { method: 'POST', body: { id } }),
+    del,
 
     run: (id: number) => call<unknown>('/api/tasks/run', { method: 'POST', body: { id } }),
 
-    stop: () => call<unknown>('/api/tasks/stop', { method: 'POST', body: {} }),
+    stop,
+
+    delWithStop,
 
     status: async (): Promise<Result<TaskStatus | null>> => {
       type Raw = Partial<TaskStatus> & { elapsed_ms?: number }

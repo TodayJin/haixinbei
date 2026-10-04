@@ -173,3 +173,43 @@ describe('烧写流程', () => {
     expect(calls[2].body).toEqual({ id: 1 });
   });
 });
+
+/**
+ * 「删不掉」是用户真实撞过的坑：开机自启的任务跑着时，固件对 DELETE 回 status 7（忙），
+ * 页面只弹一句「被车拒绝：忙」，车就一直自己跑。delWithStop 必须把这段顺序做对。
+ */
+describe('删任务：跑着就先停车', () => {
+  it('第一次被拒（忙）→ 停车 → 再删成功', async () => {
+    const { calls, fn } = fakeFetch([
+      { status: 200, json: { ok: false, error: '删除任务被车拒绝：忙（status=7）' } },
+      { status: 200, json: { ok: true, status: 0, status_name: 'OK' } },
+      { status: 200, json: { ok: true, status: 0, status_name: 'OK' } },
+    ]);
+    const r = await createTaskApi(fn).delWithStop(6);
+    expect(r.stopped).toBe(true);
+    expect(r.result.ok).toBe(true);
+    expect(calls.map((c) => c.url)).toEqual(['/api/tasks/delete', '/api/tasks/stop', '/api/tasks/delete']);
+    expect(calls[0].body).toEqual({ id: 6 });
+    expect(calls[1].body).toEqual({});
+    expect(calls[2].body).toEqual({ id: 6 });
+  });
+
+  it('一次就删掉时不去碰停车', async () => {
+    const { calls, fn } = fakeFetch([{ json: { ok: true } }]);
+    const r = await createTaskApi(fn).delWithStop(0);
+    expect(r).toMatchObject({ stopped: false });
+    expect(calls.map((c) => c.url)).toEqual(['/api/tasks/delete']);
+  });
+
+  it('停车也失败时不再硬删一次，把原错误带回去', async () => {
+    const { calls, fn } = fakeFetch([
+      { status: 200, json: { ok: false, error: '删除任务被车拒绝：忙（status=7）' } },
+      { status: 200, json: { ok: false, error: '停止任务没人应答：超时' } },
+    ]);
+    const r = await createTaskApi(fn).delWithStop(6);
+    expect(r.stopped).toBe(false);
+    expect(r.result.ok).toBe(false);
+    if (!r.result.ok) expect(r.result.error).toContain('忙');
+    expect(calls.map((c) => c.url)).toEqual(['/api/tasks/delete', '/api/tasks/stop']);
+  });
+});

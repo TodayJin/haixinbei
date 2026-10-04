@@ -403,20 +403,23 @@ export function TasksPage() {
     writeStored(serializeTaskFile(file))
   }, [file])
 
+  /* 页面一开着就持续问车上在跑什么（不只在「监视」打开时）：开机自启的任务会在上电后
+     自己跑起来，而跑着的时候固件对 COMMIT / DELETE 一律回「忙」
+     （firmware/App/Svc/host_link.c:967,999），所以页面上必须看得见「正在跑」，
+     否则用户只拿到一句「被车拒绝：忙」，不知道怎么把车救回来。 */
   React.useEffect(() => {
-    if (!monitor) return
     let alive = true
     const tick = async () => {
       const r = await taskApi.status()
       if (!alive) return
       if (r.ok) setStatus(r.data)
-      else {
+      else if (monitor) {
         setMonitor(false)
         store.toast('err', r.error)
       }
     }
     void tick()
-    const id = window.setInterval(() => void tick(), 500)
+    const id = window.setInterval(() => void tick(), 1000)
     return () => {
       alive = false
       window.clearInterval(id)
@@ -445,19 +448,27 @@ export function TasksPage() {
   const updTask = (t: TaskDef) => setFile((f) => ({ ...f, tasks: f.tasks.map((x) => (x === task ? t : x)) }))
   const upd = (fn: (p: TaskProgram) => TaskProgram) => updTask({ ...task, prog: fn(task.prog) })
 
-  const refreshRemote = async () => {
+  const refreshRemote = async (silent = false) => {
     setBusy('读目录')
     const r = await taskApi.list()
     setBusy('')
     if (!r.ok) {
       setRemote({ supported: r.supported, items: [] })
-      if (r.supported) store.toast('err', r.error)
-      else store.toast('info', '桥/固件还没支持任务功能 —— 编辑照常，烧写等固件')
+      if (!silent) {
+        if (r.supported) store.toast('err', r.error)
+        else store.toast('info', '桥/固件还没支持任务功能 —— 编辑照常，烧写等固件')
+      }
       return
     }
     setRemote(r.data)
-    store.toast('ok', `车上 ${r.data.items.length} 个任务`)
+    if (!silent) store.toast('ok', `车上 ${r.data.items.length} 个任务`)
   }
+
+  /* 一进「任务」页就把车上的目录读出来：车上有没有任务、是不是开机自启，不该等用户想起来
+     点一下「读目录」才知道 —— 今天就是有人被一个自己会跑的任务困住。只读，失败也别弹错。 */
+  React.useEffect(() => {
+    void refreshRemote(true)
+  }, [])
 
   const doBurn = async () => {
     if (info.errors.length) {
@@ -465,6 +476,16 @@ export function TasksPage() {
       return
     }
     setBusy('烧写')
+    if (status?.running) {
+      // 解释器跑着时固件对 COMMIT 回「忙」——先停车再烧，别让用户对着红字发呆
+      const s = await taskApi.stop()
+      if (!s.ok) {
+        setBusy('')
+        store.toast('err', `车上有任务在跑（#${status.id}），先停车又失败：${s.error}`)
+        return
+      }
+      store.toast('info', `车上有任务在跑（#${status.id}），已先停车再烧写`)
+    }
     const r = await taskApi.burn(task.id, bytes, info.len, info.crc16, task.name, autoRun ? 1 : 0)
     if (!r.ok) {
       setBusy('')
@@ -485,6 +506,16 @@ export function TasksPage() {
 
   const doRun = async () => {
     setBusy('启动')
+    if (status?.running && status.id !== task.id) {
+      // 车上一次只许一个任务占着电机，换任务跑得先停车（host_link.c:1013）
+      const s = await taskApi.stop()
+      if (!s.ok) {
+        setBusy('')
+        store.toast('err', `车上 #${status.id} 在跑，先停车又失败：${s.error}`)
+        return
+      }
+      store.toast('info', `已先停掉正在跑的 #${status.id}`)
+    }
     const r = await taskApi.run(task.id)
     setBusy('')
     if (r.ok) {
@@ -526,6 +557,19 @@ export function TasksPage() {
     store.toast('ok', `车上任务 ${rt.id} 已经读进编辑器`)
   }
 
+  /** 删车上的任务。跑着的任务固件会回「忙」（firmware/App/Svc/host_link.c:999），
+      taskApi.delWithStop() 会自己先停车再删 —— 用户不该被一个自己会跑的任务困住、删都删不掉。 */
+  const delRemote = async (rt: RemoteTaskInfo) => {
+    setBusy('删除')
+    const { result, stopped } = await taskApi.delWithStop(rt.id)
+    setBusy('')
+    if (result.ok) {
+      store.toast('ok', `车上任务 ${rt.id} 已删${stopped ? '（它正在跑，已先停车）' : ''}`)
+      setMonitor(false)
+      void refreshRemote()
+    } else store.toast('err', result.error)
+  }
+
   const onDrop = (at: Where, d: ReturnType<typeof decodeDrag>) => {
     setDropAt(null)
     if (!d) return
@@ -540,7 +584,7 @@ export function TasksPage() {
     setOpen(target)
   }
 
-  const cur = monitor && status ? { state: status.state, block: status.block } : null
+  const cur = status?.running ? { state: status.state, block: status.block } : null
   const supported = remote?.supported ?? true
 
   return (
@@ -683,6 +727,12 @@ export function TasksPage() {
             </div>
           )}
           {remote && remote.supported && remote.items.length === 0 && <div className="text-[12px] text-slate-500">车上一个任务都没有。</div>}
+          {remote?.items.some((it) => (it.flags & 1) !== 0) && (
+            <div className="mb-1 rounded-lg bg-neon-amber/10 p-2 text-[11px] leading-relaxed text-neon-amber">
+              车上有「开机自启」的任务：一上电它自己就跑。要取消就关掉「开机自启」再烧写一次，
+              或者直接删（跑着的话会自动先停车）。
+            </div>
+          )}
           {remote?.items.map((it) => (
             <div key={it.id} className="mb-1 flex items-center gap-1.5 rounded-lg border border-white/10 px-2 py-1">
               <span className="num text-[10px] text-slate-500">#{it.id}</span>
@@ -694,14 +744,9 @@ export function TasksPage() {
               </button>
               <button
                 className="text-[11px] text-slate-500 hover:text-neon-rose"
-                title="从车上删掉"
-                onClick={async () => {
-                  const r = await taskApi.del(it.id)
-                  if (r.ok) {
-                    store.toast('ok', `车上任务 ${it.id} 已删`)
-                    void refreshRemote()
-                  } else store.toast('err', r.error)
-                }}
+                title="从车上删掉（跑着的话会自动先停车）"
+                disabled={!!busy}
+                onClick={() => void delRemote(it)}
               >
                 <Trash2 size={12} />
               </button>
@@ -725,7 +770,12 @@ export function TasksPage() {
               <button className="btn-ghost !px-2 !py-0.5 text-[11px]" onClick={() => void doStop()} disabled={!!busy || !supported}>
                 <Square size={12} /> 停车
               </button>
-              <Toggle on={autoRun} onChange={setAutoRun} disabled={!supported} label={<span className="text-[11px]" title="烧写时下发 flags.bit0：车上开机自己跑这个任务，不用电脑点「开始」">开机自启</span>} />
+              <Toggle on={autoRun} onChange={setAutoRun} disabled={!supported} label={<span className="text-[11px]" title="烧写时下发 flags.bit0：车一上电就自己跑这个任务，不用电脑点「开始」。桌面试车请关掉——跑着的任务固件会拒收「烧写到车」和「删除」（回「忙」）">开机自启</span>} />
+              {autoRun && (
+                <span className="rounded bg-neon-amber/15 px-1.5 py-0.5 text-[10px] text-neon-amber" title="烧写后车一上电就自己跑；要取消就关掉这个开关再烧一次">
+                  上电即跑
+                </span>
+              )}
               <Toggle on={monitor} onChange={setMonitor} label={<span className="text-[11px]">监视</span>} disabled={!supported} />
             </div>
           }
@@ -737,10 +787,11 @@ export function TasksPage() {
             <Stat label="任务编号" value={`#${task.id}`} hint="车上的槽位号，0~7" />
           </div>
 
-          {status && monitor && (
+          {status?.running && (
             <div className="mt-2 rounded-lg bg-neon-mint/10 p-2 text-[11px] text-neon-mint">
               正在跑：任务 #{status.id} · 状态 {status.state} · 第 {status.block} 块 · 已跑 {status.elapsedMs} ms
-              {status.flags ? ` · 开机自启 开` : ''}
+              {status.flags ? ' · 开机自启 开' : ''}
+              <span className="text-neon-amber">　跑着的时候车上拒收「烧写到车」和「删除」——先按「停车」。</span>
             </div>
           )}
 
