@@ -4,6 +4,7 @@ import { store, useStore } from '../lib/store'
 import { Badge, Card, GrayArray, Stat, StatusDot } from '../components/ui'
 import { MiniTrend } from '../components/Trend'
 import { fmt, fmtClock, fmtInt, fmtUptime, pwmToPct } from '../lib/format'
+import { batteryPct } from '../lib/battery'
 import { MODE_TEXT, NVRAM_TEXT, taskText, type Telem } from '../lib/types'
 
 function Flags({ t }: { t: Telem | null }) {
@@ -98,9 +99,9 @@ export function OverviewPage() {
           <Stat
             label="电池 / 电流"
             value={`${fmt(t ? t.vbat_mv / 1000 : NaN, 2)}`}
-            unit={`V · ${fmtInt(t?.ibat_ma)}mA`}
-            tone={(t?.vbat_mv ?? 99999) < 10500 ? 'rose' : 'mint'}
-            title="V = 伏（电池电压，12V 电池低于 10.5V 就该充了）；mA = 毫安（千分之一安，电流）"
+            unit={t ? `V · ${batteryPct(t.vbat_mv) ?? '--'}% · ${fmtInt(t.ibat_ma)}mA` : 'V · mA'}
+            tone={(batteryPct(t?.vbat_mv) ?? 100) < 20 ? 'rose' : 'mint'}
+            title="V = 伏（电池电压）；% = 剩余电量（3S 锂电电压表：≥12.2V 记 100%，9.0V 记 0%；带载时读数偏低，所以显示只会偏小）；mA = 毫安（千分之一安，电流）"
           />
           <Stat label="模式" value={MODE_TEXT[t?.mode ?? 0] ?? '--'} hint={taskText(t?.task_id)} />
           <Stat label="主循环" value={fmtInt(t?.loop_us)} unit="µs" tone={(t?.loop_us ?? 0) > 20000 ? 'amber' : 'slate'} />

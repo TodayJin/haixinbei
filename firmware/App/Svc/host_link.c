@@ -696,13 +696,29 @@ static void task_tx_poll(void)
   }
 }
 
+/* 变化判据**刻意跳过 elapsed_ms**（载荷里第 6..9 字节）：它在跑的时候每毫秒都在变，
+ * 整帧 memcmp 会把"变了就推"退化成"每一拍都推"。2026-10-04 真车实测（任务自启在跑）：
+ * 链路被灌到 338 帧/s（遥测 100 + status 约 240），230400 的全部带宽被吃满，
+ * 桥侧 8 秒丢 1904 帧、SSE 341 事件/s 里 1922 个是 task。现在 id/state/running/
+ * block/flags 一变才推，elapsed 靠 1Hz 心跳刷新（上位机本来就是 1Hz 看进度）。 */
+static uint8_t status_changed(const uint8_t *a, const uint8_t *b)
+{
+  uint8_t i;
+
+  for (i = 0u; i < TASK_STATUS_LEN; i++) {
+    if (i >= 6u && i <= 9u) continue;          /* elapsed_ms：不参与判变化 */
+    if (a[i] != b[i]) return 1u;
+  }
+  return 0u;
+}
+
 /* 状态推送：内容一变就推，没变 1Hz 心跳 */
 static void task_status_poll(uint32_t now_ms)
 {
   uint8_t st[TASK_STATUS_LEN];
 
   pack_task_status(st);
-  if (s_status_seen == 0u || memcmp(st, s_status_last, TASK_STATUS_LEN) != 0 ||
+  if (s_status_seen == 0u || status_changed(st, s_status_last) != 0u ||
       (uint32_t)(now_ms - s_status_ms) >= 1000u) {
     memcpy(s_status_last, st, TASK_STATUS_LEN);
     s_status_seen = 1u;
