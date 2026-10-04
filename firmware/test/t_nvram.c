@@ -79,7 +79,7 @@ int Servo_SetActionPose(int x, int a1, int a2)
     return 1;
 }
 
-/* 参数表替身：只放 nvram 快照用到的 13 个 v5 标定量，其余 id 走兜底 */
+/* 参数表替身：只放 nvram 快照用到的 14 个 v5/v6 标定量，其余 id 走兜底 */
 typedef struct { uint16_t id; float def; float val; } pslot_t;
 
 static pslot_t s_ps[] = {
@@ -96,6 +96,7 @@ static pslot_t s_ps[] = {
     { .id = HP_PIVOT_KP,              .def = 900.0f  },
     { .id = HP_PIVOT_KI,              .def =   0.0f  },
     { .id = HP_PIVOT_KD,              .def =  60.0f  },
+    { .id = HP_GYRO_CORR_REF,         .def = 2100.0f },   /* v6 */
 };
 
 #define PS_N ((int)(sizeof(s_ps) / sizeof(s_ps[0])))
@@ -158,6 +159,22 @@ static void power_off(void)
 }
 
 static void pose_set(int act, int a1, int a2) { (void)Servo_SetActionPose(act, a1, a2); }
+
+/* 与 nvram.c 里那份 static crc32 同一个算法（poly 0xEDB88320、末尾取反）：
+ * 测试里要手改记录（改 version/length）就得自己把校验重算回来。 */
+static uint32_t t_crc32(const uint8_t *p, uint32_t n)
+{
+    uint32_t crc = 0xFFFFFFFFUL;
+    uint32_t i;
+
+    while (n-- != 0U) {
+        crc ^= (uint32_t)(*p++);
+        for (i = 0U; i < 8U; i++) {
+            crc = (crc >> 1) ^ (0xEDB88320UL & (uint32_t)(-(int32_t)(crc & 1U)));
+        }
+    }
+    return ~crc;
+}
 
 static int near(float a, float b) { return fabsf(a - b) < 1.0e-3f; }
 
@@ -321,9 +338,47 @@ int main(void)
 
         /* 版本号越界也算坏记录 */
         pg[REC_HDR + 5] ^= 0xFFu;      /* 先还原 */
-        pg[4] = 9u;                    /* version = 9 > 5 */
+        pg[4] = 9u;                    /* version = 9 > NVRAM_VERSION(6) */
         nvram_init();
         CHECK_EQ_I(nvram_loaded(), 0);
+    }
+
+    /* ---------- ⑦ 老版本(v5)记录升级：新加的 gyro_corr_ref 不许被打回 0 ----------
+     * v6 在 payload 末尾追加了 gyro_corr_ref（差速随速放大参考）。老记录的 length
+     * 比现在短 8 字节 ⇒ 走 nvram_init() 里"先按当前值 snapshot、再 memcpy 前缀"那一支：
+     * 记录里有的字段原样保留，记录里没有的新字段保持参数表当前值（出厂 3000）。
+     * 这里把页里那条记录改扮成 v5 再读回来验证这条路径 —— 要是哪天有人把新字段塞进
+     * 老的 pad 区（pad 是 0），升级后放大就被静默关成 0，用户满速又转不动了。 */
+    {
+        uint8_t *pg = host_flash_page(63);
+        uint16_t cur_len = (uint16_t)((uint16_t)pg[6] | ((uint16_t)pg[7] << 8));
+        uint16_t v5_len  = (uint16_t)(cur_len - 8U);
+        uint32_t c;
+
+        pg[4] = 5u;                                    /* version = 5 (< NVRAM_VERSION) */
+        pg[5] = 0u;
+        pg[6] = (uint8_t)(v5_len & 0xFFu);
+        pg[7] = (uint8_t)((v5_len >> 8) & 0xFFu);
+        c = t_crc32(&pg[REC_HDR], v5_len);
+        pg[8]  = (uint8_t)(c & 0xFFu);
+        pg[9]  = (uint8_t)((c >> 8) & 0xFFu);
+        pg[10] = (uint8_t)((c >> 16) & 0xFFu);
+        pg[11] = (uint8_t)((c >> 24) & 0xFFu);
+
+        /* 同一份短 length 如果标成 v6：长度和结构对不上 -> 必须判坏。
+         * （这正是"往 payload 末尾加字段就必须升 NVRAM_VERSION"的原因） */
+        pg[4] = 6u;
+        power_off();
+        nvram_init();
+        CHECK_EQ_I(nvram_loaded(), 0);
+
+        /* 改回 v5：老记录，前缀读。参数表里先放一个可辨认的当前值 */
+        pg[4] = 5u;
+        host_param_set_local(HP_GYRO_CORR_REF, 9999.0f);
+        nvram_init();
+        CHECK_EQ_I(nvram_loaded(), 1);
+        CHECK_EQ_I(s_settings_loaded_calls, 1);        /* 确实 apply() 进去了 */
+        CHECK(near(host_param_get(HP_GYRO_CORR_REF, -1.0f), 9999.0f));
     }
 
     return T_SUMMARY();

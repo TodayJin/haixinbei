@@ -126,7 +126,7 @@
 | POST | `/api/tasks/stop` | `{}` | `{"ok":true}` |
 | GET | `/api/tasks/status` | — | `{"ok":true,"status":{"id","state","running","block","elapsed_ms","flags"}}` |
 
-- 失败体一律 `{"ok":false,"error":"…"}`；**语义性失败（车拒收/没人应答）也是 HTTP 200 + `ok:false`**，只有参数不合法才回 400。
+- 失败体一律 `{"ok":false,"error":"…"}`；**语义性失败（车拒收/没人应答）也是 HTTP 200 + `ok:false`**，只有参数不合法才回 400。`error` 必须是人话，**不许只丢一个状态码**：2026-10-04 用户 m24215 报的「每次操控弹一个后端报错，什么 HTTP002。200」就是 `send_wait` 失败时不补 `error`、前端兜底把 HTTP 状态码当成了错误信息。现在 `bridge/state.py` 的 `send_wait` 会按情形补「车上没应答（等 Ns 超时）/ 车上没回确认帧（收到 N 帧都不是 ACK）/ 车上拒绝了：<name>」并记一条 warn 日志，驾驶被拒还说明下一步（「任务正在跑…先去任务页停掉」）。
 - `crc` 是 `T_TASK_COMMIT` 里那个 CRC16-CCITT（覆盖镜像 `[12,len)`），前端算好一起发；车上回读后前端会再比一次字节（这一层在页面里，桥只发一次 COMMIT）。
 - `status` 允许平铺（`{"ok":true,"id":…}`）也允许嵌在 `status` 里，两种都认；`running` 线上是 `u8` 1/0，前端 `taskapi.normalizeStatus()` 归一成布尔，`elapsed_ms` 与 `elapsedMs` 两种拼写都接受。
 - **假后端 `web/mock/server.mjs` 已经按本表实现了一遍**（内存里的假 Flash：`put` 收分片、`commit` 查 magic/版本/状态数/**CRC 必须对**、`get` 回整镜像、
@@ -189,7 +189,7 @@
 
 - 技术栈：**Vite + React 18 + TypeScript + Tailwind CSS 3.4 + uPlot**（图标用 `lucide-react`，其余不引入 UI 库）。禁止 Qt/tkinter/electron。
 - 语言：界面中文；数字用等宽字体（`tabular-nums`）。
-- 设计：深色优先（`#0b1020` 级背景）、玻璃拟态卡片（`bg-white/5 + backdrop-blur + ring-1 ring-white/10`）、圆角 16px、青/紫霓虹强调色、切换 150ms 过渡、状态点脉冲动效；桌面三栏自适应，窄屏折叠侧栏。
+- 设计：深色优先（`#0b1020` 级背景）、**默认低特效分层主题**（`html.perf-lite`，设置页开关「低特效模式（默认开）」）：面板不透明、靠亮度分层（侧栏 `#0d1428` < 顶栏 `#121a33` < 卡片 `#141d3d` + 顶部高光 + 1px 亮边），**不许把面板刷成纯黑/`#070a16`**（用户 m24215：文字后面一片纯黑不好看）；关掉开关回到玻璃拟态卡片（`bg-white/5 + backdrop-blur + ring-1 ring-white/10`）+ 状态点脉冲。滚动期间（`html.is-scrolling`，见 `web/src/lib/fx.ts`，松手 0.14s 摘掉）**无论开关如何都临时停掉模糊与脉冲**（每帧重糊 / 每帧全文档样式重算是实测的卡顿根因）。圆角 16px、青/紫霓虹强调色、切换 150ms 过渡；桌面三栏自适应，窄屏折叠侧栏。
 - 页面：**总览 / 操控 / IMU / 传感器 / 舵机与动作 / 调参 / 任务 / 波形 / 控制与日志 / 设置**（10 个）。
 - 操控页：键盘 **W/S = 前进/后退、A/D = 左/右转**（方向键同义），可组合（W+A = 边走边左转），A+D 或 W+S 相互抵消；空格的优先级最高 = 急停交还车上任务流程。所有键松开 ⇒ `{mode:"off"}`。前端只在指令变化时 POST 一次 `/api/drive`，之后靠桥的 200 ms 驾驶保活喂车上的 500 ms 看门狗。
 - 操控页的速度滑块给的是**速度刻度 0..`PWM_MAX`(7200)**（不是 mm/s —— 固件 `SpeedControl_SetTarget()` 吃的就是这个刻度；7200 = 满量程 ≈ 516 mm/s）。刻度 `DEAD_SCALE`(1000) 以下轮上 PWM 不到 3000，实测是静摩擦死区（速度环靠积分顶要好几秒），所以设置里默认开「跳过静摩擦死区」（滑块从 1000 起步，`driveSkipDead`）。

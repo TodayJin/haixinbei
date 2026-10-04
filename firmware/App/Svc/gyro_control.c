@@ -45,6 +45,22 @@ static uint8_t gyro_control_enabled = 0;
  * 台架可 SWD 改（不用重烧）：s_corr_limit。 */
 volatile float s_corr_limit = 2000.0f;
 
+/* 差速天花板随基准速度放大的参考刻度（2026-10-04，用户 m24215）。
+ *
+ * 为什么：修正量（= 左右轮差速）的上限 s_corr_limit 是**绝对刻度**，而基准速度能到
+ * MOTOR_PWM_MAX(7200) ⇒ 满速时差速只占基准的 2000/7200 = 28%（基准 3000 时是 67%）。
+ * 偏航角速度 ω ≈ Δv/轮距 只由 Δ 决定，所以缓慢速度与满速能达到的 ω 上限一样（≈63°/s），
+ * 但转弯半径 R = v/ω 随速度线性变大（基准 3000 ≈ 0.2m → 7200 ≈ 0.47m）。
+ * 用户的原话就是"速度拉满，按前进+左转就转不动了"——不是算错了差值，是天花板没跟着涨。
+ *
+ * 做法：上限按基准速度线性放大
+ *     cap = s_corr_limit × max(1, |base| / s_corr_ref)      再夹到 ±MOTOR_PWM_MAX
+ * 基准 ≤ s_corr_ref 时 max() 取 1 ⇒ 与旧行为**逐位一致**：原地转（base=0）不受影响，
+ * 小误差贴上去时仍是 2000 的温柔刹车，台架调好的收尾/锁存特性一点没换。
+ * s_corr_ref = 0 ⇒ 关闭放大，完全退回旧行为（台架 A/B 对照用）。
+ * 默认 3000 = 台架那套标定参数的工作点。 */
+volatile float s_corr_ref = 3000.0f;
+
 /* ------------------------------------------------------------------
  * 双环滑模（2026-10-01 台架内窥实测后重写，替换掉"起转脉冲"那一版）
  *
@@ -429,11 +445,37 @@ void GyroControl_SetBaseSpeed(int left, int right)
 }
 
 /**
+ * @brief 本拍生效的修正量（差速）上限：`s_corr_limit` 按基准速度放大（见 s_corr_ref 的注释）
+ *
+ * 单独做成函数是为了主机侧单元测试能直接断言这条曲线（firmware/test/t_gyrotest.c），
+ * 不必去反推某一拍的控制输出。非负、夹到 MOTOR_PWM_MAX；参数被写坏成 NaN 时退回 0。
+ */
+float GyroControl_CorrLimit(void)
+{
+    float cap = gyro_sane(s_corr_limit);
+    float ref = gyro_sane(s_corr_ref);
+    int   b   = base_speed_left;
+    int   b2  = base_speed_right;
+
+    if (!(cap == cap)) cap = 0.0f;           /* NaN 兜底（gyro_sane 已经挡了一层） */
+    /* 负限幅按**绝对值**用：旧的夹限幅写法是两个 if（`>lim` 和 `< -lim`），
+     * lim 为负时它们的效果就是 |lim|。这里保持这个语义，行为才真的逐位不变。 */
+    if (cap < 0.0f) cap = -cap;
+    if (b  < 0) b  = -b;
+    if (b2 < 0) b2 = -b2;
+    if (b2 > b) b = b2;                      /* 两轮基准里取大的那个 */
+    if (ref > 1.0f && (float)b > ref) cap *= (float)b / ref;
+    if (cap > (float)MOTOR_PWM_MAX) cap = (float)MOTOR_PWM_MAX;
+    return cap;
+}
+
+/**
  * @brief 角度环任务（TIM6 5ms 一拍，由 Motion_Task 调用）
  */
 void GyroControl_Task(void)
 {
     float actual_angle, correction, damp;
+    float corr_lim;                       /* 本拍生效的差速上限（见 GyroControl_CorrLimit） */
     int left_speed, right_speed;
 
     if (!gyro_control_enabled) return;
@@ -464,9 +506,14 @@ void GyroControl_Task(void)
     s_rate_kd    = host_param_get(HP_GYRO_RATE_KD,    s_rate_kd);
     s_rate_max   = host_param_get(HP_GYRO_RATE_MAX,   s_rate_max);
     s_corr_limit = host_param_get(HP_GYRO_CORR_LIMIT, s_corr_limit);
+    s_corr_ref   = host_param_get(HP_GYRO_CORR_REF,   s_corr_ref);
     s_corr_slew  = host_param_get(HP_GYRO_CORR_SLEW,  s_corr_slew);
     s_settle_deg = host_param_get(HP_GYRO_SETTLE_DEG, s_settle_deg);
     s_settle_ms  = host_param_get(HP_GYRO_SETTLE_MS,  s_settle_ms);
+
+    /* 差速上限：按上一步回读到的 s_corr_limit / s_corr_ref 与基准速度算一次，本拍各律共用。
+     * 放在参数回读之后，保证"上位机改完参数同一拍就按新值算"。 */
+    corr_lim = GyroControl_CorrLimit();
 
     s_dbg_rate_ref = 0.0f;
 
@@ -488,8 +535,8 @@ void GyroControl_Task(void)
         correction = PID_Compute_z(&gyro_pid, target_angle, actual_angle, GYRO_DT);
         damp = host_param_get(HP_YAW_RATE_DAMP, 1.0f);
         correction -= damp * gyro_sane(Gyro_Z);
-        if (correction >  s_corr_limit) correction =  s_corr_limit;
-        if (correction < -s_corr_limit) correction = -s_corr_limit;
+        if (correction >  corr_lim) correction =  corr_lim;
+        if (correction < -corr_lim) correction = -corr_lim;
     } else if (s_law == 1) {
         /* 三档开关（对照用，实测有 0.7s 极限环）：外环 角度误差 → 期望角速度，
          * 内环 期望角速度 → spin/hold/brake 三档定值。 */
@@ -518,8 +565,8 @@ void GyroControl_Task(void)
             }
         }
 
-        if (correction >  s_corr_limit) correction =  s_corr_limit;
-        if (correction < -s_corr_limit) correction = -s_corr_limit;
+        if (correction >  corr_lim) correction =  corr_lim;
+        if (correction < -corr_lim) correction = -corr_lim;
         gyro_pid.output = correction;
         gyro_pid.last_error = err;
     } else if (s_law == 2) {
@@ -595,8 +642,8 @@ void GyroControl_Task(void)
             if (correction - s_corr_f >  slew) correction = s_corr_f + slew;
             if (correction - s_corr_f < -slew) correction = s_corr_f - slew;
         }
-        if (correction >  s_corr_limit) correction =  s_corr_limit;
-        if (correction < -s_corr_limit) correction = -s_corr_limit;
+        if (correction >  corr_lim) correction =  corr_lim;
+        if (correction < -corr_lim) correction = -corr_lim;
         s_corr_f = correction;
 
         /* 到位锁存：进停车带且基本不转了 ⇒ 永久松手（换目标才解锁） */
@@ -709,8 +756,8 @@ void GyroControl_Task(void)
             if (correction - s_corr_f >  slew) correction = s_corr_f + slew;
             if (correction - s_corr_f < -slew) correction = s_corr_f - slew;
         }
-        if (correction >  s_corr_limit) correction =  s_corr_limit;
-        if (correction < -s_corr_limit) correction = -s_corr_limit;
+        if (correction >  corr_lim) correction =  corr_lim;
+        if (correction < -corr_lim) correction = -corr_lim;
         s_corr_f = correction;
 
         gyro_pid.output = correction;
@@ -725,8 +772,8 @@ void GyroControl_Task(void)
             if (correction - s_corr_f >  slew) correction = s_corr_f + slew;
             if (correction - s_corr_f < -slew) correction = s_corr_f - slew;
         }
-        if (correction >  s_corr_limit) correction =  s_corr_limit;
-        if (correction < -s_corr_limit) correction = -s_corr_limit;
+        if (correction >  corr_lim) correction =  corr_lim;
+        if (correction < -corr_lim) correction = -corr_lim;
         s_corr_f = correction;
         gyro_pid.output = correction;
     }

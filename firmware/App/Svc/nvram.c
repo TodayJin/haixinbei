@@ -21,7 +21,7 @@
 #include <stddef.h>
 
 #define NVRAM_MAGIC      0x31425848UL   /* "HXB1"（小端存下来是 48 58 42 31） */
-#define NVRAM_VERSION    5U             /* v5：payload 末尾追加控制环标定量 + 舵机动作表 */
+#define NVRAM_VERSION    6U             /* v6：角度环差速天花板参考（v5：控制环标定量 + 舵机动作表） */
 #define NVRAM_VERSION_MIN 1U            /* 能读的最老版本（靠"字段只往末尾追加"兼容升级：
                                          * 比当前版本短的记录，缺的那些字段取当前默认值）*/
 
@@ -85,6 +85,12 @@ typedef struct {
     int32_t  pivot_kd;
     uint8_t  action_pose[SERVO_ACTION_N][2];   /* 14 个动作的终点角度 {舵1,舵2} */
     uint8_t  pad5[10];                         /* 补到 8 的整数倍（见下面的编译期断言） */
+    /* ---- v6 新增：角度环差速天花板随速放大的参考刻度（用户 m24215）----
+     * 只往末尾加、并且**多留 4 字节 pad6**：payload 必须比 v5 大，
+     * 这样旧记录（length 更短）走的是 nvram_init 里"先 snapshot 铺默认值再 memcpy 前缀"
+     * 那一支，新字段拿到的是当前默认值（3000），而不是原 pad 区的 0（= 把放大功能关掉）。 */
+    int32_t  gyro_corr_ref;
+    uint8_t  pad6[4];
 } nvram_payload_t;
 
 typedef struct {
@@ -218,6 +224,9 @@ static void snapshot(nvram_payload_t *p)
     p->pivot_ki_x100       = snap_param_scaled(HP_PIVOT_KI,            100.0f);
     p->pivot_kd            = snap_param_scaled(HP_PIVOT_KD,              1.0f);
 
+    /* v6：差速天花板随速放大的参考刻度（0 = 关闭放大，退回旧行为） */
+    p->gyro_corr_ref       = snap_param_scaled(HP_GYRO_CORR_REF,         1.0f);
+
     for (i = 0; i < SERVO_ACTION_N; i++) {
         int a1 = 0;
         int a2 = 0;
@@ -278,6 +287,9 @@ static void apply(const nvram_payload_t *p)
     apply_param_scaled(HP_PIVOT_KP,            p->pivot_kp,              1.0f);
     apply_param_scaled(HP_PIVOT_KI,            p->pivot_ki_x100,       100.0f);
     apply_param_scaled(HP_PIVOT_KD,            p->pivot_kd,              1.0f);
+
+    /* v6：差速天花板随速放大的参考刻度 */
+    apply_param_scaled(HP_GYRO_CORR_REF,       p->gyro_corr_ref,         1.0f);
 
     for (i = 0; i < SERVO_ACTION_N; i++) {
         (void)Servo_SetActionPose(i + 1, (int)p->action_pose[i][0], (int)p->action_pose[i][1]);

@@ -132,12 +132,13 @@ export function SettingsPage() {
               <Toggle
                 on={settings.perfLite}
                 onChange={(v) => store.patchSettings({ perfLite: v })}
-                label="低特效模式（关掉玻璃模糊与脉冲动效）"
+                label="低特效模式（默认开）"
               />
             </div>
             <div className="text-[12px] leading-relaxed text-slate-500">
-              滚动时本来就会自动降特效（松手 0.14s 后恢复）。显卡弱、或走远程桌面/虚拟显示时静止画面也会卡，
-              就把这个打开：卡片变成纯色面板、状态点不再脉冲，省掉每帧重新模糊与每帧样式重算。
+              推荐保持开启：面板走不透明分层主题（不糊、不脉冲），滚动与静止都不掉帧。
+              关掉会回到玻璃拟态：卡片半透明 + 背景模糊 + 状态点脉冲；滚动时仍会自动临时降特效
+              （松手 0.14s 后恢复）。
             </div>
             <div className="flex gap-2">
               <button className="btn-ghost" onClick={() => store.clearBuffers()}>

@@ -233,14 +233,29 @@ class Console:
         if got:
             with self.lock:
                 self.rtt_ms = round((time.time() - t_sent) * 1000.0, 1)
-        return {
+        ok = (st == pr.ST_OK) if st is not None else False
+        name = ST_NAMES.get(st, "无应答" if st is None else f"未知({st:#04x})")
+        out = {
             "seq": seq, "sent": True,
             "status": st if st is not None else None,
-            "status_name": ST_NAMES.get(st, "无应答" if st is None else f"未知({st:#04x})"),
-            "ok": (st == pr.ST_OK) if st is not None else False,
+            "status_name": name,
+            "ok": ok,
             "answered": bool(got),
             "frames": [{"type": f.type, "payload_hex": f.payload.hex()} for f in got],
         }
+        if not ok:
+            # 语义性失败也必须带一句**人话**。
+            # 前端 api.ts 在 `{ok:false}` 且没有 error 时会退到"请求失败（HTTP xxx）"，
+            # 而本桥的语义失败一律回 HTTP 200 ⇒ 用户看到的就是「请求失败（HTTP 200）」
+            # （用户 m24215 报的"什么 HTTP002。200"就是这个）。这里补上真正的原因。
+            if st is None:
+                err = (f"车上没应答（等 {timeout:.1f}s 超时）" if not got
+                       else f"车上没回确认帧（收到 {len(got)} 帧，都不是 ACK）")
+            else:
+                err = f"车上拒绝了：{name}"
+            out["error"] = err
+            self.log("warn", f"{req or 'req'} 失败：{err}（seq={seq}）")
+        return out
 
     # ------------------------------------------------------------------ 收帧
     def on_frame(self, f: pr.Frame, now_ms: int):
@@ -553,10 +568,9 @@ class Console:
     def _task_reply(self, r: dict, what: str) -> dict:
         """`send_wait()` 的结果 → 前端契约（必须带 ok/error/supported）。
 
-        `send_wait` 的 `ok` 只在"收到 ACK 且状态码 0"时为真，且没有 `error` 字段；
-        这里补上人话，否则页面只能显示 "HTTP 200"。
-
-        "没人应答"要分三种说（用户 2026-10-04 报的提示就是混成了一句话）：
+        `send_wait` 现在自己就会给失败补一句基础的 `error`（"没应答"/"被拒绝"，
+        见那边的注释：不补的话页面只剩一句 "HTTP 200"）；这里再把"没人应答"按链路实况
+        说细一点（用户 2026-10-04 报的提示就是混成了一句话）：
         链路没开 / 链路开着但收不到车帧 / 链路正常在收帧却没这条 ACK。
         """
         if r.get("ok"):
@@ -1005,8 +1019,15 @@ class Console:
         a = int(vl or 0) if mode == 1 else int(base or 0)
         b = int(vr or 0) if mode == 1 else int(turn or 0)
         r = self.send_wait(pr.T_DRIVE, bytes([mode]) + pr.pack_i16(a) + pr.pack_i16(b),
-                           want=(pr.T_ACK, pr.T_DRIVE_REPORT))
+                           want=(pr.T_ACK, pr.T_DRIVE_REPORT), req="drive")
         r.update({"mode": mode, "a": a, "b": b})
+        if not r.get("ok"):
+            # 操控页是 10Hz 连续下发（转向时每 100ms 一帧），车一拒绝就会连着弹 ——
+            # 所以拒绝原因要说成"下一步该怎么办"，而不是把状态码丢给用户。
+            if r.get("status") == pr.ST_NOT_READY:
+                r["error"] = "任务正在跑，电机被任务占着 —— 先去「任务」页停掉任务再操控"
+            elif r.get("status") == pr.ST_BUSY:
+                r["error"] = "车上忙（上一个动作还没做完），松手等一下再操控"
         now = self._now_ms()
         with self.lock:
             if r.get("ok") and mode != 0:

@@ -63,11 +63,27 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const obj = (body ?? {}) as Record<string, unknown>
 
   if (!res.ok || obj.ok === false) {
-    const msg = typeof obj.error === 'string' ? obj.error : `请求失败（HTTP ${res.status}）`
+    const msg = typeof obj.error === 'string' ? obj.error : backendMsg(obj, res)
     const code = typeof obj.code === 'string' ? obj.code : 'http_error'
     throw new ApiError(msg, code, res.status)
   }
   return obj as T
+}
+
+/**
+ * 后端回了 `{ok:false}` 但**没带 error 字符串**时的兜底文案。
+ *
+ * 用户 m24215 报的「每次操控就弹一个后端报错，什么 HTTP002。200」就是这里漏出来的：
+ * 桥的语义性失败一律回 HTTP 200，而旧兜底直接把状态码写进错误信息
+ * ⇒ 用户看到「请求失败（HTTP 200）」，既不像错、也看不出该干什么。
+ * 桥侧现在会给每种失败都补 `error`（见 bridge/state.py 的 send_wait / drive），
+ * 这里再兜一层：优先拿 status_name / answered 拼一句人话，真·HTTP 错误才报状态码。
+ */
+function backendMsg(obj: Record<string, unknown>, res: Response): string {
+  const name = typeof obj.status_name === 'string' ? obj.status_name : ''
+  if (obj.answered === false || name === '无应答') return '车上没应答（超时，检查链路/车是否在跑别的）'
+  if (name) return `车上拒绝了：${name}`
+  return res.ok ? '后端拒绝了这个操作（没说原因）' : `请求失败（HTTP ${res.status}）`
 }
 
 function post<T>(path: string, payload?: unknown): Promise<T> {

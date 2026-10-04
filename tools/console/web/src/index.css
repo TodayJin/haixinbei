@@ -310,12 +310,17 @@
 
 /*
  * 滚起来别掉帧：`html.is-scrolling`（正在滚，松手 140ms 后摘掉，见 lib/fx.ts）
- * 和 `html.perf-lite`（设置页里常开的「低特效模式」）两条路，做的是同一件事 ——
- * 把"每帧都要重算"的玻璃模糊与无限脉冲动画关掉：
+ * 和 `html.perf-lite`（设置页的「低特效模式」，**默认开**）两条路，都要把"每帧都要重算"
+ * 的东西关掉：
  *   - backdrop-filter 在滚动中每帧重糊：tasks 页合成器 DrawFrame 332ms→55.7ms / 2.5s；
  *   - animate-pulseDot（连接正常时 header 那个圆点一直亮着）在不做合成器动画的机器上
  *     每帧一次全文档样式重算（styleN = 帧数）。
- * 静止时两者都原样保留 —— 玻璃拟态和状态点脉冲是 API.md §5 定的视觉语言，不能直接删。
+ *
+ * ⚠️ 关掉模糊不能就这么散着：这些面本来是"半透明 + 模糊"才从背景里立起来的，模糊一去，
+ * 底下内容直接透出来（用户 m24215：「文字后面变成纯黑」—— header 被刷成了 #070a16）。
+ * 所以低特效下给每一层**一个不透明面 + 1px 亮边**，靠亮度差分层，而不是靠模糊：
+ *     页面渐变(ink-800 底) < 侧栏 #0d1428 < 顶栏 #121a33 < 卡片 #141d3d
+ * 别改成纯黑（#000 / ink-900 #070a16）：黑底贴霓虹字没层次、显脏。
  */
 html.is-scrolling header,
 html.is-scrolling aside,
@@ -327,16 +332,26 @@ html.perf-lite .glass {
   -webkit-backdrop-filter: none !important;
 }
 
-/* header 是 sticky、压在滚动内容上：模糊一去掉，底色必须变**不透明**，
-   否则底下的参数行会像幽灵一样透出来（0.94 都还能看见，实测截图确认过）*/
+/* 顶栏：sticky 压在滚动内容上，必须**完全不透明**（0.94 都还能看见底下的参数行，截图确认过） */
 html.is-scrolling header,
 html.perf-lite header {
-  background-color: rgb(7 10 22);
+  background-color: #121a33;
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 8px 20px -16px rgba(0, 0, 0, 0.95);
 }
 
+/* 低特效下的侧栏 / 卡片：比页面背景亮一档的面，卡片再加一道顶部高光与内亮边 */
+html.perf-lite aside {
+  background-color: #0d1428;
+}
+html.perf-lite .glass {
+  background-color: #141d3d;
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 42%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 40px -24px rgba(0, 0, 0, 0.9);
+}
+
+/* 只关这一个无限动画（一帧不落的那个）；riseIn 是一次性入场，留着更好看 */
 html.is-scrolling .animate-pulseDot,
-html.perf-lite *,
-html.perf-lite *::before,
-html.perf-lite *::after {
+html.perf-lite .animate-pulseDot {
   animation: none !important;
 }

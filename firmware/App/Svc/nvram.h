@@ -8,11 +8,14 @@
  * 存在 Flash 最后一页 0x0801F800（2KB，页 63；STM32G474RB 单 bank 128KB
  * 时的最后一页，代码用不满）。记录格式：
  *
- *     magic(4) + version(2) + length(2) + CRC32(4) + payload(152) + pad(4)
+ *     magic(4) + version(2) + length(2) + CRC32(4) + payload(160) + pad(4)
  *
  * version 1 -> 2 只往 payload **末尾**追加了速度环前馈两个字段（0.662/2327），
- * 所以 v1 记录的前缀（含 8 路黑白标定）原样可用，开机时按 length 迁移过来、
- * 只把前馈填成默认值 —— 升级固件不会让用户重标一次。
+ * v5 -> 6 同样只在末尾追加了角度环 `gyro_corr_ref`（差速天花板随速放大的参考
+ * 速度），所以 v1 记录的前缀（含 8 路黑白标定）原样可用，开机时按 length 迁移
+ * 过来、只把新的末尾字段填成参数表当前默认值 —— 升级固件不会让用户重标一次。
+ * （注意：往末尾加字段必须把 NVRAM_VERSION 加 1，否则长度对不上的老记录会被
+ * 当成坏记录整条作废，见 nvram_init()。测试 t_nvram.c ⑦ 盯着这条。）
  *
  * 开机 nvram_init() 校验 magic/version/length/CRC 后把它盖回 g_cfg 和
  * trace_cal；运行中 nvram_poll() 发现"当前值 != 上次存的值"就等 1.5s

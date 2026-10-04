@@ -90,3 +90,75 @@ describe('参数编辑要同步进桥（不能只改本地快照）', () => {
     ])
   })
 })
+
+/**
+ * 用户 m24215：「每次操控就会弹出一个后端报错，什么 HTTP002。200。每次都是」。
+ *
+ * 两个毛病叠在一起：①桥对语义性失败回 HTTP 200 且**不带 error**，前端兜底就把状态码
+ * 当错误信息 ⇒「请求失败（HTTP 200）」；②操控是 10Hz 连续下发（转向每 100ms 一帧），
+ * 车一拒绝就是 10 条/秒的弹幕。这里把文案和去重都钉住。
+ */
+describe('操控报错的文案与弹幕', () => {
+  /** 桥回 200 + {ok:false}（语义性失败的正常形状）。 */
+  function stubReply(payload: Record<string, unknown>): void {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(payload), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })),
+    )
+  }
+
+  const clearToasts = (): void => {
+    for (const t of store.getSnapshot().toasts) store.dismissToast(t.id)
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+    clearToasts()
+  })
+
+  it('车拒绝但后端没给 error ⇒ 说「车上拒绝了：未就绪」，不许出现 HTTP 200', async () => {
+    stubReply({ ok: false, sent: true, status: 5, status_name: '未就绪', answered: true })
+    await store.drive({ mode: 'base_turn', base: 0, turn: 0 })
+
+    const t = store.getSnapshot().toasts
+    expect(t.length).toBe(1)
+    expect(t[0].kind).toBe('err')
+    expect(t[0].text).toContain('车上拒绝了：未就绪')
+    expect(t[0].text).not.toContain('HTTP')
+  })
+
+  it('链路没应答时也给人话，不说 HTTP 200', async () => {
+    stubReply({ ok: false, sent: true, status: null, status_name: '无应答', answered: false })
+    await store.drive({ mode: 'base_turn', base: 0, turn: 0 })
+
+    const t = store.getSnapshot().toasts
+    expect(t.length).toBe(1)
+    expect(t[0].text).toContain('车上没应答')
+    expect(t[0].text).not.toContain('HTTP')
+  })
+
+  it('连续下发时同一句话只弹一条（10Hz 不刷屏）', async () => {
+    stubReply({ ok: false, sent: true, status: 7, status_name: '忙', answered: true })
+    for (let i = 0; i < 5; i++) await store.drive({ mode: 'base_turn', base: 0, turn: 0 })
+
+    const errs = store.getSnapshot().toasts.filter((t) => t.kind === 'err')
+    expect(errs.length).toBe(1)
+    expect(errs[0].text).toContain('车上拒绝了：忙')
+  })
+
+  it('成功不再每帧弹提示，只有停车给一条确认', async () => {
+    stubReply({ ok: true, seq: 1, sent: true, status: 0, status_name: 'OK', answered: true })
+    for (let i = 0; i < 3; i++) await store.drive({ mode: 'base_turn', base: 0, turn: 0 })
+    expect(store.getSnapshot().toasts).toEqual([])
+
+    await store.drive({ mode: 'off' })
+    const toasts = store.getSnapshot().toasts
+    expect(toasts.length).toBe(1)
+    expect(toasts[0].kind).toBe('ok')
+    expect(toasts[0].text).toContain('已停车')
+  })
+})

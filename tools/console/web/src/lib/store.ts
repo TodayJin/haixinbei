@@ -53,8 +53,9 @@ export interface Settings {
   /** 是否显示"真车模式"安全提示 */
   safetyBanner: boolean
   /**
-   * 低特效模式：常开地关掉玻璃模糊与脉冲动效（滚动时本来就会自动关，见 lib/fx.ts）。
-   * 给显卡弱/远程桌面的机器用 —— 那些机器上静止时也会卡。
+   * 低特效模式（**默认开**）：常开地关掉玻璃模糊与脉冲动效 —— 静止时也不花那笔钱。
+   * 用户 m24215 实测"开了确实非常流畅"，所以把它做成默认；关掉才回到玻璃拟态。
+   * 视觉上不是"少特效"，是另一套不透明分层主题（见 index.css 末尾）。
    */
   perfLite: boolean
 }
@@ -68,7 +69,7 @@ const DEFAULT_SETTINGS: Settings = {
   driveStep: 100,
   driveSkipDead: true,
   safetyBanner: true,
-  perfLite: false,
+  perfLite: true,
 }
 
 function loadSettings(): Settings {
@@ -128,6 +129,9 @@ function snapshotMeta(s: ConsoleSnapshot): MetaSnapshot {
 const LOG_CAP = 500
 const ACK_CAP = 200
 const TOAST_CAP = 4
+/** 同一句话的去重窗口：错误留长一点（连续下发的拒绝对用户只算一件事） */
+const TOAST_DEDUP_ERR_MS = 8000
+const TOAST_DEDUP_OK_MS = 1500
 /** 遥测是 100Hz，界面按这个间隔合并刷新（50ms = 20Hz，看得清又不费） */
 const HOT_MS = 50
 
@@ -244,11 +248,28 @@ class ConsoleStore {
   }
 
   // ---- toast ----
+  /**
+   * 同一句话 N 毫秒内只弹一次。
+   *
+   * 为什么必须有：操控是**连续下发**（`pages/Drive.tsx` 转向时每 `TURN_TICK_MS=100ms`
+   * 一帧 `store.drive`），车一旦拒绝（最典型的是任务在跑 ⇒ ST_NOT_READY），
+   * 每一帧都走一遍 `op()` ⇒ 屏幕上是 10 条/秒的弹幕，把画面糊住、还关不掉。
+   * 用户 m24215："每次操控就会弹出一个后端报错…每次都是"。
+   */
+  private toastAt = new Map<string, number>()
+
   toast(kind: ToastKind, text: string): void {
-    const t: Toast = { id: this.toastSeq++, kind, text, at: Date.now() }
+    const key = `${kind}:${text}`
+    const now = Date.now()
+    const win = kind === 'err' ? TOAST_DEDUP_ERR_MS : TOAST_DEDUP_OK_MS
+    if (now - (this.toastAt.get(key) ?? 0) < win) return
+    this.toastAt.set(key, now)
+    const t: Toast = { id: this.toastSeq++, kind, text, at: now }
     this.snap = { ...this.snap, toasts: [...this.snap.toasts, t].slice(-TOAST_CAP) }
     this.emit()
-    window.setTimeout(() => this.dismissToast(t.id), kind === 'err' ? 8000 : 3500)
+    // 全局 setTimeout（不是 window.setTimeout）：同 emitHot 的理由 —— 测试/SSR 在 Node 里跑，
+    // 没有 window；自动关闭只是个定时器，不需要 DOM。
+    setTimeout(() => this.dismissToast(t.id), kind === 'err' ? 8000 : 3500)
   }
 
   dismissToast(id: number): void {
@@ -512,7 +533,9 @@ class ConsoleStore {
   // ---- 驾驶 / 命令 ----
   /** 驾驶指令：三种模式（off/wheels/base_turn），只改目标速度，闭环还是车上的三环 */
   async drive(req: { mode: 'off' | 'wheels' | 'base_turn'; vl?: number; vr?: number; base?: number; turn?: number }): Promise<void> {
-    await this.op('驾驶', () => api.drive(req), req.mode === 'off' ? '已停车（host_drive 关闭）' : '驾驶指令已下发')
+    // 只有"停车"给成功提示：操控过程中每一帧都吐一条 "驾驶指令已下发" 就是刷屏
+    // （转向 10 帧/秒）。失败仍然会弹，由 toast 的去重窗口挡成一条。
+    await this.op('驾驶', () => api.drive(req), req.mode === 'off' ? '已停车（host_drive 关闭）' : undefined)
   }
 
   async cmd(cmd: string, arg?: number): Promise<void> {

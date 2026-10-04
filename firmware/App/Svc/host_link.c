@@ -124,6 +124,7 @@ static const param_spec_t SPECS[] = {
   { HP_GYRO_CORR_SLEW, 300000.0f, 1000.0f,  2000000.0f },   /* 修正量斜率限幅 PWM/s */
   { HP_GYRO_SETTLE_DEG,    2.0f,     0.2f,       10.0f },   /* 停车带宽 ° */
   { HP_GYRO_SETTLE_MS,   150.0f,     0.0f,     2000.0f },   /* 到位锁存时长 ms */
+  { HP_GYRO_CORR_REF,   3000.0f,     0.0f,     7200.0f },   /* 差速天花板随速放大的参考刻度（0=关闭） */
   { HP_TRACE_ANGLE_PER_UNIT, 10.0f,  0.5f,       60.0f },   /* 串级：重心误差 → 目标航向 °/格 */
   { HP_TRACE_ANGLE_MAX,   35.0f,     1.0f,       90.0f },   /* 串级：目标航向限幅 ° */
   { HP_PIVOT_KP,         900.0f,     0.0f,    20000.0f },   /* 原地转圈（base=0）循迹环 P */

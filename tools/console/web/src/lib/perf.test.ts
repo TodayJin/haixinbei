@@ -205,10 +205,45 @@ describe('滚动流畅度（用户 m03559「上下滚动卡卡的」）', () => 
       expect(css).toContain(sel)
     }
     // 去掉模糊后 header 必须**不透明**（半透明会透出底下的参数行：0.94 都看得见）
-    expect(css).toMatch(/html\.is-scrolling header,[\s\S]{0,80}background-color: rgb\(7 10 22\);/)
-    expect(css).not.toContain('rgb(7 10 22 / 0.94)')
+    expect(css).toMatch(/html\.is-scrolling header,[\s\S]{0,80}background-color: #121a33;/)
+    expect(css).not.toMatch(/header[\s\S]{0,60}background-color: rgba\(/)
     expect(SCROLL_IDLE_MS).toBeGreaterThanOrEqual(80)
     expect(SCROLL_IDLE_MS).toBeLessThanOrEqual(400)
+  })
+
+  it('低特效主题是有层次的（用户 m24215：别把文字后面刷成纯黑）', () => {
+    const css = src('src/index.css')
+    // 三层不透明面：侧栏 < 顶栏 < 卡片，逐层变亮 ⇒ 卡片能从背景里"立"起来
+    const lum = (hex: string) => {
+      const n = parseInt(hex.slice(1), 16)
+      const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => {
+        const s = v / 255
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
+      })
+      return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+    }
+    const grab = (sel: string) => {
+      const re = new RegExp(`${sel.replace(/\./g, '\\.')}\\s*\\{[^}]*background-color:\\s*(#[0-9a-f]{6})`, 'i')
+      const m = css.match(re)
+      expect(m, `${sel} 得有明确的不透明底色`).toBeTruthy()
+      return m![1].toLowerCase()
+    }
+    const aside = grab('html.perf-lite aside')
+    const header = grab('html.perf-lite header')
+    const card = grab('html.perf-lite .glass')
+    const page = '#0b1020' // ink-800，body 底色
+    expect(lum(aside)).toBeGreaterThan(lum(page))
+    expect(lum(header)).toBeGreaterThan(lum(aside))
+    expect(lum(card)).toBeGreaterThan(lum(header))
+    // 谁都不许是纯黑（这就是用户看不下去的那版）
+    for (const c of [aside, header, card]) expect(lum(c)).toBeGreaterThan(0.004)
+    expect(css).not.toMatch(/background-color:\s*(#000000|#000\b|rgb\(0 0 0\)|rgb\(7 10 22\))/)
+  })
+
+  it('低特效是默认开的（用户 m24215：「其实你就低特效就行了」）', () => {
+    const s = src('src/lib/store.ts')
+    expect(s).toMatch(/perfLite:\s*true/)
+    expect(src('src/pages/Settings.tsx')).toContain('低特效模式（默认开）')
   })
 
   it('灰度柱的高度不带 transition（布局属性过渡 = 每帧重排）', () => {

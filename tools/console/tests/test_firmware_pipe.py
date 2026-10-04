@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 
@@ -29,6 +30,20 @@ from test_actions_spec import _firmware_defaults
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
+
+
+def _fw_nvram_version() -> int:
+    """固件源码里的 NVRAM_VERSION（payload 布局的代次）。
+
+    往 payload 末尾加字段时必须连它一起 +1（见 nvram.c 的 nvram_init 注释），
+    所以这里跟着源码走而不是写死 —— 写死的话每加一个设置项都会变成一次假失败。
+    """
+    with open(os.path.join(REPO, "firmware", "App", "Svc", "nvram.c"),
+              encoding="utf-8", errors="replace") as fh:
+        src = fh.read()
+    m = re.search(r"#define\s+NVRAM_VERSION\s+(\d+)U", src)
+    assert m, "firmware/App/Svc/nvram.c 里找不到 NVRAM_VERSION"
+    return int(m.group(1))
 
 GCC = os.environ.get("PIPE_GCC") or shutil.which("gcc") or r"C:\mingw64\bin\gcc.exe"
 
@@ -165,7 +180,7 @@ def test_param_dump_values_and_order_match_the_bridge_table(pipe):
     frames = pipe(pr.frame_hello_req(1), pr.frame_param_get(2), pad=200)
     h = pr.decode_hello(_first(frames, pr.T_HELLO).payload)
     dump = [pr.decode_param_report(f.payload) for f in frames if f.type == pr.T_PARAM_REPORT]
-    assert len(dump) == len(P.PARAMS) == 43, f"dump 项数 {len(dump)} 与上位机表 {len(P.PARAMS)} 不一致"
+    assert len(dump) == len(P.PARAMS) == 44, f"dump 项数 {len(dump)} 与上位机表 {len(P.PARAMS)} 不一致"
 
     order = [pid for pid, _ in dump]
     assert len(set(order)) == len(order), "同一项被 dump 了两次"
@@ -319,10 +334,10 @@ def test_param_save_survives_a_power_cycle(pipe_exe, tmp_path):
     assert os.path.getsize(flash) == 2048
     with open(flash, "rb") as fh:
         blob = fh.read()
-    # 记录头：magic "HXB1"（0x31425848）+ version u16 = 5（v5 payload 才存动作角度）
+    # 记录头：magic "HXB1"（0x31425848）+ version u16 = 固件源码里的 NVRAM_VERSION
     assert blob[:4] == b"HXB1", f"Flash 里不是 nvram 记录：{blob[:8].hex()}"
-    assert int.from_bytes(blob[4:6], "little") == 5, \
-        f"nvram 记录版本不是 v5：{int.from_bytes(blob[4:6], 'little')}"
+    assert int.from_bytes(blob[4:6], "little") == _fw_nvram_version(), \
+        f"nvram 记录版本与 nvram.c 的 NVRAM_VERSION 不一致：{int.from_bytes(blob[4:6], 'little')}"
 
     def param_dump(args):
         frames = _run_exe(pipe_exe, [pr.frame_hello_req(1), pr.frame_param_get(2, 0xFFFF)],

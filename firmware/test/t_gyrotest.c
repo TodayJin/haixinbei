@@ -73,6 +73,10 @@ static void param_default_angle(void)
     host_param_set_local(HP_TURN_TIMEOUT, 1500.0f);
     host_param_set_local(HP_TURN_ANGLE_OFFSET, 90.0f);
     host_param_set_local(HP_YAW_RATE_DAMP, 1.0f);
+    /* 差速限幅/放大参考也钉住出厂值：否则后面几节会读到 fuzz 那段灌进来的
+     * 负限幅（param_reset 只是把"已设置"标记清掉，参数表里残留值会当兜底） */
+    host_param_set_local(HP_GYRO_CORR_LIMIT, 2000.0f);
+    host_param_set_local(HP_GYRO_CORR_REF,   3000.0f);
 }
 
 /* ---------------------------------------------------------------
@@ -297,6 +301,55 @@ int main(void)
         GyroControl_Task();
         CHECK_EQ_I(host_load_left(),  before_l);
         CHECK_EQ_I(host_load_right(), before_r);
+    }
+
+    /* ---------------------------------------------------------------
+     * 9) 差速天花板随基准速度放大（用户 m24215：满速 W+A 转不动）
+     *    角度环最后把 correction 当**左右轮差速**用，而这个限幅是绝对刻度：
+     *    基准 7200 时 Δ/base 只剩 28%，转弯半径随速度线性变大（≈0.2m → 0.47m）。
+     *    这里直接钉住那条曲线，不去反推某一拍的输出。
+     * --------------------------------------------------------------- */
+    {
+        s_corr_limit = 2000.0f;
+        s_corr_ref   = 3000.0f;
+
+        GyroControl_SetBaseSpeed(0, 0);
+        CHECK(fabsf(GyroControl_CorrLimit() - 2000.0f) < 1.0e-3f);   /* 原地转不受影响 */
+
+        GyroControl_SetBaseSpeed(1500, 1500);
+        CHECK(fabsf(GyroControl_CorrLimit() - 2000.0f) < 1.0e-3f);   /* <ref：旧行为 */
+
+        GyroControl_SetBaseSpeed(3000, 3000);
+        CHECK(fabsf(GyroControl_CorrLimit() - 2000.0f) < 1.0e-3f);   /* =ref：旧行为 */
+
+        GyroControl_SetBaseSpeed(7200, 7200);
+        CHECK(fabsf(GyroControl_CorrLimit() - 4800.0f) < 1.0e-3f);   /* 满速：×2.4 */
+
+        /* 一轮正一轮反：取绝对值大的那个 */
+        GyroControl_SetBaseSpeed(-7200, 100);
+        CHECK(fabsf(GyroControl_CorrLimit() - 4800.0f) < 1.0e-3f);
+
+        /* ref=0 关闭放大，完全退回旧行为（台架 A/B 对照用） */
+        s_corr_ref = 0.0f;
+        CHECK(fabsf(GyroControl_CorrLimit() - 2000.0f) < 1.0e-3f);
+
+        /* 放大之后仍要夹在单轮满量程内 */
+        s_corr_ref = 1000.0f;
+        CHECK(fabsf(GyroControl_CorrLimit() - (float)MOTOR_PWM_MAX) < 1.0e-3f);
+
+        /* 参数被写坏：ref 非法 -> 不放大；限幅 NaN -> 0（不转）；负限幅按 |lim| */
+        s_corr_ref = NAN;
+        GyroControl_SetBaseSpeed(0, 0);
+        CHECK(fabsf(GyroControl_CorrLimit() - 2000.0f) < 1.0e-3f);
+        s_corr_ref   = 3000.0f;
+        s_corr_limit = -2000.0f;
+        CHECK(fabsf(GyroControl_CorrLimit() - 2000.0f) < 1.0e-3f);
+        s_corr_limit = NAN;
+        CHECK(fabsf(GyroControl_CorrLimit()) < 1.0e-3f);
+
+        s_corr_limit = 2000.0f;
+        s_corr_ref   = 3000.0f;
+        GyroControl_SetBaseSpeed(0, 0);
     }
 
     return T_SUMMARY();

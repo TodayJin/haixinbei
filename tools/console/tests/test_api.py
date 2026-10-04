@@ -181,6 +181,84 @@ def test_drive_endpoints(live):
     assert GET(base + "/api/drive")[1]["drive"]["enabled"] is False
 
 
+def test_drive_refused_by_running_task_says_what_to_do(live):
+    """用户 m24215：「每次操控就会弹出一个后端报错，什么 HTTP002。200。每次都是」。
+
+    那条提示的根子：桥的语义性失败一律回 HTTP 200，而后端**没带 error 字符串**
+    ⇒ 前端 api.ts 的兜底把状态码当成了错误信息（「请求失败（HTTP 200）」）。
+    真实的触发路径就在这条用例里：任务在跑 ⇒ 固件回 ST_NOT_READY（host_ext.c 的
+    `rc = -2`）⇒ 驾驶被拒。要求：200 + ok:false + 一句人话，并且告诉用户下一步。
+    """
+    from test_task import golden, golden_image
+
+    base, _bridge, _con = live
+    img, g = golden_image(), golden()
+    tid = 2
+
+    off = 0
+    while off < len(img):
+        chunk = img[off:off + 120]
+        code, j, _ = POST(base + "/api/tasks/put", {"id": tid, "offset": off, "hex": chunk.hex()})
+        assert code == 200 and j["ok"] is True, f"put off={off} 失败：{j}"
+        off += len(chunk)
+    assert POST(base + "/api/tasks/commit",
+                {"id": tid, "len": len(img), "crc": g["crc16"], "name": "操控拒绝用例"})[1]["ok"] is True
+    assert POST(base + "/api/tasks/run", {"id": tid})[1]["ok"] is True
+
+    code, j, _ = POST(base + "/api/drive", {"mode": "base_turn", "base": 0, "turn": 0})
+    assert code == 200, "语义性失败必须是 200（前端靠 ok:false 判断，不当 HTTP 错误）"
+    assert j["ok"] is False and j["status"] == pr.ST_NOT_READY, j
+    err = j.get("error") or ""
+    assert err, f"失败必须带 error（否则前端兜底又会打出 HTTP 状态码）：{j}"
+    assert "HTTP" not in err, f"不许再把 HTTP 状态码当错误信息：{err!r}"
+    assert "任务" in err and "停" in err, f"要说清下一步干什么：{err!r}"
+
+    assert POST(base + "/api/tasks/stop", {})[1]["ok"] is True
+    assert POST(base + "/api/tasks/delete", {"id": tid})[1]["ok"] is True
+    # 停掉任务之后操控要立刻恢复（别把"任务在跑"变成永久拒绝）
+    assert POST(base + "/api/drive", {"mode": "base_turn", "base": 0, "turn": 0})[1]["ok"] is True
+
+
+def test_send_wait_timeout_and_refusal_carry_a_human_error(live):
+    """`send_wait` 的两种失败都要带人话 —— 前端只在**没有 error** 时才兜底成
+    「请求失败（HTTP xxx）」，而桥对语义性失败一律回 200，所以漏一次就是一句废话。
+    """
+    _base, _bridge, con = live
+    orig = con.runner.send
+
+    # ① 发出去没人回（链路断/车忙不过来）⇒ 超时
+    con.runner.send = lambda data: None
+    try:
+        r = con.send_wait(pr.T_DRIVE, bytes([0]) + pr.pack_i16(0) + pr.pack_i16(0),
+                          timeout=0.05, req="drive")
+    finally:
+        con.runner.send = orig
+    assert r["ok"] is False and r["answered"] is False
+    assert "没应答" in r["error"] and "超时" in r["error"], r
+
+    # ② 车回了 ACK，但状态码不是 OK。
+    # 帧是 `send_wait` 内部自己组、自己发出去的 ⇒ 这里替换 `runner.send`，
+    # 从发出去的整帧里取 seq（`A5 5A type seq len …`），照真车的样子把 ACK 投进 replies。
+    def refusing_send(data: bytes) -> None:
+        assert data[0] == pr.SOF0 and data[1] == pr.SOF1
+        seq = data[3]
+        with con.cv:
+            con.replies[seq] = [pr.Frame(pr.T_ACK, seq, bytes([seq, pr.ST_BAD_PARAM]))]
+            con.cv.notify_all()
+
+    con.runner.send = refusing_send
+    try:
+        r = con.send_wait(pr.T_DRIVE, bytes([0]) + pr.pack_i16(0) + pr.pack_i16(0),
+                          timeout=0.05, req="drive")
+    finally:
+        con.runner.send = orig
+    assert r["ok"] is False and r["answered"] is True, r
+    assert r["status"] == pr.ST_BAD_PARAM
+    assert "拒绝" in r["error"] and "参数错" in r["error"], r
+    # 这两种失败都要能被 /api/log 看见，方便用户复现时直接把日志发过来
+    assert any("drive" in it["text"] for it in list(con.logs)), list(con.logs)[-3:]
+
+
 def test_cmd_endpoint(live):
     base, _, con = live
     assert POST(base + "/api/cmd", {"cmd": "stop"})[1]["ok"] is True

@@ -47,6 +47,7 @@ uint8_t GyroControl_TurnDone(void);
  * ------------------------------------------------------------------ */
 extern volatile uint8_t s_law;        /* 0 老PID / 1 三档开关 / 2 连续速率环 / 3 速率环+到位锁存 / 4 开环 */
 extern volatile float s_corr_limit;   /* 修正量安全上限（PWM 刻度） */
+extern volatile float s_corr_ref;     /* 差速天花板随基准速度放大的参考刻度（0 = 不放大） */
 extern volatile float s_ang_kp;       /* 外环 Kp：(°/s)/° */
 extern volatile float s_rate_max;     /* 期望角速度上限 °/s */
 extern volatile float s_rate_band;    /* s_law=1 内环滞环带宽 °/s */
@@ -69,6 +70,12 @@ extern volatile float s_decel;        /* s_law=2 √刹车曲线用减速度 °/
 extern volatile float s_open_corr;    /* s_law=4 开环台架专用 corr */
 extern volatile float s_settle_ms;    /* s_law=3 带内待够多久认到位 ms */
 extern volatile float s_boost_gap;    /* 起转助推冷却 ms */
+
+/**
+ * @brief 本拍生效的修正量（差速）上限：`s_corr_limit` 再按基准速度放大
+ *        （见 gyro_control.c 的 GyroControl_CorrLimit 注释）。
+ */
+float GyroControl_CorrLimit(void);
 
 void GyroControl_TurnRightFixed(void);
 void GyroControl_TurnLeftFixed(void);
