@@ -34,8 +34,9 @@ extern int   stub_nvram_touch;
 extern uint8_t stub_nvram_state;
 extern float Yaw, Pitch, Roll;
 
-/* host_taskrunstub.c：任务解释器的替身（host_ext.c 只问 TaskRun_IsRunning） */
+/* host_taskrunstub.c：任务解释器的替身（host_ext.c 只问 TaskRun_IsRunning / 低压时叫 Stop） */
 extern uint8_t stubx_taskrun_running;
+extern uint8_t stubx_taskrun_stops;
 
 /* host_hal.c 的假时钟 */
 extern void host_tick_set(uint32_t ms);
@@ -224,6 +225,113 @@ int main(void)
     stub_motion_mode = 3;                           /* 替身里的 Motion_GetMode() */
     CHECK_EQ_I(HostExt_MotionMode(), 3);
     CHECK_EQ_I(HostExt_MotionFault(), 0);
+
+    /* ---- 12. 停车必须真停（用户 m29239：stop 之后车还在跑，只有拔电池才停） ----
+     * WHEELS 直给模式下 Motion 一直停在 IDLE，而 motion.c 对同模式是早退 ⇒
+     * 原来 HostExt_DriveStop() 里的 Motion_SetMode(MOTION_IDLE) 等于空操作，
+     * 速度环照旧使能。现在它必须显式 SpeedControl_Stop()。 */
+    reset_all();
+    CHECK_EQ_I(HostExt_DriveSet(HOST_DRIVE_WHEELS, 200, 200), 0);
+    CHECK_EQ_I(stub_sc_enabled, 1);
+    {
+        int stops_before = stub_sc_stops;
+
+        HostExt_DriveStop();
+        CHECK(stub_sc_stops > stops_before);        /* 真调了 Stop（它会 Load(0,0)） */
+        CHECK_EQ_I(stub_sc_enabled, 0);             /* 使能清了 = 电机不再带电 */
+        CHECK_EQ_I(HostExt_MotorEnabled(), 0);
+        CHECK_EQ_I(stub_motion_mode, MOTION_IDLE);
+        CHECK_EQ_I(HostExt_DriveEnabled(), 0);
+        CHECK_EQ_I(HostExt_DriveMode(), HOST_DRIVE_OFF);
+    }
+
+    /* ---- 13. 母线低压保护：拔电池 = 停机，再插上也不自己跑（用户 m29239） ----
+     * 拔电机电池时 MCU 还活着（USB 供电），母线实测 0.9V —— 非 0，所以
+     * "I2C 读失败记 0" 与"电池被拔"必须区分开，否则一次总线抖动就掐了跑着的车。 */
+    reset_all();
+    host_tick_set(10000U);
+    HostExt_Init();
+    stubx_taskrun_stops = 0u;
+    CHECK_EQ_I(HostExt_LowVoltageDisarms(), 0);
+
+    /* 造一个"正在跑"的现场：驾驶会话 + 任务解释器都活着 */
+    HostExt_DriveKeepAlive(10000U);
+    CHECK_EQ_I(HostExt_DriveSet(HOST_DRIVE_WHEELS, 300, 300), 0);
+    stubx_taskrun_running = 1u;
+
+    /* (a) 正常电压（12V 包实测 ~11.8V）：什么都不做 */
+    host_tick_set(10100U);
+    HostExt_DriveKeepAlive(10100U);
+    HostExt_NoteVbusMv(11800U);
+    HostExt_Task(10100U);
+    CHECK_EQ_I(HostExt_LowVoltageDisarms(), 0);
+    CHECK_EQ_I(stub_sc_enabled, 1);
+    CHECK_EQ_I(stubx_taskrun_stops, 0);
+
+    /* (b) I2C 读失败（host_link 记 0）：绝不当成断电 */
+    host_tick_set(10200U);
+    HostExt_DriveKeepAlive(10200U);
+    HostExt_NoteVbusMv(0U);
+    HostExt_Task(10200U);
+    CHECK_EQ_I(HostExt_LowVoltageDisarms(), 0);
+    CHECK_EQ_I(stub_sc_enabled, 1);
+
+    /* (c) 读数过期（>HOST_VBUS_STALE_MS 没更新）：也不动手 */
+    host_tick_set(11400U);
+    HostExt_DriveKeepAlive(11400U);
+    HostExt_Task(11400U);
+    CHECK_EQ_I(HostExt_LowVoltageDisarms(), 0);
+    CHECK_EQ_I(stub_sc_enabled, 1);
+
+    /* (d) 拔电池：母线 0.9V，连续 HOST_VBUS_LOW_MS(500ms) 才动手 */
+    host_tick_set(12100U);
+    HostExt_DriveKeepAlive(12100U);
+    HostExt_NoteVbusMv(900U);
+    HostExt_Task(12100U);                           /* 第一次低压：开始计时 */
+    CHECK_EQ_I(HostExt_LowVoltageDisarms(), 0);
+
+    host_tick_set(12599U);
+    HostExt_DriveKeepAlive(12599U);
+    HostExt_NoteVbusMv(900U);
+    HostExt_Task(12599U);                           /* 499ms：还不到 */
+    CHECK_EQ_I(HostExt_LowVoltageDisarms(), 0);
+    CHECK_EQ_I(stub_sc_enabled, 1);
+
+    host_tick_set(12600U);
+    HostExt_DriveKeepAlive(12600U);
+    HostExt_NoteVbusMv(900U);
+    HostExt_Task(12600U);                           /* 500ms：动手 */
+    CHECK_EQ_I(HostExt_LowVoltageDisarms(), 1);
+    CHECK_EQ_I(stub_sc_enabled, 0);                 /* 电机不再带电 */
+    CHECK_EQ_I(stub_motion_mode, MOTION_IDLE);
+    CHECK_EQ_I(stubx_taskrun_stops, 1);             /* 任务也停了 */
+    CHECK_EQ_I(stubx_taskrun_running, 0u);
+    CHECK_EQ_I(HostExt_DriveEnabled(), 0);          /* 驾驶会话清掉 */
+
+    /* (e) 同一轮低压不重复动手 */
+    host_tick_set(13100U);
+    HostExt_NoteVbusMv(900U);
+    HostExt_Task(13100U);
+    CHECK_EQ_I(HostExt_LowVoltageDisarms(), 1);
+    CHECK_EQ_I(stubx_taskrun_stops, 1);
+
+    /* (f) 电压回来：只复位监测，不会自己起步 */
+    host_tick_set(13200U);
+    HostExt_NoteVbusMv(11800U);
+    HostExt_Task(13200U);
+    CHECK_EQ_I(stub_sc_enabled, 0);
+    CHECK_EQ_I(HostExt_DriveEnabled(), 0);
+
+    /* (g) 再拔一次 = 新的一轮，又动手一次 */
+    host_tick_set(13300U);
+    HostExt_NoteVbusMv(900U);
+    HostExt_Task(13300U);
+    CHECK_EQ_I(HostExt_LowVoltageDisarms(), 1);
+    host_tick_set(13800U);
+    HostExt_NoteVbusMv(900U);
+    HostExt_Task(13800U);
+    CHECK_EQ_I(HostExt_LowVoltageDisarms(), 2);
+    CHECK_EQ_I(stubx_taskrun_stops, 2);
 
     return T_SUMMARY();
 }

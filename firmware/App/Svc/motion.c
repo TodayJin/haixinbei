@@ -77,7 +77,26 @@ void Motion_ClearFault(void)
 
 void Motion_SetMode(Motion_Mode m)
 {
-    if (m == s_mode) return;
+    if (m == s_mode) {
+        /* 幂等调用：切换动作不重复做，但**必须保证速度环的状态是对的**。
+         *
+         * 方向一（用户 m28949）：任务块的 SET_MODE 早先是在调用前先 SpeedControl_Stop()，
+         * 而这里对同模式直接 return ⇒ 速度环被永久关掉（它的 Task() 因 s_enabled=0 立刻
+         * 返回，PWM 一直 0）—— "跑循迹根本就不动"就是这个组合。
+         * 现在 task_run.c 侧只在真换模式时才 Stop，这里是第二道保险。
+         *
+         * 方向二（用户 m29239）：WHEELS 直给（host_ext.c）和电机测试页都是"常驻 IDLE +
+         * 自己使能速度环"，于是同模式的 MOTION_IDLE 早退会把"停车"变成空操作 ——
+         * stop 之后车还在跑、只有拔电池才停。同模式 IDLE 必须真的停。 */
+        if (m == MOTION_IDLE) {
+            GyroControl_Stop();
+            SpeedControl_Stop();      /* 里面会 Load(0,0) */
+        } else if (!SpeedControl_IsEnabled()) {
+            SpeedControl_SetTarget(0, 0);
+            SpeedControl_Enable(1U);
+        }
+        return;
+    }
 
     if (m == MOTION_IDLE) {
         GyroControl_Stop();

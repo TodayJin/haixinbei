@@ -154,8 +154,20 @@ static int block_step(const task_block_t *b)
             SpeedControl_SetTarget((int)b->p1, (int)b->p2);
             SpeedControl_Enable(1u);
         } else {
-            SpeedControl_Stop();
-            Motion_SetMode((Motion_Mode)b->p0);
+            /* **只有真的要换模式才先停速度环**（用户 m28949：跑循迹"根本就不动"）。
+             * 状态机的 enter 序列每次进状态都会重放，而 Motion_SetMode() 对"同模式"
+             * 是空操作（motion.c:80 `if (m == s_mode) return;`）—— 于是
+             * "SET_MODE 3 + GOTO 自己"这种任务每拍都会回来重跑 enter 块：
+             *   SpeedControl_Stop() 把 PWM 清 0、把速度环关掉，紧接着的
+             *   Motion_SetMode(3) 又因为是同模式直接返回 ⇒ 速度环再没人打开，
+             *   车"站着不动"（还把 5ms 环刚写好的 PWM 反复清掉）。
+             * 用"当前模式"做判据：同模式就当它已经切好了，什么都不做。 */
+            Motion_Mode want = (Motion_Mode)b->p0;
+
+            if (Motion_GetMode() != want) {
+                SpeedControl_Stop();
+                Motion_SetMode(want);
+            }
         }
         return 1;
 

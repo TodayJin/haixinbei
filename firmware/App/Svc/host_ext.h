@@ -39,9 +39,24 @@ extern "C" {
 /* 驾驶时的速度环斜坡（PWM/s）：要能立刻反向，不能用循迹那套 20000 软启动 */
 #define HOST_DRIVE_RAMP 100000.0f
 
+/* 母线（电机电池）低压保护 —— 用户 m29239「一上电他就跑，得拔电才停」。
+ *
+ * 拔掉电机电池并不会让 MCU 掉电（MCU / 上位机 / J-Link 走 USB 供电，INA226 也还在），
+ * 实测那时母线读数是 ~0.9V（**非 0**，所以"I2C 读失败给 0"不会被误判成断电）。
+ * 连续 HOST_VBUS_LOW_MS 都读到这么低 ⇒ 认定电池被拔：停驾驶会话 + 停任务解释器 +
+ * 回 MOTION_IDLE，于是"再接上电池"也不会自己跑起来。
+ * 电压回到 HOST_VBUS_OK_MV 以上才复位（迟滞，免得在阈值附近抖），复位只重新武装监测，
+ * 不会自己起步。 */
+#define HOST_VBUS_LOW_MV    3000U   /* 低于这个值 = 电池没接 / 接触不良 */
+#define HOST_VBUS_OK_MV     9000U   /* 高于这个值 = 电池回来了（12V 包实测 ~11.8V） */
+#define HOST_VBUS_LOW_MS    500U    /* 连续低压这么久就动手 */
+#define HOST_VBUS_STALE_MS  1000U   /* 读数超过这么久没更新就不动手（宁可不动） */
+
 void    HostExt_Init(void);
-void    HostExt_Task(uint32_t now_ms);            /* host_link_poll() 每拍调：链路看门狗 */
+void    HostExt_Task(uint32_t now_ms);            /* host_link_poll() 每拍调：看门狗 + 低压保护 */
 void    HostExt_DriveKeepAlive(uint32_t now_ms);  /* 每收到一个合法帧调一次 */
+void    HostExt_NoteVbusMv(uint16_t mv);          /* host_link 每真读到一次母线电压就报一次 */
+uint8_t HostExt_LowVoltageDisarms(void);          /* 因母线低压自动停机的次数（诊断） */
 
 /* @return 0 = 成功；-1 = 模式非法；-2 = 任务解释器在跑，拒绝远程驾驶 */
 int     HostExt_DriveSet(uint8_t mode, int a, int b);

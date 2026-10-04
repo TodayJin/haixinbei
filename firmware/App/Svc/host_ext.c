@@ -10,7 +10,9 @@
  *   1) 任务解释器在跑（`TaskRun_IsRunning() != 0`）时**拒绝任何驾驶请求**，避免和任务
  *      抢电机；停任务后重新连接即可；
  *   2) 链路看门狗：500ms 没收到任何合法帧就自动停车（`HostExt_Task()`）；
- *   3) 所有角度/脉宽最终都由 servo.c / speed_control.c 自己夹限幅。
+ *   3) 母线低压保护：电池被拔掉（母线读到 ~0.9V 而不是 0）连续 500ms ⇒ 停驾驶会话 +
+ *      停任务 + 回 IDLE，于是"再插上电池"也不会自己跑（用户 m29239）；
+ *   4) 所有角度/脉宽最终都由 servo.c / speed_control.c 自己夹限幅。
  */
 #include "host_ext.h"
 
@@ -33,15 +35,27 @@ static uint32_t s_keepalive_ms;     /* 最近一次收到合法帧的时刻 */
 static uint8_t  s_trips;            /* 看门狗自动停车的次数（诊断） */
 static uint8_t  s_cur_action;       /* 最近一次下发的动作号（0 = 没下发过） */
 
+/* 母线低压保护的状态（见 host_ext.h 的说明） */
+static uint16_t s_vbus_mv;          /* 最近一次真读到的母线电压 mV（host_link 报进来） */
+static uint32_t s_vbus_ms;          /* 上面那个读数的时刻（0 = 从没读到过） */
+static uint32_t s_vbus_low_ms;      /* 本轮连续低压的起点（0 = 还没开始算） */
+static uint8_t  s_vbus_disarmed;    /* 本轮低压已经停过机了（不重复动手/计数） */
+static uint8_t  s_vbus_disarms;     /* 低压自动停机的次数（诊断） */
+
 void HostExt_Init(void)
 {
-    s_mode         = HOST_DRIVE_OFF;
-    s_a            = 0;
-    s_b            = 0;
-    s_base_yaw     = 0.0f;
-    s_keepalive_ms = HAL_GetTick();
-    s_trips        = 0U;
-    s_cur_action   = 0U;
+    s_mode          = HOST_DRIVE_OFF;
+    s_a             = 0;
+    s_b             = 0;
+    s_base_yaw      = 0.0f;
+    s_keepalive_ms  = HAL_GetTick();
+    s_trips         = 0U;
+    s_cur_action    = 0U;
+    s_vbus_mv       = 0U;
+    s_vbus_ms       = 0U;
+    s_vbus_low_ms   = 0U;
+    s_vbus_disarmed = 0U;
+    s_vbus_disarms  = 0U;
 }
 
 /* ------------------------------------------------------------------ 驾驶 */
@@ -70,11 +84,66 @@ uint8_t HostExt_DriveWatchdogTrips(void)
 
 void HostExt_DriveStop(void)
 {
-    /* MOTION_IDLE 里就是 GyroControl_Stop() + SpeedControl_Stop()（后者会 Load(0,0)）*/
+    /* 用户 m29239：WHEELS 直给模式下 Motion 一直停在 IDLE，而 motion.c 的
+     * `Motion_SetMode()` 对同模式是早退 ⇒ 原来这里只调 Motion_SetMode(MOTION_IDLE)
+     * 等于什么都没做，速度环照旧使能、车照旧跑（"停车命令停不下来，只能拔电池"）。
+     * 所以显式停速度环（它里面会 Load(0,0)），再让 Motion 回 IDLE。 */
+    SpeedControl_Stop();
     Motion_SetMode(MOTION_IDLE);
     s_mode = HOST_DRIVE_OFF;
     s_a    = 0;
     s_b    = 0;
+}
+
+/* ------------------------------------------------ 母线低压保护（用户 m29239） */
+
+void HostExt_NoteVbusMv(uint16_t mv)
+{
+    s_vbus_mv = mv;
+    s_vbus_ms = HAL_GetTick();
+}
+
+uint8_t HostExt_LowVoltageDisarms(void)
+{
+    return s_vbus_disarms;
+}
+
+/* 电池被拔掉 ⇒ 把"会驱动电机的东西"全关掉。
+ *
+ * 为什么需要它：他停车的手法是拔电机电池，而拔电池并不让 MCU 掉电（MCU/上位机/J-Link
+ * 走 USB，INA226 还在，母线实测 0.9V）。速度环的使能是**跨电池断电存活**的：拔了电池
+ * 车只是没力，一合上电池车立刻按残留目标全速跑 —— 就是"一上电他就跑，得拔电才停"。
+ * 这里连续 HOST_VBUS_LOW_MS 读到低压就 ① 停驾驶会话 ② 停任务解释器 ③ 回 MOTION_IDLE，
+ * 三条一起保证"电池再插回来也不会自己跑"。电压回到 HOST_VBUS_OK_MV 以上只复位监测。
+ */
+static void low_voltage_guard(uint32_t now)
+{
+    if (s_vbus_ms == 0U) return;                                    /* 从没读到过 */
+    if ((uint32_t)(now - s_vbus_ms) > HOST_VBUS_STALE_MS) return;    /* 读数过期：宁可不动手 */
+    if (s_vbus_mv == 0U) return;                                    /* 读失败（host_link 记 0） */
+
+    if (s_vbus_mv >= HOST_VBUS_OK_MV) {          /* 电池在（且不虚） */
+        s_vbus_low_ms   = 0U;
+        s_vbus_disarmed = 0U;
+        return;
+    }
+    if (s_vbus_mv >= HOST_VBUS_LOW_MV) {         /* 3~9V：不健康，但不算"没接" */
+        s_vbus_low_ms = 0U;
+        return;
+    }
+    if (s_vbus_disarmed) return;                 /* 这一轮已经动过手 */
+
+    if (s_vbus_low_ms == 0U) {                   /* 第一次读到低压：开始计时 */
+        s_vbus_low_ms = (now != 0U) ? now : 1U;
+        return;
+    }
+    if ((uint32_t)(now - s_vbus_low_ms) < HOST_VBUS_LOW_MS) return;
+
+    s_vbus_disarmed = 1U;
+    s_vbus_disarms++;
+    TaskRun_Stop();                              /* 任务先停：不然它下一块 SET_MODE 又把环开起来 */
+    HostExt_DriveStop();                         /* 会话清掉 + SpeedControl_Stop() */
+    Motion_SetMode(MOTION_IDLE);                 /* 兜底：非 IDLE 模式也真转换回 IDLE */
 }
 
 void HostExt_DriveKeepAlive(uint32_t now_ms)
@@ -84,6 +153,8 @@ void HostExt_DriveKeepAlive(uint32_t now_ms)
 
 void HostExt_Task(uint32_t now_ms)
 {
+    low_voltage_guard(now_ms);      /* 跟驾驶会话无关：没在驾驶时也要盯着电池 */
+
     if (s_mode == HOST_DRIVE_OFF) {
         return;
     }

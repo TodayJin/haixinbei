@@ -139,6 +139,7 @@ extern int      stubx_action_set_calls, stubx_servo_set[3], stubx_servo_dev[3];
 extern int      stubx_stop_calls;
 extern uint8_t  stubx_drive_mode, stubx_drive_enabled, stubx_nvram_state;
 extern int      stubx_wd_trips, stubx_clear_faults;
+extern int      stubx_mmps_l, stubx_mmps_r;   /* 遥测 v_l/v_r 的注入值（host_extstub.c） */
 
 /* host_taskstub.c（任务存储/解释器的 RAM 替身）的观测变量与失败钩子。
  * 真 Flash 语义由 t_taskstore.c 用 task_store.c 真源码测；这里只验帧。 */
@@ -552,6 +553,26 @@ int main(void)
     }
     build(f, 0x20, 64, pl, 5);
     feed_and_poll(f, 12);
+
+    /* 18b) 遥测 offset 10/12 = v_l/v_r：必须带出**编码器算出来的真实轮速**（mm/s）。
+     *      用户 m28949 之前这里长期硬写 0（旧注释"编码器还没做"早已过期），
+     *      操控页的速度波形永远是一条 0 线，看着就像"PID 把速度抵消成 0"。 */
+    stubx_mmps_l = 340;
+    stubx_mmps_r = -125;
+    host_tick_add(25u);
+    host_dl_tx_clear();
+    host_link_poll(0u);
+    {
+        uint8_t l = 0;
+        const uint8_t *t = find_frame(0x03, 0, &l);
+        CHECK(t != NULL);
+        if (t) {
+            CHECK_EQ_I((int16_t)(t[5u + 10u] | (t[5u + 11u] << 8)), 340);    /* v_l_mmps */
+            CHECK_EQ_I((int16_t)(t[5u + 12u] | (t[5u + 13u] << 8)), -125);   /* v_r_mmps */
+        }
+    }
+    stubx_mmps_l = 0;
+    stubx_mmps_r = 0;
 
     /* 19) 动作表：GET → 28 字节；SET → ACK + 立刻下发 + 回读整表 */
     host_dl_tx_clear();

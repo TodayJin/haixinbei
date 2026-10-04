@@ -626,5 +626,41 @@ int main(void)
     TaskRun_Tick(1000u);
     CHECK_EQ_I(TaskRun_IsRunning(), 0);
 
+    /* ===============================================================
+     * 12) 「SET_MODE 3 + GOTO 自己」不许把速度环反复关掉（用户 m28949：
+     *     跑循迹"根本就不动"）—— enter 块每次进状态都会重放，而 SetMode 对
+     *     同模式是空操作，所以 SET_MODE 块无脑先 Stop 的话，速度环永远开着
+     *     不了、PWM 每拍被清 0。
+     * =============================================================== */
+    pg_reset(1u, 0u);
+    add_enter(0u, TASK_OP_SET_MODE, (uint16_t)TASK_MODE_TRACE_GYRO, 0, 0u, 0xFFFFu, 0u);
+    add_body(0u, TASK_OP_SET_SPEED, 7200u, 0, 0u, 0xFFFFu, 0u);
+    add_body(0u, TASK_OP_GOTO, 0u, 0, 0u, 0xFFFFu, 0u);
+    len = pg_build();
+    CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
+    stub_motion_mode  = (int)MOTION_IDLE;
+    stub_motion_speed = -1;
+    stub_sc_stops     = 0;
+    stub_sc_enabled   = 0;
+    CHECK_EQ_I(TaskRun_Start(12u), 0);
+    TaskRun_Tick(30000u);                                  /* 第一拍：切进循迹模式 */
+    CHECK_EQ_I(stub_motion_mode, (int)TASK_MODE_TRACE_GYRO);
+    CHECK_EQ_I(stub_motion_speed, 7200);                   /* SET_SPEED 的 7200 真的落了 */
+    CHECK_EQ_I(TaskRun_IsRunning(), 1);
+    {
+        int stops0 = stub_sc_stops;                        /* 切换那一次是允许的 */
+
+        for (uint32_t k = 0u; k < 2000u; k++) {
+            TaskRun_Tick(30001u + k);                      /* 一直绕在 GOTO 自己里 */
+        }
+        CHECK_EQ_I(TaskRun_IsRunning(), 1);
+        CHECK_EQ_I(TaskRun_State(), 0);
+        CHECK_EQ_I(stub_sc_stops, stops0);                 /* 2000 拍里一次都不许再 Stop */
+        CHECK_EQ_I(stub_motion_mode, (int)TASK_MODE_TRACE_GYRO);
+        CHECK_EQ_I(stub_motion_speed, 7200);
+    }
+    TaskRun_Stop();
+    CHECK_EQ_I(TaskRun_IsRunning(), 0);
+
     return T_SUMMARY();
 }

@@ -160,8 +160,8 @@ int main(void)
 
     back_to_idle();
     gc_task = bg_calls = 0;
-    gc_enabled = 1u;                         /* 任务流程/旧板后台角度环 */
-    Motion_SetMode(MOTION_IDLE);
+    Motion_SetMode(MOTION_IDLE);             /* 同模式 IDLE：现在是"确保停"，会把角度环关掉 */
+    gc_enabled = 1u;                         /* 任务流程/旧板后台角度环：进 IDLE 后由它自己打开 */
     Motion_Task();
     CHECK_EQ_I(gc_task, 1);
     CHECK_EQ_I(bg_calls, 1);
@@ -173,6 +173,7 @@ int main(void)
     host_tick_add(100000u);                  /* 把假时间推到足够大，避免和为 0 混淆 */
     back_to_idle();
     Motion_SetMode(MOTION_GYRO);
+    Motion_Task();                           /* 第一拍：消化角度环打开的上升沿（宽限基准在这里重置） */
 
     /* 2a) 刚进模式的宽限期：400ms 没帧也不能判失联 */
     host_tick_add(400u);
@@ -280,6 +281,47 @@ int main(void)
         CHECK_EQ_I((long long)(g_isr_over - o0), 0);
         CHECK_EQ_I((long long)g_isr_cyc_last, 0);   /* 主机假 CYCCNT 不前进 */
     }
+
+    /* ---------------------------------------------------------------
+     * 4) 同模式的 Motion_SetMode 必须保证速度环开着（用户 m28949）
+     *    任务块的 SET_MODE 早先是"先 SpeedControl_Stop() 再 SetMode"：
+     *    同模式时 SetMode 本来是空操作 ⇒ 速度环永远关着（它的 Task() 因
+     *    s_enabled=0 直接返回，PWM 恒 0）—— 车"根本就不动"。
+     * --------------------------------------------------------------- */
+    back_to_idle();
+    SpeedControl_Stop();                      /* 相当于任务块 SET_MODE 先停环 */
+    sc_enable_last = 0;
+    Motion_SetMode(MOTION_TRACE_GYRO);        /* 真换模式：照旧 Enable(1) */
+    CHECK_EQ_I(sc_enable_last, 1);
+    CHECK_EQ_I((int)Motion_GetMode(), (int)MOTION_TRACE_GYRO);
+
+    {
+        int stops_before = sc_stop;
+
+        sc_enable_last = 0;                   /* 清掉上一次的记录 */
+        Motion_SetMode(MOTION_TRACE_GYRO);    /* 同模式：不能再空返回 */
+        CHECK_EQ_I(sc_enable_last, 1);        /* 必须重新把速度环打开 */
+        CHECK_EQ_I(sc_stop, stops_before);    /* 同模式也不许再 Stop（Stop 里会 Load(0,0)） */
+        CHECK_EQ_I((int)Motion_GetMode(), (int)MOTION_TRACE_GYRO);
+    }
+
+    /* ---------------------------------------------------------------
+     * 4b) 同模式的 IDLE 必须真的停（用户 m29239）
+     *     WHEELS 直给（host_ext.c）和电机测试页都是"常驻 IDLE + 自己使能速度环"，
+     *     同模式早退会把"停车"变成空操作：stop 之后车还在跑，只有拔电池才停。
+     * --------------------------------------------------------------- */
+    back_to_idle();                           /* 真转换回 IDLE */
+    {
+        int stops_before = sc_stop;
+
+        Motion_SetMode(MOTION_IDLE);          /* 同模式 IDLE：必须再 Stop 一次 */
+        CHECK_EQ_I(sc_stop, stops_before + 1);
+        CHECK_EQ_I(host_load_left(), 0);      /* 停车必须真的把 PWM 写 0 */
+        CHECK_EQ_I(host_load_right(), 0);
+        CHECK_EQ_I((int)Motion_GetMode(), (int)MOTION_IDLE);
+    }
+
+    back_to_idle();
 
     return T_SUMMARY();
 }

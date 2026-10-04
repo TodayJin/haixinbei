@@ -27,6 +27,7 @@
 #include "motion.h"        /* v2：驾驶状态回报用 Motion_GetMode */
 #include "nvram.h"         /* v2：T_PARAM_SAVE 真保存（nvram_touch） */
 #include "servo.h"         /* v2：动作表/舵机角度 */
+#include "speed_control.h" /* 遥测 v_l/v_r：真实轮速（编码器 mm/s） */
 #include "task_run.h"      /* v2：任务解释器（T_TASK_RUN 启动 / T_TASK_STATUS 查询） */
 #include "task_store.h"    /* v2：任务程序 Flash 存储（页 58 目录 + 页 59..61 程序区） */
 #include "trace_cal.h"     /* v2：T_CAL_GET 标定回读 */
@@ -406,7 +407,12 @@ static void put_telemetry_base(uint8_t *p, uint32_t loop_us)
   if (!OLED_IsBusy() && (now - last_ina >= 100u)) {
     int32_t t;
     last_ina = now;
-    if (ina226_read_bus_voltage_mv(&t) == HAL_OK) vbus_mv = t;
+    if (ina226_read_bus_voltage_mv(&t) == HAL_OK) {
+      vbus_mv = t;
+      /* 顺手报给 host_ext 的母线低压保护：电池被拔（~0.9V）时它会停车，
+         这样"拔电池"就等于"停机"，再插上电池也不会自己跑（用户 m29239）。 */
+      HostExt_NoteVbusMv((uint16_t)((t > 0) ? t : 0));
+    }
     if (ina226_read_current_ma(&t) == HAL_OK)     ibat_ma = t;
   }
 
@@ -430,10 +436,15 @@ static void put_telemetry_base(uint8_t *p, uint32_t loop_us)
   put_i16(&p[4], clamp_i16(Yaw * 10.0f));
   put_i16(&p[6], clamp_i16(Pitch * 10.0f));
   put_i16(&p[8], clamp_i16(Roll * 10.0f));
-  /* v_l/v_r 暂为 0：编码器还没做（硬件在 PB4..PB7，固件待写）。
-     不拿 PWM 假装速度 —— 那会让上位机的波形骗人。 */
-  put_i16(&p[10], 0);
-  put_i16(&p[12], 0);
+  /* v_l/v_r：编码器算出来的真实轮速（协议文档 offset 10/12，单位 mm/s）。
+     用户 m28949 就是被这里骗了：本字段长期硬写 0（旧注释说"编码器还没做"，
+     但 encoder.c/TIM3+TIM4 早就在跑，speed_control.c 每 5ms 都在读），
+     操控页的速度波形永远是一条 0 线 —— 看着就像"PID 把速度抵消成 0"。
+     正方向约定：和 Load()/速度环目标一致，**正 = 该轮朝前进方向转**；
+     注意 pwm_r（offset 16）读的是 CH3/CH4 的原始极性，右路镜像安装，
+     所以两轮都前进时 pwm_r 显示为负 —— 三个字段各自的约定见协议文档。 */
+  put_i16(&p[10], clamp_i16((float)SpeedControl_SpeedMmps(0)));
+  put_i16(&p[12], clamp_i16((float)SpeedControl_SpeedMmps(1)));
   put_i16(&p[14], motor_pwm(TIM_CHANNEL_1, TIM_CHANNEL_2));
   put_i16(&p[16], motor_pwm(TIM_CHANNEL_3, TIM_CHANNEL_4));
   put_u16(&p[18], (uint16_t)(vbus_mv < 0 ? 0 : (vbus_mv > 65535 ? 65535 : vbus_mv)));

@@ -136,3 +136,16 @@ float HostExt_AngleErr(void) { return 1.25f; }
 float HostExt_AngleRateRef(void) { return 2.5f; }
 float HostExt_AngleCorr(void) { return -3.75f; }
 int   HostExt_TraceCross(void) { return 1; }
+
+/* 遥测 v_l/v_r 现在上报真实轮速（host_link.c 的 put_telemetry_base），
+   协议层测试不需要真的速度环，给一对可注入的固定值（默认 0 = 静止）。
+   t_hostlink 里改这两个量就能断言 offset 10/12 真的带出去了。 */
+int stubx_mmps_l = 0;
+int stubx_mmps_r = 0;
+int SpeedControl_SpeedMmps(int wheel) { return (wheel == 0) ? stubx_mmps_l : stubx_mmps_r; }
+
+/* 母线低压保护：host_link.c 每真读到一次母线电压就报一次（用户 m29239）。
+   真逻辑在 host_ext.c（由 t_hostext 测），协议层只需要一个能看见的假实现。 */
+uint16_t stubx_vbus_mv;
+void    HostExt_NoteVbusMv(uint16_t mv) { stubx_vbus_mv = mv; }
+uint8_t HostExt_LowVoltageDisarms(void) { return 0u; }

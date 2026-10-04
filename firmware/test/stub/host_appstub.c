@@ -74,6 +74,12 @@ static void pose_ready(void)
 /* ---- motion ---- */
 void Motion_SetMode(Motion_Mode m)
 {
+    /* 真 motion.c 对"同模式"是早退，且会顺手把速度环的状态摆正（motion.c:80-99）。
+     * 桩必须照做，否则测不出"同模式 IDLE 把停车变成空操作"这类 bug（用户 m29239：
+     * WHEELS 直给时 Motion 常驻 IDLE，HostExt_DriveStop() 就成了空调用）。 */
+    if (stub_motion_mode == (int)m) {
+        return;
+    }
     stub_motion_mode = (int)m;
     if (m == MOTION_IDLE) {
         SpeedControl_Stop();
