@@ -316,10 +316,17 @@
  *   - animate-pulseDot（连接正常时 header 那个圆点一直亮着）在不做合成器动画的机器上
  *     每帧一次全文档样式重算（styleN = 帧数）。
  *
- * ⚠️ 关掉模糊不能就这么散着：这些面本来是"半透明 + 模糊"才从背景里立起来的，模糊一去，
- * 底下内容直接透出来（用户 m24215：「文字后面变成纯黑」—— header 被刷成了 #070a16）。
- * 所以低特效下给每一层**一个不透明面 + 1px 亮边**，靠亮度差分层，而不是靠模糊：
- *     页面渐变(ink-800 底) < 侧栏 #0d1428 < 顶栏 #121a33 < 卡片 #141d3d
+ * ⚠️ 关掉模糊之后**不要**给面板再刷一层底色。2026-10-04 一度刷成"三层不透明面"
+ * （侧栏 #0d1428 < 顶栏 #121a33 < 卡片 #141d3d），用户 m25581 直接否了：
+ *   「他的背景之前是黑的，你现在改成了这个稍微有点蓝这个颜色，但是跟背景还是融合不到一起啊。
+ *     你为什么非要有这个文字背景呢？你就单纯一个文字不行吗？」
+ * 原因是页面背景不是纯色，而是 ink-800(#0b1020) + 三团固定辉光（见 body 的 background-image），
+ * 任何纯色面贴上去都是一块补丁。现在的口径：
+ *   - **侧栏与卡片完全没有底色**（background-color: transparent），文字直接落在页面渐变上，
+ *     只留 .glass 自带的 1px ring 用来分组；
+ *   - 顶栏因为 sticky 压在滚动内容上**必须不透明**，但它画的是同一份
+ *     background-image + background-attachment: fixed ⇒ 与 body 的辉光逐像素对齐，
+ *     看上去就是页面本身（没有"顶栏那条带"）。
  * 别改成纯黑（#000 / ink-900 #070a16）：黑底贴霓虹字没层次、显脏。
  */
 html.is-scrolling header,
@@ -332,22 +339,33 @@ html.perf-lite .glass {
   -webkit-backdrop-filter: none !important;
 }
 
-/* 顶栏：sticky 压在滚动内容上，必须**完全不透明**（0.94 都还能看见底下的参数行，截图确认过） */
-html.is-scrolling header,
-html.perf-lite header {
-  background-color: #121a33;
-  border-bottom-color: rgba(255, 255, 255, 0.12);
-  box-shadow: 0 8px 20px -16px rgba(0, 0, 0, 0.95);
+/* 侧栏：没有底色，跟页面背景连成一片（只剩 border-r 那道 1px 线） */
+html.is-scrolling aside,
+html.perf-lite aside {
+  background-color: transparent;
 }
 
-/* 低特效下的侧栏 / 卡片：比页面背景亮一档的面，卡片再加一道顶部高光与内亮边 */
-html.perf-lite aside {
-  background-color: #0d1428;
-}
+/* 卡片：连背景高光与投影都去掉（投影会在地板上"画"出一个方框的影子）。
+   `--tw-shadow: 0 0 #0000` 只清掉 shadow-card 那层投影；.glass 自带的 ring-1 走的是
+   `--tw-ring-shadow`，不受影响。 */
+html.is-scrolling .glass,
 html.perf-lite .glass {
-  background-color: #141d3d;
-  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0) 42%);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 18px 40px -24px rgba(0, 0, 0, 0.9);
+  background-color: transparent;
+  background-image: none;
+  --tw-shadow: 0 0 #0000;
+}
+
+/* 顶栏：sticky 压在滚动内容上 ⇒ 必须**完全不透明**（0.94 都还能看见底下的参数行，截图确认过），
+   但它用的是页面背景自己那三张图 + fixed，所以跟 body 的辉光逐像素对齐。
+   ⚠️ 这三行必须与 body 的 background-image 逐字一致，改一处就得改两处（perf.test.ts 盯着）。 */
+html.is-scrolling header,
+html.perf-lite header {
+  background-color: #0b1020;
+  background-image:
+    radial-gradient(1200px 600px at 12% -10%, rgba(34, 211, 238, 0.13), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(167, 139, 250, 0.12), transparent 55%),
+    radial-gradient(700px 500px at 50% 120%, rgba(52, 211, 153, 0.08), transparent 60%);
+  background-attachment: fixed;
 }
 
 /* 只关这一个无限动画（一帧不落的那个）；riseIn 是一次性入场，留着更好看 */

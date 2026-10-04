@@ -204,39 +204,42 @@ describe('滚动流畅度（用户 m03559「上下滚动卡卡的」）', () => 
     for (const sel of [`html.${SCROLLING_CLASS} header`, `html.${LITE_CLASS} header`, `html.${SCROLLING_CLASS} .glass`]) {
       expect(css).toContain(sel)
     }
-    // 去掉模糊后 header 必须**不透明**（半透明会透出底下的参数行：0.94 都看得见）
-    expect(css).toMatch(/html\.is-scrolling header,[\s\S]{0,80}background-color: #121a33;/)
+    // 去掉模糊后 header 必须**不透明**（半透明会透出底下的参数行：0.94 都看得见），
+    // 而且不许是"一块自己的颜色"——它得画页面背景本身（见下面 m25581 那条）
+    expect(css).toMatch(/html\.is-scrolling header,[\s\S]{0,80}background-color: #0b1020;/)
     expect(css).not.toMatch(/header[\s\S]{0,60}background-color: rgba\(/)
     expect(SCROLL_IDLE_MS).toBeGreaterThanOrEqual(80)
     expect(SCROLL_IDLE_MS).toBeLessThanOrEqual(400)
   })
 
-  it('低特效主题是有层次的（用户 m24215：别把文字后面刷成纯黑）', () => {
+  it('低特效下没有"文字背景"：卡片/侧栏透明，顶栏画的是页面背景本身（用户 m25581）', () => {
     const css = src('src/index.css')
-    // 三层不透明面：侧栏 < 顶栏 < 卡片，逐层变亮 ⇒ 卡片能从背景里"立"起来
-    const lum = (hex: string) => {
-      const n = parseInt(hex.slice(1), 16)
-      const ch = [(n >> 16) & 255, (n >> 8) & 255, n & 255].map((v) => {
-        const s = v / 255
-        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4
-      })
-      return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2]
+    /** 取某条规则里含指定声明的那个块（同一个选择器可能出现多次：模糊那条、配色那条） */
+    const block = (sel: string, prop: string) => {
+      const re = new RegExp(`${sel}\\s*\\{([^}]*)\\}`, 'g')
+      for (let m; (m = re.exec(css)); ) if (m[1].includes(prop)) return m[1].replace(/\s+/g, ' ')
+      return ''
     }
-    const grab = (sel: string) => {
-      const re = new RegExp(`${sel.replace(/\./g, '\\.')}\\s*\\{[^}]*background-color:\\s*(#[0-9a-f]{6})`, 'i')
-      const m = css.match(re)
-      expect(m, `${sel} 得有明确的不透明底色`).toBeTruthy()
-      return m![1].toLowerCase()
-    }
-    const aside = grab('html.perf-lite aside')
-    const header = grab('html.perf-lite header')
-    const card = grab('html.perf-lite .glass')
-    const page = '#0b1020' // ink-800，body 底色
-    expect(lum(aside)).toBeGreaterThan(lum(page))
-    expect(lum(header)).toBeGreaterThan(lum(aside))
-    expect(lum(card)).toBeGreaterThan(lum(header))
+    // ① 侧栏与卡片**完全没有底色**：文字直接落在页面渐变上（"你就单纯一个文字不行吗"）
+    expect(block('html\\.perf-lite aside', 'background-color')).toContain('background-color: transparent')
+    const card = block('html\\.perf-lite \\.glass', 'background-color')
+    expect(card).toContain('background-color: transparent')
+    expect(card).toContain('background-image: none')
+    // ② 旧的"三层不透明面"配色一个都不许回来（那正是他说的"贴在渐变背景上的方框"）——
+    //    只在**去掉注释**的正文里查：注释里写着这段历史，那是说明不是用法
+    const bare = css.replace(/\/\*[\s\S]*?\*\//g, '')
+    for (const c of ['#0d1428', '#121a33', '#141d3d']) expect(bare).not.toContain(c)
+
+    // ③ 顶栏 sticky 压在滚动内容上 ⇒ 必须不透明；但必须是**页面背景自己**那几张图 + fixed
+    const hdr = block('html\\.perf-lite header', 'background-attachment')
+    expect(hdr).toContain('background-color: #0b1020')
+    expect(hdr).toContain('background-attachment: fixed')
+    const grads = (s: string) =>
+      (s.match(/radial-gradient\([^;]*?transparent\s+\d+%\)/g) || []).map((g) => g.replace(/\s+/g, ''))
+    const body = (css.match(/body\s*\{([\s\S]*?)\n  \}/) || ['', ''])[1].replace(/\s+/g, ' ')
+    expect(grads(hdr).length, '顶栏得把页面那三团辉光都抄过来').toBeGreaterThanOrEqual(3)
+    expect(grads(hdr)).toEqual(grads(body)) // 逐像素对齐的前提：两处一模一样
     // 谁都不许是纯黑（这就是用户看不下去的那版）
-    for (const c of [aside, header, card]) expect(lum(c)).toBeGreaterThan(0.004)
     expect(css).not.toMatch(/background-color:\s*(#000000|#000\b|rgb\(0 0 0\)|rgb\(7 10 22\))/)
   })
 
