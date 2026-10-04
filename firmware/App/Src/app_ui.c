@@ -733,9 +733,11 @@ static void draw_title(const char *title)
  * 循迹测试：8 条柱子 + 每路的 0/1 + 0/1 分界线（阈值线）
  *
  *   - 柱高 = 该路的灰度（0..255，255 = 压黑线）：有模拟量用模拟量，
- *     没有就回落数字口的 0/255（见 trace_cal_level）
+ *     丢线/断链时**按住上一帧好帧**（trace_cal_disp_level，页面另打「丢线」标记），
+ *     用户显式选了"数字"接口时才是数字口的 0/255
  *   - 分界线 = 标定出来的 0/1 阈值位置（XOR 画，压在实心柱上也看得见）
- *   - 底部一行 = **实际参与运算**的 0/1（已含「循迹反转」）
+ *   - 底部一行 = 界面上看到的 0/1（已含「循迹反转」，丢线时同柱高一起按住；
+ *     控制逻辑用的是 trace_cal_channel/level 那份真值，别拿这一行当判据）
  *   - 中键进黑白两点标定向导：全黑按一下 -> 全白按一下 -> 自动算每路阈值
  *   - 柱子上方留 17px 给标题、底部留 13px 给 0/1，所以柱高从 44 降到 32
  * ===================================================================== */
@@ -1011,9 +1013,12 @@ static void draw_trace_page(void)
          * 缩成两个字后：循迹 x2..24 / 标记 x28 / 数据源 x48 / 提示 x78..123。 */
         draw_title("循迹");
         /* x48..70 放数据源指示：显示**这一帧真的在用**哪条通路，而不是设置里
-         * 选的那条——选 I2C/串口但那条不通时 trace_cal_analog_ok=0，柱高实际
-         * 走的是数字口，这里必须显示 DIG 才对得上。 */
-        if (!trace_cal_analog_ok) {
+         * 选的那条——选 I2C/串口但那条不通时 trace_cal_analog_ok=0。
+         * 丢线/断链时这一格改打「丢线」：柱子是按住上一帧的旧值（见 trace_cal.h
+         * 的「丢线时按住上一帧」，用户 m26712 第 3 条），比"哪条通路"更要紧。 */
+        if (trace_cal_held()) {
+            src_txt = "丢线";
+        } else if (!trace_cal_analog_ok) {
             src_txt = "数字";
         } else {
             src_txt = (trace_cal_src == TRACE_SRC_UART) ? "串口" : "I2C";
@@ -1222,6 +1227,7 @@ static void draw_task_page(void)
     uint8_t total = 0U;
     uint8_t i;
     char    buf[16];
+    int16_t x_min = 28;      /* 「丢线」标记最左能摆到哪（标题右边留空） */
 
     /* 标题行：左边页名（跑起来写「运行」），中间「第几个/共几个」，最右边任务名。
      * 用户 m24999 明确要求"任务只显示在标题栏、标题栏最右边也要有他的名字"，
@@ -1241,8 +1247,25 @@ static void draw_task_page(void)
     if (total != 0U) {
         snprintf(buf, sizeof(buf), "%u/%u", (unsigned)idx, (unsigned)total);
         draw_text(28, 1, kk_font_body, buf);
+        OLED_SetFont(kk_font_body);              /* 量宽度用的是"当前字体" */
+        x_min = (int16_t)(28 + OLED_GetUTF8Width(buf) + 4);
     }
     draw_task_name();
+
+    /* 丢线/断链：柱子与底部 0/1 是"按住上一帧"的旧值，必须说明，不然看着像卡住
+     * （用户 m26712 第 2 条报的就是"跑任务时屏幕暂停刷新、都显示一"）。
+     * 右对齐挤在「第几/共几」和任务名中间那点空档里；挤不下就干脆不摆，别盖住别人。 */
+    if (trace_cal_held()) {
+        int16_t mw, x;
+
+        OLED_SetFont(kk_font_body);
+        mw = (int16_t)OLED_GetUTF8Width("丢线");
+        x  = (s_task_name_w > 0) ? (int16_t)(122 - s_task_name_w - 4 - mw)
+                                 : (int16_t)(122 - mw);
+        if (x >= x_min) {
+            draw_text(x, 1, kk_font_body, "丢线");
+        }
+    }
 
     /* 主体：循迹扫描状态（与「循迹测试」页同一份画法，免得两个页面读数不一样） */
     draw_trace_bars();

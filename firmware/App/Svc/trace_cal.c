@@ -73,6 +73,12 @@ static uint8_t s_set;                     /* 当前用第几套：0=普通 1=亚
 static uint8_t s_fl_lvl[TRACE_CAL_CH];
 static uint8_t s_fl_state;
 
+/* 最后一帧"好帧"（TRACE_FRAME_OK）的柱高快照 + 当时时刻（用户 m26712 第 3 条：
+ * 丢线之后界面要还能保持住之前的状态，见 trace_cal.h 的「丢线时按住上一帧」）。 */
+static uint8_t  s_hold_lvl[TRACE_CAL_CH];
+static uint32_t s_hold_ms;
+static uint8_t  s_hold_valid;
+
 /* 每路"白底基线"：标定时的白值和现在跑的时候可以差几十个计数（换路面、换高度、
  * 白天晚上灯不一样），而且**每路差得不一样**（实测同一帧里 ch1 比它的标定白值高 22、
  * ch3 低 52）。一个全局偏置补不了这种每路不同的漂移，光用标定白值会让没压线的路
@@ -807,6 +813,12 @@ static void frame_compute_body(void)
             ped = off;
         }
         s_fl_state = TRACE_FRAME_OK;
+
+        /* 好帧留一份快照，给「丢线时按住上一帧」用（trace_cal.h 那条规矩）。
+         * 只存柱高：界面那个 0/1 位本来就是"柱高 >= 半高 128"，不另存一份、免得两处口径。 */
+        for (i = 0; i < TRACE_CAL_CH; i++) s_hold_lvl[i] = s_fl_lvl[i];
+        s_hold_ms    = HAL_GetTick();
+        s_hold_valid = 1U;
     }
 
     trace_cal_frame_dbg.shift     = (int16_t)shift;
@@ -829,10 +841,25 @@ trace_frame_t trace_cal_frame(float w[TRACE_CAL_CH])
     return TRACE_FRAME_OK;
 }
 
+/* 手上有没有"可以按住"的上一帧好帧：有，而且还没超 TRACE_HOLD_MS。
+ * （用户 m26712 第 3 条：丢线/断链之后先保持之前的状态，超时才认丢线） */
+static uint8_t hold_ready(void)
+{
+    if (!s_hold_valid) return 0U;
+    return (uint8_t)(((uint32_t)(HAL_GetTick() - s_hold_ms) <= TRACE_HOLD_MS) ? 1U : 0U);
+}
+
 int trace_cal_channel(uint8_t idx)
 {
     if (idx >= TRACE_CAL_CH) return -1;
-    if (!trace_cal_analog_ok) return -1;              /* 没有模拟量 -> 调用者回落数字口 */
+    if (!trace_cal_analog_ok) {
+        /* 没有模拟量：只有用户**显式**选了「灰度接口 = 数字」才回落 PA0..PA7（那本来就是
+         * 他要的源）；其余情况按"丢线"走 —— 先用按住值顶 TRACE_HOLD_MS，超时算一路都没压线。
+         * 不再无条件回落数字口：这台车上那 8 根脚配的是上拉输入、线没被驱动（bsp_board.c），
+         * 回落过去 8 路全高，任务块的「探头全白」判据就永远不成立（用户 m26712 第 2 条）。 */
+        if (trace_cal_mode == TRACE_MODE_DIGITAL) return -1;   /* 调用者回落数字口 */
+        return (hold_ready() && s_hold_lvl[idx] >= 128U) ? 1 : 0;
+    }
     if (!trace_cal_valid || s_bad[idx]) return -1;    /* 没标定 / 这一路标定无效 */
 
     /* 单帧自适应在跑：0/1 就是"本帧黑度过不过半高"，和重心用的是同一份权重 */
@@ -850,8 +877,11 @@ uint8_t trace_cal_level(uint8_t idx)
     if (idx >= TRACE_CAL_CH) return 0U;
 
     if (!trace_cal_analog_ok) {
-        /* 没有模拟量：拿数字口的 0/1 当满/空，界面不至于空着 */
-        return trace_read_channel(idx) ? 255U : 0U;
+        /* 没有模拟量：数字模式才拿数字口当满/空；其余情况先给按住值、超时判丢线（0）。
+         * 判定口（任务块/循迹）要的是真值，所以按"丢线"走；界面要的是"别突然全塌"，
+         * 走 trace_cal_disp_level()（同一份按住值，另外还会打「丢线」标记）。 */
+        if (trace_cal_mode == TRACE_MODE_DIGITAL) return trace_read_channel(idx) ? 255U : 0U;
+        return hold_ready() ? s_hold_lvl[idx] : 0U;
     }
     /* 单帧自适应在跑：柱高 = 本帧相对黑度（最黑那一路满格），
      * 于是"半高的那条分界线"就是真正的判定线（对比度变小也对得上） */
@@ -859,6 +889,36 @@ uint8_t trace_cal_level(uint8_t idx)
     if (s_fl_state == TRACE_FRAME_WEAK) return 0U;
 
     return level_of(idx, trace_cal_raw[idx]);
+}
+
+uint8_t trace_cal_disp_level(uint8_t idx)
+{
+    if (idx >= TRACE_CAL_CH) return 0U;
+
+    /* 本帧是好的：直接给真值（和 trace_cal_level 同源） */
+    if (trace_cal_analog_ok && s_fl_state == TRACE_FRAME_OK) return s_fl_lvl[idx];
+
+    /* 用户显式选了数字口：那 0/255 就是他要看的东西 */
+    if (!trace_cal_analog_ok && trace_cal_mode == TRACE_MODE_DIGITAL) {
+        return trace_read_channel(idx) ? 255U : 0U;
+    }
+
+    /* 丢线（本帧 WEAK）或者模拟量断了：按住最后一帧好帧，超时归零。
+     * 配合 trace_cal_held() 打「丢线」，用户一眼能看出这几个柱子是旧的。 */
+    return hold_ready() ? s_hold_lvl[idx] : 0U;
+}
+
+uint8_t trace_cal_disp_bit(uint8_t idx)
+{
+    /* 界面底部那个 0/1 和柱高同一份数据（半高就是判定线），不另存一份免得两处口径 */
+    return (uint8_t)((trace_cal_disp_level(idx) >= 128U) ? 1U : 0U);
+}
+
+uint8_t trace_cal_held(void)
+{
+    if (trace_cal_mode == TRACE_MODE_DIGITAL) return 0U;                    /* 数字口就是真值 */
+    if (trace_cal_analog_ok && s_fl_state == TRACE_FRAME_OK) return 0U;     /* 本帧真值 */
+    return 1U;   /* 丢线 / 断链 / 没标定：界面显示的是按住值（或空） */
 }
 
 int16_t trace_cal_thr_level(uint8_t idx)

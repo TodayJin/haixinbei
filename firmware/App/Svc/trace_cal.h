@@ -114,10 +114,32 @@ extern uint8_t  trace_cal_mode;               /* TRACE_MODE_xxx：用户设的�
 
 void trace_cal_init(void);            /* 上电调一次：切"输出全部" + 选通道 */
 void trace_cal_poll(void);            /* 主循环调：20ms 一帧（IIC 时自己躲 OLED 传输） */
-int  trace_cal_channel(uint8_t idx);  /* 1 = 压黑线 / 0 = 没压 / **-1 = 没有模拟量，请回落数字口** */
-uint8_t trace_cal_level(uint8_t idx); /* 0..255 柱高（255 = 压黑线）；没有模拟量时回落数字口给 0/255 */
+int  trace_cal_channel(uint8_t idx);  /* 1 = 压黑线 / 0 = 没压 / **-1 = 请回落数字口（只有用户选了"数字"模式）** */
+uint8_t trace_cal_level(uint8_t idx); /* 0..255 柱高（255 = 压黑线）；模拟量断了先给"按住值"（见下） */
 int16_t trace_cal_thr_level(uint8_t idx); /* 0/1 分界线的柱高（-1 = 这一路没有有效阈值） */
 uint16_t trace_cal_threshold(uint8_t idx);/* 该路原始阈值（调试/上位机看） */
+
+/* ==================== 丢线时"按住上一帧"（用户 m26712 第 3 条） ====================
+ * 场景：车在跑，模拟量通路断了（I2C 被 OLED 抢/线松/模块掉电，AUTO 两条都不通 ⇒
+ * trace_cal_analog_ok = 0），或者这一帧对比度不够（TRACE_FRAME_WEAK，真丢线）。
+ * 老行为是 `trace_cal_level()` 回落到 PA0..PA7 数字口 —— 但这台车上那 8 根脚配的是
+ * **上拉输入**（bsp_board.c 的 io.Pull = GPIO_PULLUP）且线没被驱动 ⇒ 8 路全读高。
+ * 于是模拟量一断，整个屏立刻变成"8 个 1、柱子全满"，看着像卡住；更糟的是**任务块的
+ * 「探头全白」判据也走同一个 trace_cal_level()** ⇒ 永远不成立 ⇒ 任务停在第一个
+ * 等全白的块上再也不动（用户看到的就是"跑任务时屏幕暂停刷新、都显示一"）。
+ *
+ * 现在的规矩：
+ *   ① 只有用户**显式**把「灰度接口」设成 TRACE_MODE_DIGITAL，才拿数字口当真值；
+ *   ② 其余情况（模拟量断了 / 这帧 WEAK）判定上按"丢线"走（level = 0），
+ *      **界面**则按住最后一帧好帧（柱高 + 0/1）最多 TRACE_HOLD_MS，并打「丢线」标记，
+ *      超时才归零 —— 这样"丢线之后还保持着之前的状态"（用户原话），又不骗控制逻辑。
+ * ③ 断链（analog_ok = 0）时的判定也按住 TRACE_HOLD_MS：链路抖一下不该让车当场
+ *    跳到任务的"探头全白"分支上去，真断了才报丢线。 */
+#define TRACE_HOLD_MS 500U  /* 按住上一帧好帧的上限（ms）；超时按丢线算（柱高 0） */
+
+uint8_t trace_cal_disp_level(uint8_t idx); /* 0..255 界面柱高：本帧真值；丢线/断链时 = 按住值，超时 = 0 */
+uint8_t trace_cal_disp_bit(uint8_t idx);   /* 界面底部那个 0/1：同上（阈值同 trace_cal_channel：半高 128） */
+uint8_t trace_cal_held(void);              /* 1 = 界面现在显示的不是本帧真值（该在旁边打「丢线」） */
 
 /* ============================ 单帧自适应（用户 m07030） ============================
  * 起因：赛道有一段亚克力，8 路模拟值整体被抬高/压低、对比度也变小，固定阈值

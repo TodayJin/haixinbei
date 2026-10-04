@@ -340,5 +340,72 @@ int main(void)
     CHECK_EQ_I(trace_cal_state(), TRACE_CAL_WAIT_WHITE);
     trace_cal_wizard_cancel();
 
+    /* ---------- 13. 丢线/断链：界面"按住上一帧"，判定按丢线走（用户 m26712 第 2、3 条） ---------- */
+    {
+        uint8_t ok0, ok1;
+
+        /* 13a. 先造一帧"好帧"当按住值：第 0 路压黑、其余压白（自适应开着才判 OK）
+         * 注意 trace_cal_poll() 里 frame_compute() 跑在 source_read() **之前**，
+         * 所以喂进去的帧要到**下一次** poll 才参与运算：这里 poll 两次。 */
+        make_cal(&d);
+        trace_cal_set_data(&d);
+        trace_cal_set_adapt(1U);
+        trace_cal_set_mode(TRACE_MODE_UART);
+        make_uart_frame(900U, 0U);
+        s_frame[1] = 0x00U; s_frame[2] = 0x64U;        /* ch0 = 100（黑），其余 900（白） */
+        host_uart4_reply_set(s_frame, sizeof(s_frame));
+        host_uart4_reset();
+        poll_in(20U);                           /* 这一拍把 raw 读进来 */
+        poll_in(20U);                           /* 这一拍才算这帧 */
+        CHECK_EQ_I(trace_cal_analog_ok, 1);
+        CHECK_EQ_I(trace_cal_frame_dbg.state, (uint8_t)TRACE_FRAME_OK);
+        ok0 = trace_cal_level(0);
+        ok1 = trace_cal_level(1);
+        CHECK(ok0 >= 200U);                     /* 压黑：接近满格 */
+        CHECK(ok1 <= 20U);                      /* 压白：接近空 */
+        CHECK_EQ_I(trace_cal_held(), 0);        /* 本帧是真值，不打「丢线」 */
+        CHECK_EQ_I(trace_cal_disp_level(0), ok0);
+        CHECK_EQ_I(trace_cal_disp_bit(0), 1);
+        CHECK_EQ_I(trace_cal_disp_bit(1), 0);
+
+        /* 13b. 本帧对比度不够（8 路同一个值）=> 判定丢线，但界面仍按着上一帧 */
+        make_uart_frame(900U, 0U);              /* 全是 900：这帧没信息 */
+        host_uart4_reply_set(s_frame, sizeof(s_frame));
+        host_uart4_reset();
+        poll_in(20U);
+        poll_in(20U);
+        CHECK_EQ_I(trace_cal_frame_dbg.state, (uint8_t)TRACE_FRAME_WEAK);
+        CHECK_EQ_I(trace_cal_held(), 1);        /* 界面该打「丢线」 */
+        CHECK_EQ_I(trace_cal_disp_level(0), ok0);  /* 柱子保持之前的状态 */
+        CHECK_EQ_I(trace_cal_disp_bit(0), 1);
+        CHECK_EQ_I(trace_cal_level(0), 0);      /* 判定口照旧按丢线（任务块的「探头全白」要成立） */
+        CHECK_EQ_I(trace_cal_channel(0), 0);
+
+        /* 13c. 模拟量彻底断了：5 帧失败 => analog_ok=0；判定先按按住值顶 TRACE_HOLD_MS，
+         *      超时才认丢线。**关键：不再回落数字口**（老行为这里 trace_cal_channel = -1、
+         *      trace_cal_level = 255 ⇒ 8 路全 1 ⇒ 任务的「探头全白」永远不成立）。 */
+        make_uart_frame(900U, 0U);
+        s_frame[1] = 0x00U; s_frame[2] = 0x64U;    /* 再回"好帧"，让快照是它 */
+        host_uart4_reply_set(s_frame, sizeof(s_frame));
+        host_uart4_reset();
+        poll_in(20U);
+        poll_in(20U);
+        CHECK_EQ_I(trace_cal_frame_dbg.state, (uint8_t)TRACE_FRAME_OK);
+        ok0 = trace_cal_level(0);
+        host_uart4_reply_set(NULL, 0);          /* 模块不应答了 */
+        for (int i = 0; i < 5; i++) poll_in(20U);
+        CHECK_EQ_I(trace_cal_analog_ok, 0);
+        CHECK_EQ_I(trace_cal_held(), 1);
+        CHECK_EQ_I(trace_cal_disp_level(0), ok0);   /* 界面：按住上一帧 */
+        CHECK_EQ_I(trace_cal_level(0), ok0);        /* 判定：链路抖一下先别当真丢线 */
+        CHECK_EQ_I(trace_cal_channel(0), 1);
+        poll_in(600U);                              /* 超过 TRACE_HOLD_MS */
+        CHECK_EQ_I(trace_cal_held(), 1);
+        CHECK_EQ_I(trace_cal_disp_level(0), 0);     /* 按住到期：柱高归零 */
+        CHECK_EQ_I(trace_cal_disp_bit(0), 0);
+        CHECK_EQ_I(trace_cal_level(0), 0);          /* 判定：真丢线 */
+        CHECK_EQ_I(trace_cal_channel(0), 0);
+    }
+
     return T_SUMMARY();
 }

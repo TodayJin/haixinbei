@@ -176,14 +176,17 @@ int main(void)
 
     /* 输入采样必须 ≥ 每 10ms 一次，不能被 20ms 的绘制间隔限制 */
     /* 灰度模块：先让 trace_cal 读一帧 IIC 模拟量（20ms 一次，内部自己躲 OLED 传输），
-     * 再算 8 路 0/1；没标定/没模拟量时 trace_read_channel() 自动回落数字口。 */
+     * 再算 8 路 0/1。控制逻辑（循迹环、任务块的判据）走 trace_cal_channel/level，
+     * 丢线时按真值走；**界面**走 trace_cal_disp_*：丢线/断链时按住上一帧好帧
+     * （旁边打「丢线」标记），不再回落数字口 —— 这台车的数字口是上拉输入，
+     * 回落过去就是 8 路全 1、看着像卡死（用户 m26712 第 2 条）。 */
     trace_cal_poll();
     read_tracing_data();
     {
       int i;
       for (i = 0; i < 8; i++) {
-        g_live.trace[i] = (uint8_t)tracing_data[i];
-        g_live.gray[i]  = trace_cal_level((uint8_t)i);   /* 0..255：模拟量归一化，或数字口 0/255 */
+        g_live.trace[i] = trace_cal_disp_bit((uint8_t)i);    /* 界面底部 0/1（丢线时是按住值）*/
+        g_live.gray[i]  = trace_cal_disp_level((uint8_t)i);  /* 0..255 柱高（同上）*/
       }
     }
     /* 陀螺仪：把 USART3 收到的字节喂给旧上层的 JY61P 解析器 */
