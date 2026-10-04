@@ -126,7 +126,7 @@ def test_commit_payload_is_the_base_seven_bytes_plus_optional_name():
     """§5：COMMIT 前 7 字节固定（`flags` 在 p[6]）；`len>7` 时 p[7] 是名字长度。"""
     base = pr.payload_task_commit(3, 208, 570)
     assert base == pr.pack_u16(3) + pr.pack_u16(208) + pr.pack_u16(570) + b"\x00" and len(base) == 7
-    assert pr.payload_task_commit(3, 208, 570, "", 1)[6] == 1, "bit0 = 开机自启，原样下发"
+    assert pr.payload_task_commit(3, 208, 570, "", 0x81)[6] == 0x81, "flags 是保留位，原样下发"
     nb = "过障碍".encode("utf-8")
     full = pr.payload_task_commit(3, 208, 570, "过障碍")
     assert full == base + bytes([len(nb)]) + nb
@@ -264,28 +264,29 @@ def test_sim_task_delete_frees_the_slot():
     assert items == [None], "删完只剩收尾帧"
 
 
-def test_sim_task_auto_flag_roundtrip_and_lying_name_len():
-    """COMMIT 的 flags 字节：bit0（开机自启）落到目录记录里、不认的位丢掉；名字长度撒谎要拒。"""
+def test_sim_task_flags_roundtrip_and_lying_name_len():
+    """COMMIT 的 flags 字节：**保留位，原样往返**（曾经只留 bit0 的开机自启，用户 m24999 删了那个功能）；
+    名字长度撒谎要拒。"""
     car = SimCar()
     car.start(1000)
     img, g = golden_image(), golden()
 
-    burn(car, 1, img, g["crc16"], name="自启", flags=0x01)
+    burn(car, 1, img, g["crc16"], name="保留", flags=0x01)
     frames = car_req(car, pr.T_TASK_LIST, b"", seq=90, now=1100)
     items = [pr.decode_task_list_r(f.payload) for f in frames if f.type == pr.T_TASK_LIST_R]
-    assert items[:-1] == [{"id": 1, "len": len(img), "crc": g["crc16"], "flags": 1, "name": "自启"}]
+    assert items[:-1] == [{"id": 1, "len": len(img), "crc": g["crc16"], "flags": 1, "name": "保留"}]
 
     # 再烧一次不带 flags：标志要跟着清掉（不是"只增不减"的锁存位）
-    burn(car, 1, img, g["crc16"], name="自启", flags=0)
+    burn(car, 1, img, g["crc16"], name="保留", flags=0)
     items = [pr.decode_task_list_r(f.payload) for f in
              car_req(car, pr.T_TASK_LIST, b"", seq=91, now=1200) if f.type == pr.T_TASK_LIST_R]
     assert items[:-1][0]["flags"] == 0
 
-    # 不认的位（0xFE）由车上过滤掉，只留 bit0
-    burn(car, 1, img, g["crc16"], name="自启", flags=0xFE)
+    # 其余位不再被掩掉：0xFE 进就 0xFE 出（车上现在原样存，没人解释这些位）
+    burn(car, 1, img, g["crc16"], name="保留", flags=0xFE)
     items = [pr.decode_task_list_r(f.payload) for f in
              car_req(car, pr.T_TASK_LIST, b"", seq=92, now=1300) if f.type == pr.T_TASK_LIST_R]
-    assert items[:-1][0]["flags"] == 0
+    assert items[:-1][0]["flags"] == 0xFE
 
     # 名字长度撒谎：p[7]=30 但帧里只有 1 个名字字节 ⇒ ST_BAD_PARAM（别读越界）
     st = ack_status(car_req(car, pr.T_TASK_COMMIT,
@@ -314,13 +315,13 @@ def test_api_tasks_end_to_end(live):
         off += len(chunk)
 
     code, j = http(base + "/api/tasks/commit", "POST",
-                   {"id": tid, "len": len(img), "crc": g["crc16"], "name": "循迹金样本", "flags": 1})
+                   {"id": tid, "len": len(img), "crc": g["crc16"], "name": "循迹金样本", "flags": 0x81})
     assert code == 200 and j["ok"] is True, f"commit 失败：{j}"
 
     code, j = http(base + "/api/tasks")
     hit = [it for it in j["items"] if it["id"] == tid]
     assert len(hit) == 1 and hit[0]["len"] == len(img) and hit[0]["crc"] == g["crc16"]
-    assert hit[0]["flags"] == 1, "开机自启标志要随 COMMIT 下发并出现在目录里"
+    assert hit[0]["flags"] == 0x81, "flags 是保留位：原样下发、原样出现在目录里"
     assert hit[0]["name"] == "循迹金样本"
 
     code, j = http(f"{base}/api/tasks/get?id={tid}")

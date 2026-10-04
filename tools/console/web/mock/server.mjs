@@ -688,7 +688,7 @@ const server = http.createServer(async (req, res) => {
         return fail(res, 400, `程序区（最多 6144 字节）装不下：已用 ${used}，这次 ${len}`, 'out_of_range')
       }
       tasks.set(id, { name: String(body.name ?? ''), buf: Buffer.from(buf.subarray(0, len)),
-                      flags: (Number(body.flags) || 0) & 1 })
+                      flags: (Number(body.flags) || 0) & 0xff })   // 保留位：原样存（曾经只留 bit0 开机自启）
       staging.delete(id)
       log('info', `任务 ${id} 已写入假 Flash（${len} 字节）`)
       ack('tasks/commit')

@@ -96,7 +96,7 @@ class SimCar:
         # 任务程序（firmware/App/Svc/task_store.c 的仿真体：8 条记录 + 6144 B 程序区）
         self.tasks: dict[int, bytes] = {}           # 槽号 → 完整镜像（已 COMMIT）
         self.task_names: dict[int, str] = {}
-        self.task_flags: dict[int, int] = {}        # 槽号 → 记录标志（bit0 = 开机自启）
+        self.task_flags: dict[int, int] = {}        # 槽号 → 记录标志（保留位，原样往返）
         self.task_stage: dict[int, bytearray] = {}  # 槽号 → 4096 B 暂存（PUT 分片落这里）
         self.task_run = {"id": 0xFFFF, "state": 0xFF, "running": False, "block": 0,
                          "elapsed_ms": 0, "flags": 0}
@@ -562,8 +562,10 @@ class SimCar:
         self.tasks[tid] = img
         if name:
             self.task_names[tid] = name
-        if flags & 0x01:                          # 与固件一样只认 bit0，其余位丢掉
-            self.task_flags[tid] = 0x01
+        # flags 是保留位：原样存（车上已经没人读它了）。bit0 曾经是"开机自启"，
+        # 用户 m24999 把那个功能整个删了，模拟器也不再只认 bit0。
+        if flags:
+            self.task_flags[tid] = flags & 0xFF
         else:
             self.task_flags.pop(tid, None)
         self._ack(seq, pr.ST_OK)

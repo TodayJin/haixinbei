@@ -81,9 +81,26 @@ static uint8_t *dir_ent_w(uint32_t i)
     return dir_page_w() + TASK_STORE_DIR_HDR_LEN + i * TASK_STORE_ENTRY_LEN;
 }
 
+/* 按 id（槽号）找目录页里的记录：记录是**紧凑**排的，索引 ≠ 槽号（删中间一条后面会往前顶），
+ * 所以查某个槽的字节必须按 id 扫，不能拿 dir_ent(slot) 当槽号用。 */
+static const uint8_t *dir_find(uint8_t id);
+
 static uint16_t dir_u16(const uint8_t *p)
 {
     return (uint16_t)(p[0] | ((uint16_t)p[1] << 8));
+}
+
+static const uint8_t *dir_find(uint8_t id)
+{
+    uint32_t n = (uint32_t)dir_page()[3];        /* hdr: count 在偏移 3 */
+    uint32_t i;
+
+    for (i = 0u; i < n && i < (uint32_t)TASK_STORE_SLOTS; i++) {
+        if (dir_u16(dir_ent(i) + 0U) == (uint16_t)id) {
+            return dir_ent(i);
+        }
+    }
+    return NULL;
 }
 
 /* 页 58..63 全部快照 / 与快照逐字节相同（"一个 bit 都不许变"的判据） */
@@ -306,7 +323,8 @@ int main(void)
         CHECK_EQ_I(name[0], '\0');
         CHECK_EQ_I(TaskStore_Load((uint8_t)i), TASK_STORE_E_EMPTY);
     }
-    CHECK_EQ_I(TaskStore_AutoSlot(), TASK_STORE_NO_SLOT);
+    /* 空车：所有槽都空、flags 全 0（曾经这里还查 TaskStore_AutoSlot() == NO_SLOT，
+     * 用户 m24999 把开机自启整个删了，那个 API 不存在了） */
     CHECK_EQ_I(TaskStore_StageLen(), 0);
     CHECK_EQ_I(TaskStore_Erase(9u), TASK_STORE_E_PARAM);     /* 越界槽号也不许动 Flash */
     CHECK_EQ_I(TaskStore_Load(8u), TASK_STORE_E_PARAM);
@@ -599,7 +617,9 @@ int main(void)
     CHECK(memcmp(name, "换了", 6u) == 0);
 
     /* ===============================================================
-     * ⑨ 名字截断 / flags 只留 bit0 / 开机自启取最小 id
+     * ⑨ 名字截断 / flags 原样往返
+     * （这一节原来还查"flags 只留 bit0 + 开机自启取最小 id"；用户 m24999 把开机
+     *   自启整个删了，flags 变成没人读的保留位，于是这里改成查"原样存档"）
      * =============================================================== */
     for (i = 0; i < (int)sizeof long_name; i++) {
         long_name[i] = (uint8_t)('a' + (i % 26));
@@ -609,8 +629,16 @@ int main(void)
     CHECK_EQ_I(TaskStore_Name(0u, (char *)name, sizeof name), TASK_STORE_NAME_MAX);
     CHECK(memcmp(name, long_name, TASK_STORE_NAME_MAX) == 0);
     CHECK_EQ_I(name[TASK_STORE_NAME_MAX], '\0');
-    CHECK_EQ_I(TaskStore_Flags(0u), TASK_STORE_FLAG_AUTO);      /* 只留 bit0 */
-    CHECK_EQ_I(dir_ent(0U)[9], TASK_STORE_NAME_MAX);            /* 目录里也只存 30 */
+    CHECK_EQ_I(TaskStore_Flags(0u), 0xFFu);                     /* 原样存档，不再掩码 */
+    {
+        const uint8_t *e0 = dir_find(0u);
+
+        CHECK(e0 != NULL);
+        if (e0 != NULL) {
+            CHECK_EQ_I(e0[8], 0xFFu);                           /* 目录里那个字节也没被改 */
+            CHECK_EQ_I(e0[9], TASK_STORE_NAME_MAX);             /* 目录里也只存 30 */
+        }
+    }
     /* 短缓冲读出：截断 + 补 0 */
     CHECK_EQ_I(TaskStore_Name(0u, (char *)name, 8u), TASK_STORE_NAME_MAX);
     CHECK_EQ_I(name[7], '\0');
@@ -619,16 +647,25 @@ int main(void)
     CHECK_EQ_I(TaskStore_Name(5u, (char *)name, 4u), 0);
     CHECK_EQ_I(name[0], '\0');
 
-    CHECK_EQ_I(put_slot(2u, 40u, 0x9100u, TASK_STORE_FLAG_AUTO, "C", 1u, 0u), TASK_STORE_OK);
-    CHECK_EQ_I(put_slot(5u, 40u, 0x9200u, TASK_STORE_FLAG_AUTO, "F", 1u, 0u), TASK_STORE_OK);
-    CHECK_EQ_I(TaskStore_AutoSlot(), 0u);                       /* 0 和 2 和 5 ⇒ 0 */
-    CHECK_EQ_I(put_slot(0u, 40u, 0x9000u, 0u, "a", 1u, 0u), TASK_STORE_OK);
-    CHECK_EQ_I(TaskStore_AutoSlot(), 2u);                       /* 只剩 2 和 5 ⇒ 2 */
-    CHECK_EQ_I(put_slot(2u, 40u, 0x9100u, 0u, "c", 1u, 0u), TASK_STORE_OK);
+    /* flags 原样往返：0x02 / 0x81 都不许被掩成 0x00/0x01（曾经 & TASK_STORE_FLAG_AUTO） */
+    CHECK_EQ_I(put_slot(2u, 40u, 0x9100u, 0x02u, "C", 1u, 0u), TASK_STORE_OK);
+    CHECK_EQ_I(put_slot(5u, 40u, 0x9200u, 0x81u, "F", 1u, 0u), TASK_STORE_OK);
+    CHECK_EQ_I(TaskStore_Flags(2u), 0x02u);
+    CHECK_EQ_I(TaskStore_Flags(5u), 0x81u);
+    {
+        const uint8_t *e2 = dir_find(2u);
+        const uint8_t *e5 = dir_find(5u);
+
+        CHECK(e2 != NULL);
+        CHECK(e5 != NULL);
+        if (e2 != NULL) CHECK_EQ_I(e2[8], 0x02u);
+        if (e5 != NULL) CHECK_EQ_I(e5[8], 0x81u);
+    }
+    CHECK_EQ_I(put_slot(0u, 40u, 0x9000u, 0x00u, "a", 1u, 0u), TASK_STORE_OK);
+    CHECK_EQ_I(TaskStore_Flags(0u), 0x00u);
+    CHECK_EQ_I(put_slot(2u, 40u, 0x9100u, 0x02u, "c", 1u, 0u), TASK_STORE_OK);
     crc2 = g_crc;
-    CHECK_EQ_I(TaskStore_AutoSlot(), 5u);
-    CHECK_EQ_I(put_slot(5u, 40u, 0x9200u, 0u, "f", 1u, 0u), TASK_STORE_OK);
-    CHECK_EQ_I(TaskStore_AutoSlot(), TASK_STORE_NO_SLOT);
+    CHECK_EQ_I(put_slot(5u, 40u, 0x9200u, 0x81u, "f", 1u, 0u), TASK_STORE_OK);
 
     /* ===============================================================
      * ⑩ 掉电重启（重新 Init）后一切照旧；seq 跟着成功落盘次数走
@@ -643,6 +680,8 @@ int main(void)
         CHECK_EQ_I(TaskStore_Present(5u), 1);
         CHECK_EQ_I(TaskStore_Len(0u), 40);
         CHECK_EQ_I(TaskStore_Crc(2u), crc2);
+        CHECK_EQ_I(TaskStore_Flags(2u), 0x02u);     /* flags 是目录里的字节：Init 后照旧 */
+        CHECK_EQ_I(TaskStore_Flags(5u), 0x81u);
         CHECK_EQ_I(TaskStore_Name(2u, (char *)name, sizeof name), 1);
         CHECK_EQ_I(name[0], 'c');
         CHECK_EQ_I(dir_u16(dir_page() + 4U), seq_before);
@@ -816,11 +855,10 @@ int main(void)
     CHECK(snap_same());
     CHECK_EQ_I(TaskStore_Erase(8u), TASK_STORE_E_PARAM);
 
-    /* 全删空之后：AutoSlot 没有、目录 count=0、程序区全 0xFF */
+    /* 全删空之后：目录 count=0、程序区全 0xFF */
     CHECK_EQ_I(TaskStore_Erase(0u), TASK_STORE_OK);
     CHECK_EQ_I(TaskStore_Erase(2u), TASK_STORE_OK);
     CHECK_EQ_I(dir_page()[3], 0);
-    CHECK_EQ_I(TaskStore_AutoSlot(), TASK_STORE_NO_SLOT);
     CHECK(prog_ff(0u, TASK_STORE_PROG_BYTES));
     CHECK(page_all_ff(PROG_PAGE0 + 1U));
     CHECK(page_all_ff(PROG_PAGE0 + 2U));
@@ -829,15 +867,14 @@ int main(void)
     /* ===============================================================
      * ⑬ 整个 Flash 被抹掉（全擦/换芯片）：目录和程序区一起空
      * =============================================================== */
-    CHECK_EQ_I(put_slot(6u, 40u, 0xC000u, TASK_STORE_FLAG_AUTO, "x", 1u, 0u), TASK_STORE_OK);
-    CHECK_EQ_I(TaskStore_AutoSlot(), 6u);
+    CHECK_EQ_I(put_slot(6u, 40u, 0xC000u, 0x01u, "x", 1u, 0u), TASK_STORE_OK);
+    CHECK_EQ_I(TaskStore_Present(6u), 1);
     host_flash_reset();
     TaskStore_Init();
     for (i = 0; i < (int)TASK_STORE_SLOTS; i++) {
         CHECK_EQ_I(TaskStore_Present((uint8_t)i), 0);
         CHECK_EQ_I(TaskStore_Load((uint8_t)i), TASK_STORE_E_EMPTY);
     }
-    CHECK_EQ_I(TaskStore_AutoSlot(), TASK_STORE_NO_SLOT);
     CHECK_EQ_I(dir_u16(dir_page() + 4U), 0xFFFF);     /* 目录页整页是擦除态 */
     CHECK(page_all_ff(63u));
 

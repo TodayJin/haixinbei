@@ -734,6 +734,52 @@ static void draw_title(const char *title)
 #define TC_X0       5
 #define TC_DIGIT_Y 51
 
+/* 8 条柱子 + 每路的 0/1 + 阈值线 —— 循迹页和任务页**共用同一份画法**
+ * （用户 m24999：任务页下面整块留给"寻迹当前的扫描状态"，他离线跑任务时就盯着它，
+ * 两个页面看到的东西必须一模一样，换个页面重新认一遍就可能判错线）。 */
+static void draw_trace_bars(void)
+{
+    int i;
+
+    for (i = 0; i < 8; i++) {
+        /* xr = 不带过渡位移的基准 x。图元自己加 s_dx，文字交给 draw_text()
+         * （它内部已经加过一次）——原来数字传的是 x+3（x 已含 s_dx），
+         * 于是过渡时数字按 2 倍位移滑、跟柱子错位。 */
+        int16_t xr  = (int16_t)(TC_X0 + i * TC_STEP);
+        int16_t x   = (int16_t)(xr + s_dx);
+        int16_t h   = (int16_t)((uint16_t)g_live.gray[i] * (uint16_t)TC_H / 255U);
+        int16_t y0  = (int16_t)(TC_TOP + TC_H);
+        int16_t thr = trace_cal_thr_level((uint8_t)i);
+        char    d[2];
+
+        OLED_SetDrawMode(OLED_DRAW_CLEAR);
+        OLED_DrawBox(x, TC_TOP, TC_W, TC_H);
+        OLED_SetDrawMode(OLED_DRAW_SET);
+        OLED_DrawFrame(x, TC_TOP, TC_W, TC_H);
+
+        /* 填满整个方框：原来左右各留 2px 黑边、只填 8px 宽，用户看着"没填满" */
+        if (h > 0) OLED_DrawBox(x, (int16_t)(y0 - h), TC_W, h);
+
+        /* 0/1 分界线：XOR 画一条横线，柱里有填充时变黑、没填充时变白，两边都看得见 */
+        if (thr >= 0) {
+            int16_t yy = (int16_t)(y0 - 1 - (int16_t)((uint16_t)thr * (uint16_t)(TC_H - 1) / 255U));
+            OLED_SetDrawMode(OLED_DRAW_XOR);
+            OLED_DrawHLine(x, yy, (uint16_t)TC_W);
+        }
+        OLED_SetDrawMode(OLED_DRAW_SET);
+
+        /* 底部：这一路实际用的 0/1；标定过但这一路无效（黑白跨度太小或采样在抖）
+         * 就画 '!'，提醒这一路的阈值不可信 */
+        if (trace_cal_valid && !trace_cal_ch_ok((uint8_t)i)) {
+            d[0] = '!';
+        } else {
+            d[0] = (char)('0' + (g_live.trace[i] ? 1 : 0));
+        }
+        d[1] = '\0';
+        draw_text((int16_t)(xr + 3), TC_DIGIT_Y, kk_font_body, d);
+    }
+}
+
 /* 右键切换的「检验视图」：8 路原始值 + 当前帧范围 + 标定质量。
  * 柱状图回答"哪几路压线"，这一页回答"模块的数值本身对不对、这份标定可不可信"
  * （用户 m05894：标定流程要能检验）。原始值是模块回的大端 16 位原样，没做任何
@@ -906,7 +952,6 @@ static void draw_trace_verify(void)
 
 static void draw_trace_page(void)
 {
-    int i;
     trace_cal_state_t st = trace_cal_state();
     const char *src_txt;
 
@@ -976,76 +1021,219 @@ static void draw_trace_page(void)
         draw_cal_set_mark((st == TRACE_CAL_IDLE) ? 28 : 116);
     }
 
-    for (i = 0; i < 8; i++) {
-        /* xr = 不带过渡位移的基准 x。图元自己加 s_dx，文字交给 draw_text()
-         * （它内部已经加过一次）——原来数字传的是 x+3（x 已含 s_dx），
-         * 于是过渡时数字按 2 倍位移滑、跟柱子错位。 */
-        int16_t xr  = (int16_t)(TC_X0 + i * TC_STEP);
-        int16_t x   = (int16_t)(xr + s_dx);
-        int16_t h   = (int16_t)((uint16_t)g_live.gray[i] * (uint16_t)TC_H / 255U);
-        int16_t y0  = (int16_t)(TC_TOP + TC_H);
-        int16_t thr = trace_cal_thr_level((uint8_t)i);
-        char    d[2];
-
-        OLED_SetDrawMode(OLED_DRAW_CLEAR);
-        OLED_DrawBox(x, TC_TOP, TC_W, TC_H);
-        OLED_SetDrawMode(OLED_DRAW_SET);
-        OLED_DrawFrame(x, TC_TOP, TC_W, TC_H);
-
-        /* 填满整个方框：原来左右各留 2px 黑边、只填 8px 宽，用户看着"没填满" */
-        if (h > 0) OLED_DrawBox(x, (int16_t)(y0 - h), TC_W, h);
-
-        /* 0/1 分界线：XOR 画一条横线，柱里有填充时变黑、没填充时变白，两边都看得见 */
-        if (thr >= 0) {
-            int16_t yy = (int16_t)(y0 - 1 - (int16_t)((uint16_t)thr * (uint16_t)(TC_H - 1) / 255U));
-            OLED_SetDrawMode(OLED_DRAW_XOR);
-            OLED_DrawHLine(x, yy, (uint16_t)TC_W);
-        }
-        OLED_SetDrawMode(OLED_DRAW_SET);
-
-        /* 底部：这一路实际用的 0/1；标定过但这一路无效（黑白跨度太小或采样在抖）
-         * 就画 '!'，提醒这一路的阈值不可信 */
-        if (trace_cal_valid && !trace_cal_ch_ok((uint8_t)i)) {
-            d[0] = '!';
-        } else {
-            d[0] = (char)('0' + (g_live.trace[i] ? 1 : 0));
-        }
-        d[1] = '\0';
-        draw_text((int16_t)(xr + 3), TC_DIGIT_Y, kk_font_body, d);
-    }
+    /* 柱子/0/1/阈值线：与任务页共用同一份画法（draw_trace_bars()） */
+    draw_trace_bars();
 }
 
-/* 任务页（PAGE_CUSTOM_TASK）—— 用户 m19902 问「固件上怎么还有 A B 两个任务，我又
- * 没上传」。旧样子是两页「任务A / 任务B」，画的是 g_live.task_state 这个标志位，
- * 而它**只有本页中键会翻、全工程没有第二个读者**（内置流程 renwu.c 早删了），所以
- * 屏上永远是「待机」，看着却像车上有两条任务。现在这页读真解释器：
- *   运行中 = 在跑哪个任务（烧进 Flash 的槽号）+ 走到第几块（当前序列内的下标）+ 中键停机
- *   待机   = 车上 Flash 里一共存了几个任务
- * 中文全部在 kk_font_body 子集里（"状"没字形，所以不写「状态」而写「第 N 块」）。 */
+/* =====================================================================
+ * 任务页（PAGE_CUSTOM_TASK）—— 用户 m24999 定的布局
+ *
+ * 背景：这一页原来只报「车上 N 个」，**没地方启动**（中键只停机，启动一律靠上位机
+ * 0x67 RUN 或开机自启）。用户要的是"在车上离线跑"：调好线以后不接电脑，直接在
+ * 车上选一个任务按中键就跑起来。所以：
+ *   上/下  = 在车上已有的任务之间选（标题栏右边显示选中任务的名字）
+ *   中键   = 跑选中的这个 / 正在跑就是停
+ *   左键   = 返回（上键已经被"选上一个"占了，框架归一化里 上/左 都是 UP，
+ *            所以返回只能自己读原始位图的 bit2 左键）
+ *   标题行 = 状态（任务/运行）+ 第几个/共几个 + 选中任务名（最右边）
+ *   主体   = 8 路循迹扫描状态（与循迹页同一份画法 draw_trace_bars()）
+ *
+ * 为什么不走 kk_ui 的三键：框架把 上/左 折成同一个 UP、下/右 折成同一个 DOWN
+ * （app_ui_read_input()），按上键会顺手把页面关掉 —— 所以本页像电机页/循迹页那样
+ * 自己扫原始位图（task_key_scan()），UP/DOWN 事件在 KK_UI_CustomOnInput() 里吞掉。
+ * 中键仍然走框架的 OK 事件（框架已消抖，长按 REPEAT 也不用管）。
+ * ===================================================================== */
+#define TASK_KEY_DEBOUNCE_MS 20U    /* 与 motor_key_scan() / trace_key_scan() 同量级 */
+
+static uint8_t  s_task_sel = TASK_STORE_NO_SLOT;  /* 选中的槽；NO_SLOT = 车上没有任务 */
+static uint8_t  s_tkey_raw;         /* 上一拍原始位图 */
+static uint8_t  s_tkey_stable;      /* 已消抖的稳定位图（用来取"新按下"边沿） */
+static uint32_t s_tkey_changed;     /* 原始位图最后一次变化的时刻 */
+static char     s_task_name[24];    /* 选中任务名的显示前缀（太长就截，见下） */
+static int16_t  s_task_name_w;      /* 前缀的像素宽（右对齐用；提前量好，不在 50Hz 里量） */
+static int32_t  s_task_sig = -1;    /* 名字缓存的签名（槽/长度/CRC）：变了才重新量宽度 */
+
+/* 从 from 槽出发朝 dir(+1/-1) 找最近的有任务的槽（绕一圈）。返回 NO_SLOT = 一个都没有 */
+static uint8_t task_sel_step(uint8_t from, int dir)
+{
+    uint8_t n = TaskStore_SlotCount();
+    uint8_t i;
+    uint8_t s;
+
+    if (n == 0U || from >= n) {
+        return TASK_STORE_NO_SLOT;
+    }
+    for (i = 1U; i <= n; i++) {
+        s = (uint8_t)((from + ((dir > 0) ? i : (uint8_t)(n - i))) % n);
+        if (TaskStore_Present(s)) {
+            return s;
+        }
+    }
+    return TASK_STORE_NO_SLOT;
+}
+
+/* 选中项兜底：上次选的那个被上位机删了/换槽了就落到车上第一个任务上 */
+static uint8_t task_sel_ensure(void)
+{
+    if (s_task_sel == TASK_STORE_NO_SLOT || s_task_sel >= TaskStore_SlotCount() ||
+        !TaskStore_Present(s_task_sel)) {
+        s_task_sel = task_sel_step(0U, +1);
+    }
+    return s_task_sel;
+}
+
+/* 量一次名字宽度 + 太长就按字符边界截断（保证不切开一个 UTF-8 汉字）。
+ * 只在"进页/换选中/任务被重新烧写"时调 —— 名字最长 30 字节，逐前缀量宽度是 O(n²)。 */
+static void task_sel_name_refresh(void)
+{
+    char    full[TASK_STORE_NAME_MAX + 1];
+    const int16_t avail = 122 - 52;     /* 标题行 `任务`+`2/3` 之后到最右边 */
+    int32_t sig;
+    int     k;
+    int     len;
+
+    if (s_task_sel == TASK_STORE_NO_SLOT) {
+        s_task_name[0] = '\0';
+        s_task_name_w  = 0;
+        s_task_sig     = -1;
+        return;
+    }
+    sig = ((int32_t)s_task_sel << 24) |
+          ((int32_t)TaskStore_Len(s_task_sel) << 8) |
+          (int32_t)(TaskStore_Crc(s_task_sel) & 0xFFU);
+    if (sig == s_task_sig) {
+        return;                         /* 同一份记录：宽度不用再量 */
+    }
+    s_task_sig = sig;
+
+    (void)TaskStore_Name(s_task_sel, full, sizeof(full));
+    len = (int)strlen(full);
+    OLED_SetFont(kk_font_body);         /* OLED_GetUTF8Width 用的是"当前字体" */
+    k = 0;
+    while (k < len) {
+        int cl = 1;
+        if (((uint8_t)full[k] & 0xE0U) == 0xC0U)      cl = 2;
+        else if (((uint8_t)full[k] & 0xF0U) == 0xE0U) cl = 3;
+        else if (((uint8_t)full[k] & 0xF8U) == 0xF0U) cl = 4;
+        if ((k + cl) > len) {
+            break;                      /* 结尾半个字符：丢掉 */
+        }
+        memcpy(s_task_name, full, (size_t)(k + cl));
+        s_task_name[k + cl] = '\0';
+        if ((int16_t)OLED_GetUTF8Width(s_task_name) > avail) {
+            break;
+        }
+        k += cl;
+    }
+    if (k == 0 && len > 0) {
+        /* 一个字都放不下（理论上不会）：宁可显示空，也不画半个字 */
+        s_task_name[0] = '\0';
+        s_task_name_w  = 0;
+        return;
+    }
+    s_task_name[k] = '\0';
+    s_task_name_w  = (k == 0) ? 0 : (int16_t)OLED_GetUTF8Width(s_task_name);
+}
+
+/* 任务页按键：只取"新按下"那一下（同 trace_key_scan()，不做长按连发 ——
+ * 选任务按一下走一格就够了，连发容易一冲到底）。返回 true = 需要重画。 */
+static bool task_key_scan(uint32_t now)
+{
+    uint8_t raw = app_ui_raw_keys();
+    uint8_t fresh;
+    bool redraw = false;
+
+    if (raw != s_tkey_raw) {
+        s_tkey_raw = raw;
+        s_tkey_changed = now;
+        return false;                   /* 刚变化：等消抖 */
+    }
+    if ((uint32_t)(now - s_tkey_changed) < TASK_KEY_DEBOUNCE_MS) {
+        return false;
+    }
+    fresh = (uint8_t)(raw & (uint8_t)~s_tkey_stable);   /* 这一拍新按下的位 */
+    s_tkey_stable = raw;
+
+    if ((fresh & 0x04U) != 0U) {                /* bit2 左键：返回上一级 */
+        (void)KK_UI_CustomRequestClose();
+        return false;
+    }
+    if ((fresh & 0x01U) != 0U) {                /* bit0 上键：上一个任务 */
+        if (task_sel_ensure() != TASK_STORE_NO_SLOT) {
+            s_task_sel = task_sel_step(s_task_sel, -1);
+            task_sel_name_refresh();
+        }
+        redraw = true;
+    } else if ((fresh & 0x02U) != 0U) {         /* bit1 下键：下一个任务 */
+        if (task_sel_ensure() != TASK_STORE_NO_SLOT) {
+            s_task_sel = task_sel_step(s_task_sel, +1);
+            task_sel_name_refresh();
+        }
+        redraw = true;
+    }
+    return redraw;
+}
+
+/* 中键：跑 / 停。启动 = 先把选中的槽载进解释器（TaskStore_Load 从 Flash 解 4096B
+ * 到 RAM 并校验），再 TaskRun_Start(槽号) —— 与上位机 0x67 RUN 走的是同一条路，
+ * 只是**不受上位机看门狗约束**（task_run.h 的约定：比赛要离线自主跑）。
+ * 返回 true = 状态变了（调用方重画）。 */
+static bool task_run_toggle(void)
+{
+    if (TaskRun_IsRunning()) {
+        TaskRun_Stop();
+        return true;
+    }
+    if (task_sel_ensure() != TASK_STORE_NO_SLOT) {
+        if (TaskStore_Load(s_task_sel) == TASK_STORE_OK) {
+            (void)TaskRun_Start((uint16_t)s_task_sel);
+        }
+        return true;
+    }
+    return false;
+}
+
+/* 标题行右边：选中任务名（右对齐到 x=122）。名字太长由 task_sel_name_refresh()
+ * 提前截好，这里只负责按宽度摆位置。 */
+static void draw_task_name(void)
+{
+    if (s_task_name_w <= 0) {
+        draw_text(4, 1, kk_font_body, "车上没任务");
+        return;
+    }
+    draw_text((int16_t)(122 - s_task_name_w), 1, kk_font_body, s_task_name);
+}
+
 static void draw_task_page(void)
 {
-    char buf[28];
-    uint8_t running = TaskRun_IsRunning();
+    uint8_t idx = 0U;
+    uint8_t total = 0U;
+    uint8_t i;
+    char    buf[16];
 
-    draw_title("任务");
-    draw_text(4, 22, kk_font_body, running ? "运行" : "待机");
+    /* 标题行：左边页名（跑起来写「运行」），中间「第几个/共几个」，最右边任务名。
+     * 用户 m24999 明确要求"任务只显示在标题栏、标题栏最右边也要有他的名字"，
+     * 下面整块留给循迹扫描状态（他离线跑任务时就盯着这 8 根柱子调线）。 */
+    draw_title(TaskRun_IsRunning() ? "运行" : "任务");
 
-    if (running) {
-        snprintf(buf, sizeof(buf), "任务 %u", (unsigned)TaskRun_Id());
-        draw_text(4, 34, kk_font_body, buf);
-        /* 第几块是当前序列（进门 / 循环体）内的下标，不是状态号 */
-        snprintf(buf, sizeof(buf), "第 %u 块", (unsigned)TaskRun_Block());
-        draw_text(4, 46, kk_font_body, buf);
-        draw_text(70, 46, kk_font_body, "中键停");
-    } else {
-        uint8_t i, n = 0U;
-        for (i = 0U; i < TaskStore_SlotCount(); i++) {
-            if (TaskStore_Present(i)) n++;
+    task_sel_ensure();
+    for (i = 0U; i < TaskStore_SlotCount(); i++) {
+        if (!TaskStore_Present(i)) {
+            continue;
         }
-        snprintf(buf, sizeof(buf), "车上 %u 个", (unsigned)n);
-        draw_text(4, 34, kk_font_body, buf);
-        draw_text(4, 46, kk_font_body, "左键返回");
+        total++;
+        if (i <= s_task_sel) {
+            idx++;                      /* 选中项是第几个（1 基；选中的一定在场） */
+        }
     }
+    if (total != 0U) {
+        snprintf(buf, sizeof(buf), "%u/%u", (unsigned)idx, (unsigned)total);
+        draw_text(28, 1, kk_font_body, buf);
+    }
+    draw_task_name();
+
+    /* 主体：循迹扫描状态（与「循迹测试」页同一份画法，免得两个页面读数不一样） */
+    draw_trace_bars();
 }
 
 /* =====================================================================
@@ -2239,6 +2427,19 @@ void KK_UI_CustomOnEnter(KK_UI_PageId page)
         s_trk_changed = HAL_GetTick();
         cal_set_preview(0);
     }
+    if (page == PAGE_CUSTOM_TASK) {
+        /* 进任务页：按键机复位（同上面几页，免得把上一页残留的按下当成一条新边沿、
+         * 一进来就把选中项挪走）；正在跑的那个任务就是"选中项"——这一页中键执行
+         * 的就是标题栏右边那个名字，跑着的时候名字必须是在跑的那个（用户 m24999）。 */
+        s_tkey_raw = app_ui_raw_keys();
+        s_tkey_stable = s_tkey_raw;
+        s_tkey_changed = HAL_GetTick();
+        if (TaskRun_IsRunning()) {
+            s_task_sel = (uint8_t)TaskRun_Id();
+        }
+        (void)task_sel_ensure();
+        task_sel_name_refresh();
+    }
     /* 表盘不再需要"停一拍"的起始时刻（已按 m02919 移除）。保留函数体以满足
      * KK_UI 的回调签名。 */
 }
@@ -2425,22 +2626,30 @@ void KK_UI_CustomOnInput(KK_UI_PageId page, KK_UI_InputEvent event)
         return;
     }
 
+    if (page == PAGE_CUSTOM_TASK) {
+        /* 上/下/左 全由 task_key_scan() 按原始位图处理，这里只把框架归一化出来的
+         * UP/DOWN 吞掉：框架把"上/左"折成同一个 UP，放上去的话按上键选任务会顺手
+         * 把页面关掉（同 PAGE_CUSTOM_TRACE 的理由，见 app_ui_read_input()）。 */
+        if (event.action == KK_UI_INPUT_UP || event.action == KK_UI_INPUT_DOWN) {
+            return;
+        }
+        /* 中键 = 跑选中的任务（用户 m24999：要的就是"在车上点一下就离线跑起来"）；
+         * 正在跑就是停机。原来这一页中键**只停机**、启动一律走上位机 0x67 RUN 或
+         * 开机自启 —— 用户明确要离线跑，所以启动也接到这里。跑的是谁：按之前标题栏
+         * 右边那个名字就是，看得见。 */
+        if (event.action == KK_UI_INPUT_OK && event.source != KK_UI_INPUT_ENCODER) {
+            if (task_run_toggle()) {
+                KK_UI_Invalidate();
+            }
+            return;
+        }
+        return;
+    }
+
     /* 其余自定义页没有选项框：左键返回（左键在归一化里映射成 UP） */
     if (event.action == KK_UI_INPUT_UP) {
         (void)KK_UI_CustomRequestClose();
         return;
-    }
-
-    if (event.action == KK_UI_INPUT_OK && event.source != KK_UI_INPUT_ENCODER) {
-        /* 任务页：中键**只停机**，不启动 —— 误按一下就让车按流程跑起来太危险
-         * （启动一律走上位机 0x67 RUN 或开机自启）。页面上没有选项框，左键返回
-         * 由上面的 UP 分支统一处理。 */
-        if (page == PAGE_CUSTOM_TASK) {
-            if (TaskRun_IsRunning()) {
-                TaskRun_Stop();
-                KK_UI_Invalidate();
-            }
-        }
     }
 }
 
@@ -2492,6 +2701,18 @@ bool KK_UI_CustomOnTick(KK_UI_PageId page, uint32_t now_ms)
             s_trk_changed = now_ms;
         }
         return false;
+    }
+
+    if (page == PAGE_CUSTOM_TASK) {
+        /* 任务页：上/下（选任务）与 左（返回）自己扫原始位图（框架只有三键，
+         * 见 task_key_scan()）；顺带对一下"选中任务名"的签名 —— 页面开着的时候
+         * 上位机把任务重烧/删掉，屏上的名字要跟着变（量宽度只在签名变了那一拍做）。 */
+        bool redraw = task_key_scan(now_ms);
+        int32_t sig0 = s_task_sig;
+
+        (void)task_sel_ensure();
+        task_sel_name_refresh();
+        return (bool)(redraw || (s_task_sig != sig0));
     }
 
     if (page == PAGE_CUSTOM_POWER) {

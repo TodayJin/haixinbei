@@ -120,7 +120,7 @@
 | GET | `/api/tasks` | — | `{"ok":true,"items":[{"id","name","len","crc","flags"}]}` |
 | GET | `/api/tasks/get?id=N` | — | `{"ok":true,"hex":"…"}`（整镜像，前端自己切分块） |
 | POST | `/api/tasks/put` | `{"id","offset","hex"}` | `{"ok":true}`（一帧 `T_TASK_PUT`；**协议上限 124 B = `MAX_PAYLOAD-4`，页面按 120 B 分片**） |
-| POST | `/api/tasks/commit` | `{"id","len","crc","name","flags"}` | `{"ok":true}`（`T_TASK_COMMIT`，车上擦写 Flash；`flags` bit0 = 开机自启） |
+| POST | `/api/tasks/commit` | `{"id","len","crc","name","flags"}` | `{"ok":true}`（`T_TASK_COMMIT`，车上擦写 Flash；`flags` 是**保留位**，车上原样存进目录页、不解释 —— bit0 曾经是「开机自启」，用户 m24999 删了那个功能：上电只扫描不启动） |
 | POST | `/api/tasks/delete` | `{"id"}` | `{"ok":true}` |
 | POST | `/api/tasks/run` | `{"id"}` | `{"ok":true}` |
 | POST | `/api/tasks/stop` | `{}` | `{"ok":true}` |

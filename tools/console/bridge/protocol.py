@@ -553,7 +553,9 @@ def payload_task_commit(tid: int, length: int, crc: int, name: str = "",
                         flags: int = 0) -> bytes:
     """COMMIT 的载荷（桥用 `state.send_wait()` 发，所以载荷要能单独拿）。
 
-    ``flags`` bit0 = 开机自启（车上 `TASK_STORE_FLAG_AUTO`），不认的位由存储层过滤掉。
+    ``flags`` 是**保留位**：车上原样存进目录页、不解释任何位（bit0 曾经是"开机自启"，
+    用户 m24999 把那个功能整个删了 —— 上电只扫描不启动）。这里照旧把它带上，方便以后
+    定义新含义时不用再动帧格式。
     """
     pl = pack_u16(tid) + pack_u16(length) + pack_u16(crc) + bytes([flags & 0xFF])
     if name:

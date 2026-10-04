@@ -231,7 +231,7 @@ static void cache_load(const ts_dir_t *d)
         s_off[e->id]     = e->off;
         s_len[e->id]     = e->len;
         s_crc[e->id]     = e->crc16;
-        s_flags[e->id]   = (uint8_t)(e->flags & TASK_STORE_FLAG_AUTO);
+        s_flags[e->id]   = e->flags;                    /* 保留位：原样存档，车上没人读 */
         s_nlen[e->id]    = nl;
         if (nl != 0U) {
             memcpy(s_name[e->id], e->name, nl);
@@ -296,13 +296,13 @@ static int store_build(uint8_t target, const uint8_t *img, uint16_t len, uint16_
             }
             src = img;
             l   = len;
-            fl  = (uint8_t)(flags & TASK_STORE_FLAG_AUTO);
+            fl  = flags;
             nm  = name;
             nl  = name_len;
         } else if (s_present[i] != 0U) {
             src = ts_prog() + s_off[i];
             l   = s_len[i];
-            fl  = (uint8_t)(s_flags[i] & TASK_STORE_FLAG_AUTO);
+            fl  = s_flags[i];
             nm  = s_name[i];
             nl  = s_nlen[i];
         } else {
@@ -506,18 +506,6 @@ const uint8_t *TaskStore_Image(uint8_t slot)
         return NULL;
     }
     return ts_prog() + s_off[slot];
-}
-
-uint8_t TaskStore_AutoSlot(void)
-{
-    uint8_t i;
-
-    for (i = 0U; i < TASK_STORE_SLOTS; i++) {
-        if (s_present[i] != 0U && (s_flags[i] & TASK_STORE_FLAG_AUTO) != 0U) {
-            return i;
-        }
-    }
-    return TASK_STORE_NO_SLOT;
 }
 
 int TaskStore_Load(uint8_t slot)

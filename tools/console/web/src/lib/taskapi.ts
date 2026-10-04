@@ -160,7 +160,9 @@ export function createTaskApi(fetchImpl: Fetcher) {
     put: (id: number, offset: number, hex: string) => call<unknown>('/api/tasks/put', { method: 'POST', body: { id, offset, hex } }),
 
     /** 提交：桥上把 len/crc 与收到的字节核对一遍，不一致就拒（避免烧半个程序）。
-     *  `flags` bit0 = 开机自启（车上自己跑这个任务，不用电脑点「开始」）。 */
+     *  `flags` 是**保留位**（车上原样存进目录页、不解释）：bit0 曾经是「开机自启」，
+     *  用户 m24999 把那个功能整个删了 —— 上电只扫描不启动，跑任务只有人在场按
+     *  车上任务页中键或上位机「开始」。形参留着，以后定义新位不用改帧格式。 */
     commit: (id: number, len: number, crc: number, name?: string, flags?: number) =>
       call<unknown>('/api/tasks/commit', { method: 'POST', body: { id, len, crc, name, flags } }),
 

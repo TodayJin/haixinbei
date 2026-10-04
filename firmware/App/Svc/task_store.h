@@ -29,7 +29,8 @@
  *                2 u16 off   （程序区内偏移，**8 字节对齐**：双字编程的硬要求）
  *                4 u16 len
  *                6 u16 crc16 （TaskProg_Crc16，覆盖镜像 [12,len)）
- *                8 u8  flags （bit0 = TASK_STORE_FLAG_AUTO）
+ *                8 u8  flags （**保留位**：曾经 bit0 = 开机自启，用户 m24999 把那个
+ *                            功能整个删了；现在只原样存档/回读，车上没有任何读者）
  *                9 u8  name_len (0..30)
  *               10 char name[30]
  *
@@ -74,8 +75,10 @@
 #define TASK_STORE_DIR_HDR_LEN 8u
 #define TASK_STORE_ENTRY_LEN   40u
 
-/* ---- 记录 flags ---- */
-#define TASK_STORE_FLAG_AUTO   0x01u    /* 开机自启：上电自动载入并启动这个任务 */
+/* ---- 记录 flags ----
+ * **保留位，当前无定义**：bit0 曾经是「开机自启」，用户 m24999 明确把这个功能删了
+ * （"我肯定是调好了才会启动"）—— 上电只扫描不启动，启动只有人在场按的两条路：
+ * 车上任务页中键 / 上位机 0x67 RUN。字段留着只为兼容目录页布局（TASK_STORE_VER 2）。 */
 
 /* ---- 返回码 ---- */
 enum {
@@ -102,8 +105,6 @@ const uint8_t *TaskStore_Image(uint8_t slot);
 /* 镜像所在绝对页号 / 所在 4KB 擦除块号（诊断用，块号 = 页号 / 2）；空槽返回 0xFF */
 uint8_t  TaskStore_Page(uint8_t slot);
 uint8_t  TaskStore_Block(uint8_t slot);
-/* 带开机自启标记（flags.bit0）里 id 最小的槽；没有则 TASK_STORE_NO_SLOT */
-uint8_t  TaskStore_AutoSlot(void);
 /* 校验过的镜像载入解释器（空槽回 TASK_STORE_E_EMPTY，其余透传 TaskRun_Load 的返回值） */
 int      TaskStore_Load(uint8_t slot);
 

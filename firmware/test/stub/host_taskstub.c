@@ -26,7 +26,7 @@ int      stubt_starts;
 int      stubt_stops;
 uint16_t stubt_last_len;         /* COMMIT 收到的 len */
 uint16_t stubt_last_crc;         /* COMMIT 收到的 crc（协议有没有原样搬运） */
-uint8_t  stubt_last_flags;       /* COMMIT 收到的 flags（bit0 = 开机自启，其余位车上过滤） */
+uint8_t  stubt_last_flags;       /* COMMIT 收到的 flags（保留位：原样存档。曾经 bit0 = 开机自启，用户 m24999 删了） */
 uint8_t  stubt_last_namelen;
 char     stubt_last_name[TASK_STORE_NAME_MAX + 1];
 uint16_t stubt_last_stage_off;   /* 最近一片 PUT 的偏移 */
@@ -144,15 +144,6 @@ const uint8_t *TaskStore_Image(uint8_t slot)
 {
     if (slot >= TASK_STORE_SLOTS || s_present[slot] == 0u) return NULL;
     return s_img[slot];
-}
-
-uint8_t TaskStore_AutoSlot(void)
-{
-    uint8_t i;
-    for (i = 0u; i < TASK_STORE_SLOTS; i++) {
-        if (s_present[i] != 0u && (s_flags[i] & TASK_STORE_FLAG_AUTO) != 0u) return i;
-    }
-    return TASK_STORE_NO_SLOT;
 }
 
 void TaskStore_StageReset(void)

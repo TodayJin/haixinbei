@@ -967,7 +967,8 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
     tcrc = rd_u16(&p[4]);
     if (id >= TASK_STORE_SLOTS) { send_ack(seq, ST_OUT_OF_RANGE); break; }
     if (len > 6u) {
-      /* §5：p[6] = flags（bit0 = 开机自启；不认的位由存储层过滤掉，不会写进 Flash） */
+      /* §5：p[6] = flags（**保留位**：曾经 bit0 = 开机自启，用户 m24999 删了那个功能，
+       * 现在车上不解释任何位，原样交给存储层存进目录） */
       flags = p[6];
     }
     if (len > 7u) {

@@ -148,7 +148,7 @@ describe('契约自检（需要 mock 或桥在 127.0.0.1:8770）', () => {
     const crc = crc16Ccitt(bytes.subarray(12))
     const id = 6                       // 车上 8 个槽位：0..7
 
-    const burn = await api.burn(id, bytes, bytes.length, crc, '契约自检', 1)   // 1 = 开机自启
+    const burn = await api.burn(id, bytes, bytes.length, crc, '契约自检', 0x81)  // flags 是保留位
     expect(burn.ok, JSON.stringify(burn)).toBe(true)
 
     const list = await api.list()
@@ -159,7 +159,7 @@ describe('契约自检（需要 mock 或桥在 127.0.0.1:8770）', () => {
       expect(mine?.len).toBe(bytes.length)
       expect(mine?.crc).toBe(crc)
       expect(mine?.name).toBe('契约自检')
-      expect(mine?.flags).toBe(1)     // 开机自启跟着 COMMIT 落到目录记录里
+      expect(mine?.flags).toBe(0x81)   // flags 原样落在目录记录里（曾经被掩成 bit0，m24999 删了那个功能）
     }
 
     const back = await api.get(id)

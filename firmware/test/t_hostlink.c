@@ -975,7 +975,7 @@ int main(void)
             CHECK_EQ_I(stubt_commits, 1);
             CHECK_EQ_I(stubt_last_len, 80);
             CHECK_EQ_I(stubt_last_crc, 0x1234);
-            CHECK_EQ_I(stubt_last_flags, TASK_STORE_FLAG_AUTO);  /* bit0 = 开机自启，原样送存储层 */
+            CHECK_EQ_I(stubt_last_flags, 0x01u);  /* flags 是保留位：车上原样转给存储层 */
             CHECK_EQ_I(stubt_last_namelen, 3);
             CHECK_EQ_I(memcmp(stubt_last_name, "abc", 3), 0);
         }
@@ -1036,7 +1036,7 @@ int main(void)
                 CHECK_EQ_I(r[5] | (r[6] << 8), 0);          /* id = 槽号 */
                 CHECK_EQ_I(r[7] | (r[8] << 8), 80);         /* len */
                 CHECK_EQ_I(r[9] | (r[10] << 8), 0x1234);    /* crc */
-                CHECK_EQ_I(r[11], 1);                       /* flags：COMMIT 带来的 bit0=自启 */
+                CHECK_EQ_I(r[11], 1);                       /* flags：原样回读（保留位） */
                 CHECK_EQ_I(r[12], 3);                       /* name_len */
                 CHECK_EQ_I(memcmp(&r[13], "abc", 3), 0);
             }
