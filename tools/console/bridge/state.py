@@ -214,8 +214,49 @@ class Console:
         self.runner.send(data)
         return seq
 
+    def _link_alive(self, max_age_ms: int = 500) -> bool:
+        """链路还在来帧吗（车没掉线）。用来决定"无应答"值不值得重发：
+        车要是彻底不说话了，重发只是白等一遍超时。"""
+        try:
+            st = self.runner.status()
+        except Exception:
+            return False
+        if not st.get("open", False):
+            return False
+        age = self._now_ms() - int(st.get("last_rx_ms") or 0)
+        return 0 <= age <= max_age_ms
+
     def send_wait(self, type_: int, payload: bytes = b"", want=(pr.T_ACK,),
-                  timeout: float = 0.6, req: str | None = None) -> dict:
+                  timeout: float = 0.6, req: str | None = None,
+                  retries: int = 0) -> dict:
+        """发一帧并等应答，**"一帧都没回来"就换新 seq 重发**（最多 `retries` 次）。
+
+        `retries` 的安全边界（很关键，别乱传）：
+          · 只有这条 seq **一帧都没回来**（`answered` 为假）才重发——收到明确拒绝
+            （status != ST_OK）绝不重发；
+          · 只对**幂等**请求用：设参数、drive 设定点、读全表、握手；
+          · `T_CMD` 的复位/陀螺标定、`T_ACTION_PLAY` / `T_SERVO_PLAY` 这类**一次性动作
+            必须留 0**，否则会重放一次。
+        为什么需要它：车的 host-link 发是 8 槽有损队列（`firmware/Core/Src/board.c`
+        的 `s_dl_tx_drop`），队列满就**静默丢帧**，丢的往往正是 ACK —— 车其实已经执行了，
+        但上位机只看到"无应答"。上位机自己的驱动接收缓冲也有个 4096 B 的老默认
+        （见 `link.py` 的 `RX_BUFFER` 注释）。重发幂等请求能同时盖住这两种丢帧。
+        """
+        r = self._send_wait_once(type_, payload, want, timeout, req)
+        n, lim = 0, max(0, int(retries))
+        while (not r["answered"]) and n < lim and self._link_alive():
+            n += 1
+            r = self._send_wait_once(type_, payload, want, timeout, req)
+        if n:
+            r["retries"] = n
+            if r["answered"]:
+                self.log("info", f"{req or 'req'}：前 {n} 次无应答，第 {n + 1} 次才回")
+            elif r.get("error"):
+                r["error"] = f"{r['error']}（已重发 {n} 次）"
+        return r
+
+    def _send_wait_once(self, type_: int, payload: bytes = b"", want=(pr.T_ACK,),
+                        timeout: float = 0.6, req: str | None = None) -> dict:
         """发一帧并等应答。返回 {'ok','status','status_name','frames',...}。"""
         seq = self.next_seq()
         with self.cv:
@@ -253,7 +294,12 @@ class Console:
             # 而本桥的语义失败一律回 HTTP 200 ⇒ 用户看到的就是「请求失败（HTTP 200）」
             # （用户 m24215 报的"什么 HTTP002。200"就是这个）。这里补上真正的原因。
             if st is None:
-                err = (f"车上没应答（等 {timeout:.1f}s 超时）" if not got
+                # 别写成"车没收到指令"：车的 host-link 发是 8 槽有损队列
+                # （firmware/Core/Src/board.c 的 s_dl_tx_drop），队列满就静默丢帧，
+                # 丢的往往正是这条 ACK —— **车多半已经执行了**。上位机的驱动接收
+                # 缓冲也还有个 4096B 的老默认（见 link.py 的 RX_BUFFER）。
+                err = (f"车上没应答（等 {timeout:.1f}s 超时；多半只是这一帧丢了，"
+                       f"车可能已经执行）" if not got
                        else f"车上没回确认帧（收到 {len(got)} 帧，都不是 ACK）")
             else:
                 err = f"车上拒绝了：{name}"
@@ -883,7 +929,8 @@ class Console:
         results, sent = [], 0
         for sp, v in want:
             r = self.send_wait(pr.T_PARAM_SET, pr.pack_u16(sp.id) + pr.pack_f32(v),
-                               want=(pr.T_ACK, pr.T_PARAM_REPORT))
+                               want=(pr.T_ACK, pr.T_PARAM_REPORT),
+                               req=f"params.set {sp.key}", retries=2)
             ok = bool(r.get("ok") and r.get("answered"))
             if ok:
                 with self.lock:
@@ -1040,7 +1087,7 @@ class Console:
         a = int(vl or 0) if mode == 1 else int(base or 0)
         b = int(vr or 0) if mode == 1 else int(turn or 0)
         r = self.send_wait(pr.T_DRIVE, bytes([mode]) + pr.pack_i16(a) + pr.pack_i16(b),
-                           want=(pr.T_ACK, pr.T_DRIVE_REPORT), req="drive")
+                           want=(pr.T_ACK, pr.T_DRIVE_REPORT), req="drive", retries=1)
         r.update({"mode": mode, "a": a, "b": b})
         if not r.get("ok"):
             # 操控页是 10Hz 连续下发（转向时每 100ms 一帧），车一拒绝就会连着弹 ——

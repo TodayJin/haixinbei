@@ -26,6 +26,14 @@ except Exception:                                        # pragma: no cover
 
 RECONNECT_MS = 1000
 READ_CHUNK = 4096
+# 驱动接收缓冲。pyserial 的 Windows 后端固定 `SetupComm(handle, 4096, 4096)`
+# （见 serial.serialwin32），4096 B 在 921600/200Hz 遥测下只够 **205ms** ——
+# 桥的读线程一旦被别的活（HTTP 线程持 GIL、SSE 扇出、大 JSON）挡住更久，
+# 驱动就静默丢字节：表现是 `resyncs`/`crc_errors` 涨，偶尔一条请求的 ACK 恰好
+# 被丢掉 ⇒ 上位机报"无应答"（而车其实已经执行了）。这里把它抬到 256KB（≈13s）。
+RX_BUFFER = 262144
+# 单次 poll 最多搬这么多字节：正常一拍只有 ~100 B，只有积压时才用得上
+READ_BUDGET = 262144
 
 
 def available_ports() -> list[dict]:
@@ -66,6 +74,11 @@ class LinkBase:
         self.tx_bytes = 0
         self.rx_frames = 0
         self.tx_frames = 0
+        # 诊断：驱动缓冲里最多攒过多少字节、两次 poll 之间最长隔了多久。
+        # 这两个数是"上位机读得够不够快"的直接证据（见 RX_BUFFER 的注释）。
+        self.max_in_waiting = 0
+        self.max_gap_ms = 0
+        self.last_poll_ms = 0
 
     # ---- 生命周期
     def start(self) -> None:
@@ -87,6 +100,7 @@ class LinkBase:
             "rx_bytes": self.rx_bytes, "tx_bytes": self.tx_bytes,
             "rx_frames": self.rx_frames, "tx_frames": self.tx_frames,
             "crc_errors": self.dec.crc_errors, "resyncs": self.dec.resyncs,
+            "max_in_waiting": self.max_in_waiting, "max_gap_ms": self.max_gap_ms,
             "last_rx_ms": self.last_rx_ms, "note": self.note,
         }
 
@@ -120,6 +134,12 @@ class SerialLink(LinkBase):
     def _try_open(self, now_ms: float) -> None:
         try:
             self.ser = serial.Serial(self.port, self.baud, timeout=0, write_timeout=0.2)
+            # 抬高驱动接收缓冲（Windows 默认 4096 B；posix 后端会忽略这个建议值）。
+            # 失败不算错：老驱动/非 Windows 平台照旧用默认值，只是抗卡顿余量小。
+            try:
+                self.ser.set_buffer_size(rx_size=RX_BUFFER)
+            except Exception:
+                pass
             self.open_ = True
             self.note = ""
         except Exception as e:
@@ -142,15 +162,31 @@ class SerialLink(LinkBase):
             if now_ms >= self.next_try_ms:
                 self._try_open(now_ms)
             return []
+        # 进 poll 的间隔 = 读线程被别的活挡住的最长时间（含发帧、派帧、睡眠）
+        if self.last_poll_ms and now_ms - self.last_poll_ms > self.max_gap_ms:
+            self.max_gap_ms = int(now_ms - self.last_poll_ms)
+        self.last_poll_ms = now_ms
+        out: list[pr.Frame] = []
         try:
-            n = self.ser.in_waiting
-            data = self.ser.read(max(1, min(READ_CHUNK, n))) if n else b""
+            # 一拍尽量搬空，而不是"只读一块"：积压时下一拍才能追上
+            budget = READ_BUDGET
+            while budget > 0:
+                n = self.ser.in_waiting
+                if n > self.max_in_waiting:
+                    self.max_in_waiting = int(n)
+                if not n:
+                    break
+                data = self.ser.read(min(READ_CHUNK, n, budget))
+                if not data:
+                    break
+                out.extend(self._frames(data, int(now_ms)))
+                budget -= len(data)
         except Exception as e:
             self.note = f"串口读失败（已断开，自动重连中）：{e}"
             self.stop()
             self.next_try_ms = now_ms + RECONNECT_MS
-            return []
-        return self._frames(data, int(now_ms)) if data else []
+            return out
+        return out
 
     def send(self, data: bytes) -> int:
         if self.ser is None:
