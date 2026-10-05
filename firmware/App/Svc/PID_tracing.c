@@ -664,6 +664,13 @@ void motor_tracing_cascade(int base_speed)
         if (s_err_dir < -TRACE_SEARCH_DIR_DEAD) s_search_dir = -1;
     }
 
+    /* ★2026-10-06 路口减速：**不管丢没丢线**。
+     * `s_cross` 成立的那一刻（≥4 路同时压线）线**通常还看得见** —— 那是"车正压在路口上"。
+     * 原来这一行写在下面的丢线分支里 ⇒ 等于要等车已经冲出弯口（丢线了）才减速，形同虚设。
+     * 提到这里之后：一进路口就先把速度让一半，给探头时间看到"拐过去的那条腿"
+     * （0.33m/s 下 120ms 的找线延迟里车已走 40mm，而探头杆总共才 ~60mm）。 */
+    if (s_cross != 0U) base_speed = base_speed / 2;
+
     if (all_sensors_lost && s_lost_since != 0U) {
         uint32_t lost_ms = (uint32_t)(HAL_GetTick() - s_lost_since);
 
@@ -688,7 +695,6 @@ void motor_tracing_cascade(int base_speed)
          *      = **原地对转**，正好是已经调好的 pivot 工况（base=0 ⇒ cap = corr_limit = 3000、
          *      差速 6000、实测 ~121°/s）。既拿到了"内侧轮变负"，又不用放着大 cap 去污染
          *      看见线时的环路；`corr_ref` 也就可以退回 3000。 */
-        if (s_cross != 0U) base_speed = base_speed / 2;   /* 刚进路口：先减速，给探头看到拐后的腿 */
         if (lost_ms > TRACE_SEARCH_DELAY_MS) base_speed = 0;  /* 开始找线 ⇒ 原地对转（pivot 工况） */
 
         /* 找线：还在丢就朝"线最后偏在哪一侧"持续转（见 TRACE_SEARCH_DELAY_MS 注释）。

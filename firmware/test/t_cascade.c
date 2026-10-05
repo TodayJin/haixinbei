@@ -356,6 +356,28 @@ int main(void)
     CHECK_EQ_I(g_gyro_l, 1200);                              /* 速度回来 */
     CHECK_EQ_I(g_gyro_r, 1200);
 
+    /* §12 ★路口减速必须在"线还看得见"时就生效（2026-10-06 通读代码抓到的缺陷）：
+     *     原来那一行写在 `all_sensors_lost` 分支里 ⇒ 要等车已经冲出弯口（丢线）才减速，
+     *     形同虚设。s_cross 成立的那一刻线通常还看得见。 */
+    scene();
+    for (int i = 0; i < 4; i++) g_w[i] = 200.0f;             /* ≥4 路同时压线 = 路口 */
+    for (int i = 4; i < 8; i++) g_w[i] = 0.0f;
+    settle_base(1200);                                       /* 先让基准斜坡收敛到 1200 */
+    CHECK_EQ_I(tracing_cross(), 1);                          /* 认成路口 */
+    CHECK_EQ_I(tracing_lost(), 0);                           /* **线还看得见**（关键） */
+    settle_base(1200);
+    CHECK_EQ_I(g_gyro_l, 600);                               /* 路口 ⇒ 基准让一半 */
+
+    /* §13 同一个前提被破坏时不许减速：线看不见时走丢线那一套（丢线太久直接基准清零） */
+    scene();
+    for (int i = 0; i < 8; i++) g_w[i] = 200.0f;             /* 均匀一片 = 丢线 */
+    settle_base(1200);
+    CHECK_EQ_I(tracing_lost(), 1);
+    CHECK_EQ_I(g_gyro_l, 1200);                              /* 刚丢线（还没到 SEARCH_DELAY）：不改基准 */
+    host_tick_add(200u);
+    settle_base(1200);
+    CHECK_EQ_I(g_gyro_l, 0);                                 /* 开始找线 ⇒ 基准清零（pivot 工况） */
+
     /* §11 上位机可以点改串级增益（参数 517/518），越界要被夹住 */
     scene();
     PID_Tracing_SetCascadeGains(6.0f, 12.0f);
