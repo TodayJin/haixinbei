@@ -333,9 +333,18 @@ int main(void)
         s_corr_ref = 0.0f;
         CHECK(fabsf(GyroControl_CorrLimit() - 2000.0f) < 1.0e-3f);
 
-        /* 放大之后仍要夹在单轮满量程内 */
+        /* 放大之后的上限：**MOTOR_PWM_MAX + |base|**（2026-10-06 放宽，用户 m 放行）。
+         * 左轮 = base − corr，旧的"夹在单轮满量程"让 base=7000 时左轮最低只到 −200
+         * ⇒ 内侧轮无法反转 ⇒ 直角这种"要先把车头拧过来"的大转弯只有一半差速。
+         * 真正的轮量程边界是 gyro_control.c 里 left/right 各自夹到 ±MOTOR_PWM_MAX。 */
         s_corr_ref = 1000.0f;
+        CHECK(fabsf(GyroControl_CorrLimit() - 2.0f * (float)MOTOR_PWM_MAX) < 1.0e-3f);
+
+        /* 但原地转（base=0）的硬上限仍是单轮满量程 ⇒ pivot 行为逐位不变 */
+        s_corr_limit = 20000.0f;
+        GyroControl_SetBaseSpeed(0, 0);
         CHECK(fabsf(GyroControl_CorrLimit() - (float)MOTOR_PWM_MAX) < 1.0e-3f);
+        s_corr_limit = 2000.0f;
 
         /* 参数被写坏：ref 非法 -> 不放大；限幅 NaN -> 0（不转）；负限幅按 |lim| */
         s_corr_ref = NAN;

@@ -686,24 +686,65 @@ HAL_StatusTypeDef board_uart4_init(void)
   return HAL_UART_Init(&huart4);
 }
 
+/* 发一串：裸寄存器写，绕开 HAL 的 gState/TxState 状态机（句柄状态一旦被卡在 BUSY，
+ * HAL_UART_Transmit 会当场返回 HAL_BUSY、一个字节都不发）。裸写 TDR 不依赖句柄状态。 */
 void board_uart4_write(const uint8_t *data, uint16_t len)
 {
+  uint32_t t0;
+
   if (huart4.Instance != UART4) {
     if (board_uart4_init() != HAL_OK) return;
   }
-  (void)HAL_UART_Transmit(&huart4, (uint8_t *)data, len, 50U);
+
+  for (uint16_t i = 0; i < len; i++) {
+    t0 = HAL_GetTick();
+    while ((UART4->ISR & USART_ISR_TXE_TXFNF) == 0U) {   /* 发送数据寄存器空 */
+      if ((uint32_t)(HAL_GetTick() - t0) > 5U) return;  /* 发不出去就认栽，别死等 */
+    }
+    UART4->TDR = data[i];
+  }
+
+  t0 = HAL_GetTick();
+  while ((UART4->ISR & USART_ISR_TC) == 0U) {        /* 等最后一位真正出去 */
+    if ((uint32_t)(HAL_GetTick() - t0) > 5U) break;
+  }
 }
 
 /* 读一个字节：拿到返回 1，超时返回 0。
  * 官方例程把这条线当"设置口"只发不收，但模块也支持 0x57 + 地址 的读取帧
  * （System/USART/usart.c 的 Read_Data3 / Read_Data4），IIC 不通时 trace_cal.c 走它。
- * 超时给 0 就是"有就取走、没有立刻返回"，用来冲刷可能残留的字节。 */
+ * 超时给 0 就是"有就取走、没有立刻返回"，用来冲刷可能残留的字节。
+ * 同样裸读 RDR：读 RDR 天然清掉 PE/NE/FE/ORE，也不把 HAL 的 RxState 留在 BUSY。
+ *
+ * 关键：**超时退出前必须把错误标志清掉**。STM32 的规则是 ORE 一锁存，后面收到的字节
+ * 就只进移位寄存器、RXNE 不再置位（数据直接丢），而裸读这边既不读 RDR 也不开 ERR 中断
+ * ⇒ 一次溢出就能把整条链路变成"永久收不到数据"：车压在线上却读到 aok=0 / src=NONE /
+ * raw 全 0，而模块其实一直在答（用户 m31580 现场）。HAL 版因为开了 ERR 中断、由
+ * HAL_UART_IRQHandler 负责清 ORE 才没这个坑。所以超时/冲刷时先读一次 RDR、再写 ICR
+ * 把五个错误标志一起清掉，下一次请求从头开始同步。 */
 int board_uart4_read_byte(uint8_t *b, uint32_t timeout_ms)
 {
+  uint32_t t0;
+
   if (huart4.Instance != UART4) {
     if (board_uart4_init() != HAL_OK) return 0;
   }
-  return (HAL_UART_Receive(&huart4, b, 1U, timeout_ms) == HAL_OK) ? 1 : 0;
+
+  t0 = HAL_GetTick();
+  while ((UART4->ISR & USART_ISR_RXNE_RXFNE) == 0U) {  /* 收到数据 */
+    if (timeout_ms == 0U) break;
+    if ((uint32_t)(HAL_GetTick() - t0) >= timeout_ms) break;
+  }
+
+  if (UART4->ISR & USART_ISR_RXNE_RXFNE) {
+    *b = (uint8_t)(UART4->RDR & 0xFFU);
+    return 1;
+  }
+
+  (void)UART4->RDR;   /* 兜底：读 RDR 也能清 RXNE/ORE */
+  UART4->ICR = USART_ICR_PECF | USART_ICR_FECF | USART_ICR_NECF
+             | USART_ICR_ORECF | USART_ICR_IDLECF;
+  return 0;
 }
 
 void board_dl_start_rx(void)

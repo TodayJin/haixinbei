@@ -57,7 +57,7 @@ typedef struct {
     int32_t  speed_ff_slope_x1000;   /* 速度环前馈斜率 ×1000 */
     int32_t  speed_ff_fric;          /* 速度环前馈摩擦项 */
     /* ---- v3 新增 ---- */
-    uint8_t  trace_adapt;            /* 「自动判线」（单帧自适应）0/1 */
+    uint8_t  trace_adapt;            /* 「连续判线」0 = 纯 0/1，1 = 连续插值 */
     uint8_t  pad3[3];
     /* ---- v4 新增：两套标定（0=普通 1=亚克力，用户 m07888）----
      * cal 里**永远**是第 0 套、cal_b 里永远是第 1 套（与"当前在用哪套"无关），
@@ -206,7 +206,7 @@ static void snapshot(nvram_payload_t *p)
     p->speed_ff_slope_x1000 = g_cfg.speed_ff_slope_x1000;
     p->speed_ff_fric        = g_cfg.speed_ff_fric;
 
-    /* v3：「自动判线」（单帧自适应）。存的是 g_cfg 里那一项（菜单直接改它） */
+    /* v3：「连续判线」口径（0 = 纯 0/1，1 = 连续插值）。存的是 g_cfg 里那一项（菜单直接改它） */
     p->trace_adapt = (uint8_t)(g_cfg.trace_adapt ? 1U : 0U);
 
     /* v5：控制环标定量（参数表镜像）+ 舵机动作表 */
@@ -261,7 +261,7 @@ static void apply(const nvram_payload_t *p)
     g_cfg.beep_marker  = (p->beep_marker != 0U);
     g_cfg.trace_invert = (p->trace_invert != 0U);
 
-    /* v3：「自动判线」（单帧自适应）。老记录里没有这一项时，nvram_init 已经把
+    /* v3：「连续判线」口径（0 = 纯 0/1，1 = 连续插值）。老记录里没有这一项时，nvram_init 已经把
      * 默认值先填进 up 了，所以这里无条件盖是安全的。 */
     g_cfg.trace_adapt  = (p->trace_adapt != 0U);
 

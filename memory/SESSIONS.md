@@ -13,6 +13,84 @@
 >
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
+## 2026-10-06 · 循迹调参
+完成：真车 A/B（第25/26轮，随机摆位）发现：`corr` 恒 7200 顶死、航向误差稳定在 16.8°（= 180/ang_kp）、`rate_ref` 要 271 °/s 而执行器只能给 ~110~150 ⇒ 车绕着线转圈（用户原话「贴着线走」）。逐帧证据 `out/_drv_7000_s2_cr1200rm300.txt`。机理：`rate_ref` 被 `s_rate_max` 夹住 ⇒ `corr ≤ rate_kp × rate_max = 40×120 = 4800 < base 7000` ⇒ 内侧轮永远到不了 0。
+未完成：第27轮（降 `pu`/`kd`/收 `am`）被用户当场否掉：那些参数把大转弯的需求也砍了，直角完全跟不上 —— **用户的原话就是判据**。降需求这条路对本车的症状是反的。
+下一步：第28轮正在跑：只改 `trace_rate_max`（120 旧行为 / 200 / 300），pivot 系数与角度环全部锁死，主要看直角工况能不能救回来。
+
+## 2026-10-06 · 固件-验证
+完成：把两个结构性改动做完并烧进真车（bin 118016 B、回读 firstDiff=none，text 117632/data 376/bss 33976）：① `app_ui.c` 的 `line_kd` 三处同步 + NVRAM 一次性迁移；② 新增 `HP_TRACE_RATE_MAX`(0x020A, 默认 300) 只对循迹生效的速率天花板（`gyro_control.c` 用 `s_trace_rate_max`、`PID_tracing.c` 外环夹子也改用它）；③ `GyroControl_CorrLimit()` 硬夹子放宽到 `MOTOR_PWM_MAX+|base|`。验证：固件主机测试 **15/15 通过**（含新加的 `t_cascade` 桩）、上位机 `pytest` **176 passed**（173+3）。烧后开机 `/api/params/reload` 读回：`line_kd=12`（迁移生效，不再是 360）、`trace_rate_max=300`、角度环 10/40/0/120/3000/3000/0.8 全对（`param_crc` 29653）。
+下一步：等第28轮结果定 `trace_rate_max`；定完再把 `task_speed` 按用户要求从 6480 提到 ~7000（SPECS-only，不用迁 NVRAM）并重刷一次；然后回原地转圈复验 pivot 没被影响（`corr` 夹子放宽在 base=0 时逐位不变、`rate_max` 也没动，预期无变化）；最后提交。
+
+## 2026-10-06 · 循迹调参
+完成：物理验证「turn 正 = 左转」并落盘。做法：`out/_signtest.py`（新建，复用 `_gsweep.api/run_once`，自己解析日志）发 `base_turn base=0 turn=+60` 两趟，采 yaw/编码器 vl,vr/corr。两趟一致：yaw +60.10°/+59.50°、vl −108/−118、vr +118/+113 mm/s、corr +1500/+1623；POST 段 yaw 变化 0.0°（证明无人碰车）。用户目视 = 往左转(逆时针)。链路自洽三段：turn>0 → yaw 增 → corr>0 → 左轮倒转/右轮正转。
+未完成：GUI 侧左/右直觉问题未处理（用户明确说「你不用管这个」）：`tools/console/web/src/pages/Imu.tsx:140-146` 朝向滑块 min=−180/max=+180、右端标「+180° 左转到底」⇒ 往右拖真会左转，标签方向与直觉相反。
+下一步：按用户要求继续调循迹环：先修 `out/_tsweep.py`，再在 base≈7000 下跑一轮真车 A/B（先验基线能否跟住线，再看外环 `trace_angle_per_unit`/`line_kd` 是否要跟着内环 rate_kp 40 重调）。
+
+## 2026-10-06
+完成：原地转圈续调定稿：gyro_ang_kp 7→10、gyro_settle_deg 1.0→0.8（配 rate_kp 40）。台架 out/_gsweep.py --cases {ak5,fin1,fin2} 同会话交错 A/B 共 19 趟（每轮插基线、两个转向各半）：到 90% 0.67→0.50s、10-90% 0.47→0.29s，窗 p-p/换向/静默不变（~3°/0~1 次/0.11~0.59s）。验证：真车 RAM 回读（out/_poke.py --dump）s_ang_kp=10.0 / s_rate_kp=40.0 / s_settle_deg=0.8；固件主机测试 15/15 通过；上位机 python -m pytest tools/console/tests ⇒ 173 passed；ARM 构建 bin 117936 B（上限 118784）。提交 475d651（4 文件：host_link.c SPECS、gyro_control.c 兜底初值、t_hostlink.c 断言、tools/console/bridge/params.py 镜像）。
+未完成：车上跑的还是旧 build（新固件未烧录），定稿值只下发到 RAM、未调 /api/params/save 存 NVRAM；gyro_ang_kp 与 gyro_rate_kp 与循迹共用（循迹航向环开环增益 7×160=1120 → 10×400=400）⇒ 赛道复验未做。
+下一步：上赛道跑循迹复验；若 OK 则烧固件 + 存 NVRAM。
+
+## 2026-10-06
+完成：原地转圈「到目标角附近晃」定位并定稿：同会话交错 A/B（每 4 个候选前紧跟一趟基线、每趟交替转向，rate_kp=40 共 17 趟）⇒ `gyro_rate_kp` 160→40 + `gyro_settle_deg` 2.0→1.0：窗 p-p 6.2°→2.7~3.0°、换向 1~3→0、静默 0.5~1.0s→0.31~0.46s、90% 到位 0.48s→0.55~0.69s、末偏 −1.4~+1.1° 无偏；8s 长保持证明没有持续极限环（1.7s 之后每桶 p-p 恒 0.00°、corr 恒 0、vl=vr=0）。已同步进固件出厂默认值与上位机镜像默认表，提交 081d3aa（4 文件 +112/−22，只含本次相关文件）。验证：`python -m pytest tools/console/tests -q` → 173 passed；`pwsh -File firmware/test/run_tests.ps1` → 通过 15 / 失败 0；`make -C firmware all` → OK（bin 117936 B / 上限 118784 B）
+未完成：①`gyro_rate_kp` 与循迹共用（循迹也走 `gyro_control.c:766`），循迹 P/D 是在 160 下标定的 ⇒ 赛道行为待复验 ②新固件没烧（车上跑的是旧 build；这两个参数是上一轮用 `/api/params/set` + `/api/params/push` 下发、并用 SWD 回读 RAM 校验过的），也**没**调 `/api/params/save` 存 NVRAM（掉电即失） ③工作区还有约 20 个与本次无关的未提交改动（`PID_tracing.c`、`trace_cal.c`、`app_ui.c`、`board.c`、`docs/灰度标定与检验.md`、`memory/*` 等），本次刻意没扫进提交
+下一步：赛道复验循迹（先看 `line_kd`/`trace_angle_per_unit` 是否需要跟着 rate_kp=40 重调）；若冲突就给 pivot 分支单独加一个速率环增益，而不是在 40/160 之间回退
+
+## 2026-10-05
+完成：用原地对转扫了 7 组参数（ang_kp / rate_kp / rate_kd / rate_max / corr_limit / corr_slew / settle，各组 3~5 次重复、交替转向），定稿 ang_kp=7、rate_kp=160、rate_kd=0，其余不动；写进固件出厂默认值（host_link.c 的 SPECS、gyro_control.c 的兜底初值）、上位机镜像默认表（tools/console/bridge/params.py）与 t_hostlink.c 的 bounds 断言；`pwsh -File firmware/test/run_tests.ps1` 通过 15/失败 0，`python -m pytest tools\console\tests -q` 173 passed；提交 2c1afab。
+未完成：固件还没烧录（源码默认值已改好；车上 RAM/NVRAM 现在正好就是这套值，所以烧完自然对齐）；车上 Flash 是否已持久化这套值没验证（要断电复位才能确认）。
+下一步：等用户摆车后在赛道上复验：内环从 ang3.5/rate80/kd4 换成 ang7/rate160/kd0 后，循迹 P/D（trace_angle_per_unit=30、line_kd=12）是否还最优。
+
+## 2026-10-05 · 编译坑
+完成：定位并修掉了一个"注释里中文被当成 C 代码"的编译失败：块注释里 `**` 紧跟 `/` 会拼出 `*/` 把注释提前闭合，gcc 报 `stray '\342' in program`。定位法是扫源文件字节流：从注释起点找下一个 `*/` 落在第几行，并列出所有"前一个字符是 `*`"的 `*/`（即 `**/`）。
+下一步：中文注释里写 Markdown 粗体时，绝不让 `**` 紧跟 `/`（分隔符改用 `、`）。
+
+## 2026-10-05 · 循迹调参
+完成：第 17~22 轮真车扫趟（w/v/x/q/k/m 六个系列）把内环与外环都定稿，并写进出厂默认值：`gyro_rate_kp=80`、`gyro_rate_kd=4`、`gyro_rate_max=120`、`gyro_corr_limit=3000`、`gyro_corr_ref=3000`、`trace_angle_per_unit=30`、`trace_angle_max=35`、`line_kd=12`。同步改了 `firmware/App/Svc/host_link.c`（SPECS 五项 + 实测证据注释）、`firmware/App/Svc/gyro_control.c`（`s_corr_limit` 初值 2000→3000）、`firmware/test/t_hostlink.c`（断言 250→80）、`tools/console/bridge/params.py`（镜像默认表五项）。验证：`pwsh -File firmware/test/run_tests.ps1` 通过 15/失败 0；`python -m pytest tools\console\tests -q` 173 passed。已提交 `21515a3`。
+未完成：`PID_tracing.c` 的 `TRACE_ANGLE_PER_UNIT_DEFAULT 30` / `TRACE_POS_KD_DEFAULT 12` 与 `gyro_control.c` 的循迹前馈部分**没能一起提交** —— 它们的 hunk 和更早的串级重写搅在一起；固件默认值**也还没烧录**（用户说了先不动车）。
+下一步：晚上/用户许可后：把 `PID_tracing.c`+`gyro_control.c` 那批（含更早的串级重写）整理成一个独立提交，再烧录固件、确认 `GET /api/params` 里 `default` 变成新值。
+
+## 2026-10-05
+完成：查清并修掉间歇性"无应答"（一直在杀掉整趟的那个 m29913）：`link.py` 抬驱动接收缓冲到 256 KB（`set_buffer_size`）+ `poll` 改成循环搬空 + 新增 `max_in_waiting`/`max_gap_ms`/`last_poll_ms` 诊断；`state.py` 的 `send_wait` 加 `retries`（只在"这条 seq 一帧都没回来"且链路还活着时重发，一次性动作留 0）；`param_push` retries=2、`set_drive` retries=1；`out/_capdrive.py` 补上"发车没 ACK 也先发停车"。验证：`python -m pytest tools\console\tests -q` → 173 passed。已提交 `499e1c5`。
+未完成：车侧的 `DL_TX_SLOTS`(8)/`DL_RX_DMA_SZ`(2048) 是否抬高还没定，要等烧录；`out/` 目录被 gitignore，`_capdrive.py` 的改动不在版本控制里。
+下一步：下次上车时看 1 Hz RTT 行里的 `s_dl_tx_drop`/`s_dl_rx_overrun` 有没有非零，再决定要不要扩队列。
+
+## 2026-10-05
+完成：两个前端 bug 修好并提交 `710c09c`：① `lib/ring.ts` 的抽稀相位改成锚**绝对样本号**（原来环绕回后相位退化成"物理下标 ≡ push 次数 (mod step)"，每帧整条线换一批样本）；② 姿态两路按车体轴对调（JY61P 横装 ⇒ 传感器 pitch 量车身横滚、roll 量车身俯仰）。验证：`npx vitest run` 194 passed / 8 skipped；`npm run build` 干净。
+未完成：`git status` 里还有一大坨更早的未提交工作（`trace_cal.c/h`、`app_ui.c`、`board.c`、`nvram.c`、`pid.c`、`kk_font_body.c`、docs、memory、`tools/console/docs/API.md`）—— 故意没动。
+下一步：由用户决定那坨怎么提交（它还和 `PID_tracing.c`/`gyro_control.c` 的默认值改动缠在一起）。
+
+## 2026-10-05 · 循迹调参
+完成：第 22 轮（P=10/20/30 各 5 趟）的结论已用**整齐摆位**的 m10~m15 六趟（用户确认是他改了摆法）复核：P30 追得最紧、P20 抖动最小、P10 最差 ⇒ `trace_angle_per_unit` 保持 30。前 9 趟的丢线（限幅%rate 27~100%、丢线 20~77%）已定性为**摆位/起点航向**造成，不是参数问题。
+未完成：第 22 轮前 9 趟那批数据在"干净摆位"口径下作废。
+下一步：无需再扫 P；若以后还要提鲁棒性，先解决"起跑前 0.5s 跟不上弯道"（基准速度 7000 偏高）。
+
+## 2026-10-05
+完成：灰度判线按用户 m31902 整改完并实车验证：删掉单帧自适应（s_base/s_shift/s_dr/jolt/minlvl，代码净减 1312 字节），改成每 20ms 一帧算 `d = raw-阈值`、`lvl = 128 ± 255*|d|/跨度`（128 = 正好在阈值上 = 0/1 判定线），判据只剩「有一路越过阈值 = OK，一路都没有 = WEAK」；PID 权重只取越过阈值的部分。验证：15/15 主机测试（t_tracecal 191 项）、`make -C firmware -j8` text 116672/bin 117048 烧录回读一致、J-Link 直读 idle 帧手算逐路对上（ch5 raw328/thr294 ⇒ off=61 ⇒ lvl=67 = s_fl_lvl[5]）、驱动实测 base600/3s 丢线 0/610（改前同参数 24~88%）。
+下一步：循迹 PID 实车整定（用户 m31048 已放行）；带速循迹读帧抖动继续观察（本轮已 0/610）
+
+## 2026-10-05
+完成：菜单「自动判线」改名「连续判线」并用 `node tools/font/gen_font.mjs firmware/App/Fonts/kk_font_body.c wenquanyi_9pt 12 kk_font_body 连续判线` 重新生成字模（旧字模只缺 续 U+7EED；生成前自动备份 .bak、生成后自动捡回 #include；check_charset 复核缺字 0，含上次 814 字的整份字符集也缺字 0）；OLED 截屏（out/_scr_settings2.png）确认设置页第三行显示「连续判线 开」。顺手修掉 `out/_lcd.ps1` 的选面 bug：必须一个 J-Link 会话里把两个显存面都 savebin 再挑有内容的（halt 落在 kk_oled.c:95/:142 的 memset 之后时，stable/transfer 下标指的是刚被清空的那一面）。
+下一步：docs/灰度标定与检验.md §3 已按新口径重写（并修掉 Get-Content/Set-Content 造成的 LF→CRLF 污染，trace_cal.c 也被污染过一次）
+
+## 2026-10-05
+完成：把 `docs/灰度标定与检验.md` 的 §2 检验视图末行表、§3（原「单帧自适应」整段 → 新「标定阈值 + 离阈值的距离」+ 几何缓存/实时性 + 本车实测）、§5（补 gen_font.mjs 重生成流程）、§6（`out/_base_read.jlink` 与 `out/_lcd.ps1` 的新口径）全部同步，LF 结尾保持（`git diff --stat` = 124 insertions/182 deletions，与 --ignore-cr-at-eol 一致）
+下一步：无
+
+## 2026-10-05
+完成：用户 m30822 报的两个 bug 已修完、验证全绿、未提交：①环形缓冲抽稀相位从「环内逻辑下标」改成锚绝对样本号（ring.ts 新增单调 seq，start 现在是绝对样本号、恒 start%step==0，view() 多回一个 endT），新增回归用例钉死 [32,36,40]（旧实现给 [33,37]）；②波形页纵轴改用 nextRange 滞回包络、x 轴钉在窗口右端；③channels.ts 两路姿态对调（俯仰←roll、横滚←pitch），Imu.tsx/Overview.tsx 读数与三处文档同步。验证：tsc exit 0、vitest 194 passed/8 skipped、npm run build 干净，桥已托管新包 index-9C3Dz9W7.js（响应带 no-store，刷新即生效）。等用户刷新确认后再提交
+未完成：未提交（工作树有改动，HEAD 仍是 b965584 之后的 c496609）
+下一步：用户确认界面后提交这两个 bug 的修复
+
+## 2026-10-05
+完成：灰度模块恢复健康，用 J-Link 实测确认（当前构建 firmware/build-app/haixin-app.elf，2026-10-05 09:58）：trace_cal_frame_dbg.state=1(TRACE_FRAME_OK)、analog_ok=1、src=2=TRACE_SRC_UART（AUTO 下串口优先）、trace_cal_mode=0(AUTO)、trace_cal_valid=1、s_fail=0、s_off_until_ms=0；raw=349/381/399/241/244/310/361/351（最黑 ch3/ch4），黑度 0/0/20/196/251/189/26/0，trace.pos(data)=3.4175=4.5 偏左一格；trace_adapt_enable=1（单帧自适应开着）
+下一步：用慢速档跑一次串级循迹，40ms 快采样看 pos/angle.err/corr/pwm_l·pwm_r，判定「还是直行」是死区正常还是转向没送到轮子
+
+## 2026-10-05
+完成：坑：idle（mode 0）时没人调用 read_tracing_data_pid()，所以遥测的 trace.pos 与 flags.lost 是最后一次循迹运行的残留值 —— 传感器健康、gray 是活的，遥测仍可能显示 lost=true。判断真实链路要看 trace_cal_frame_dbg.state/analog_ok/s_fail，不要看遥测 lost
+未完成：残留标志要不要在停车时清掉/标注（未定）
+
 ## 2026-10-05
 完成：按用户 m30484 定档把上位机链路切到 **921600**（我上一轮「921600 做不到」的结论作废：那是旧探针 PID_0105 的结论，车上现在插的是第二颗 OB-RA4M2-Full、PID 1024、COM27）。改动：`firmware/Core/Src/board.c:581` `DL_BAUD 921600u`；`firmware/App/Svc/host_link.c:1087` 遥测默认 100→**200Hz**；桥/网页/启动器/文档默认值全切 921600（`bridge/link.py`/`main.py`/`server.py`/`state.py`/`bench.py`/`launch.ps1`/`web/src/lib/api.ts`/`Settings.tsx`/`Overview.tsx`/`mock/server.mjs`/`docs/API.md`/`启动上位机.bat`）；`bridge/serial_safety.py` 整文件重写成**按探针 PID 分档**（`J_LINK_MAX_BAUD_BY_PID` 0105→230400、1024→3000000，认不出按 230400 保守拦）。验证全绿：固件主机测试 15/15、`pytest` 173 passed、`vitest` 193 passed + 8 skipped、`npm run build` 干净、烧录回读一致 118380 字节。真车实测：`bridge.probe @921600` 2s = 410 帧 / 0 CRC / 0 重同步；`bridge.bench --attach 8770` = 实收 **200.6 帧/s**（链路喂 201.1、丢 4 帧）、SSE 35.5 事件/s / 140.3 KB/s、链路 0 CRC / 0 重同步 / 0 丢帧、rtt 5.4~5.8ms；460800/230400 只收到乱码（板上只说 921600，符合预期）。车全程没动（mode 0 / pwm 0,0 / lost true），烧录没碰 nvram（`/api/cal` 仍 quality 8）。桥已重启为 PID 45268（`--baud 921600`）。
 未完成：本轮（含前两轮）改动仍未提交；`docs/上位机通信协议.md` §8.2 已用今天实测数字改写；用户还没在 8770 刷新页面看新界面
@@ -845,78 +923,4 @@
 未完成：翻页中途只有合成图、没有真板实拍（没法注入按键）；外框现在所有页面都有，用户若只想让表盘有需回退。
 下一步：等用户看板确认外框观感；若嫌图标菜单底部标签贴到框上可把 KK_UI_BEZEL_RADIUS 或 home 标签 y 微调。
 
-## 2026-09-29 · KK_UI 界面
-完成：用户 m01348 四项全部落地并上板：①主页=上电表盘(PAGE_SPLASH 根页)，没有房子图标，左右滑进出 7 项图标菜单(PAGE_HOME)，菜单两端缝隙再滑回表盘；②模块测试标题'偏一下'真因是 draw_text() 内部已加 s_dx、调用处又加了一次(双重位移)，已改成传 (128-w)/2；③模块测试返回行画的左尖角与原生菜单 kk_ui_draw_enter_arrow(back=true) 逐像素一致；④四个只读 agent 全量审计(菜单绑定/绘制几何/输入退出/字模与 API)，修掉:循迹页 0/1 数字双重 s_dx、模块测试页缺滚动条、fmt_milli 截断改四舍五入、任务页 '左键返回' 画在 y=64 屏外(改 y=52)、item_count 改用 APP_UI_ITEM_COUNT、循迹速度写回 HP_BASE_SPEED、5 个导航 API 从内部头提到 kk_ui.h、端点夹住不回绕、进模块测试复位 s_test_sel、存盘期电机被挡、'正在保存'每拍重试且只有提示真的上屏才锁键、OLED 忙等待加 2.1s 上限。验证:make text 81120/data 220/bss 14264 → bin 81348 → flash 回读 firstDiff=none → RTT 启动 10 行齐全、FRAME err=0 busy=0 st=0、HOST 50Hz。
-下一步：把三套标题版式/各页返回提示口径不一致、过渡期快速连点丢键、两张死图标(256B)报给用户拍板；灰度模块 SDK 到位后做循迹页标定。
-
-## 2026-09-29
-完成：m03944 三项需求（①存盘时先显示"正在保存"+锁按键、擦完显示"保存成功"②灰度接口 AUTO 优先串口→I2C→数字口，循迹页显示当前通道"数字/串口/I2C"③标定不改，保留 burst 32 帧/点）已全部编码并在真板逐项验证。验证手法：TEMP 复现固件（root_page=循迹页、NOTICE/DONE 拉宽、nvram_init 末尾 g_cfg.trace_speed=3333 制造真保存、合成中键）＋J-Link savebin 抓 OLED 缓冲＋Node 渲染 ASCII/PNG＋RTT 打点。结论：uwTick=2992ms 屏上"正在保存"且合成中键被吃掉（锁生效）、RTT `NVRAM: write ok=1 tick=3504`、uwTick=4561ms 屏上"保存成功"、状态线 BUSY 2901→写 3504→DONE 3513→IDLE 4707（与常量吻合）；Flash 记录 magic=0x31425848 HXB1/version=1/length=144/crc=0x97df9ef2/payload trace_speed=3333。顺带定位并修掉一个真 bug：**每次复位后第一次存盘必失败、5s 后重试才成功** —— 复位时 FLASH->SR 残留 PGAERR|PGSERR（0xA0），HAL_FLASHEx_Erase 开头的 FLASH_WaitForLastOperation 把它当成"上一次擦写失败"，连擦除都不做就返回 HAL_ERROR（打点 `WR: erase FAIL page_err=0 bank=1 page=63 faer=000000A0 sr=00000000 cr=40000000`，SR 已被 HAL 清掉、CR 只剩 LOCK）；修法：write_record() 解锁前 `__HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_ALL_ERRORS)`，擦除失败再清一次重擦一遍，擦后按 SR 错误位判断，仍保留 memcmp 回读校验；另把 NVRAM_NOTICE_MS 250U→600U（250ms 看不清）。最终固件 text 80952/data 220/bss 14264、bin 81180 已烧录并 RTT 复检（err=0、无异常行）。
-未完成：循迹模块 SDK 未到（g_live.gray[] 仍用数字口电平换算）、编码器 TIM3/TIM4 未配、renwu()/TIM6/TIM7 未启动、五向键左 PC15/中 PC3 未实测、模块测试量电机两端电压无变化、host_link 三处待改（poll 传的是 UI 耗时而非主循环周期 / ina226_init 塞在 host_link_init 里 / 耦合）
-下一步：等用户下一步指令（硬件话题已按 m01174 关闭）
-
-## 2026-09-29
-完成：修掉「从任务/设置切回主页时主页圆角边框变直线」：定位到中间件过渡合缝竖线（x=boundary 一整列 64px），删除后重编烧录；复现实验（过渡时长临时拉到 20s + 合成按键）配合设备显存 dump 取证：修前同场景 x=31 有贯穿 64px 竖线，修后 x=39 全空、只剩主页外框 x=40（圆角 40..46 收进）；临时改动已全部还原后重编（text 80520 / data 220 / bss 14256，bin 80748 字节 firstDiff=none），RTT err=0 busy=0 st=0
-未完成：INA226 分流顶格（显示 16.384A，实测 R2 两端 0.21mV、电源 0.04A）待用户量 U5.9/U5.10 到 R2 的连通性
-下一步：等用户实机确认过渡中圆角边框好看；如需要再加「超量程」显示 + 抓 0x01 裸分流值与 0x06 溢出标志
-
-## 2026-09-29
-完成：①设置菜单加「灰度接口」（自动/I2C/串口/数字，走 KK_UI_IntBinding 新增的 names 枚举文案字段）；②新增 App/Svc/nvram.c/.h 把 g_cfg 全部字段 + gray_mode + 陀螺仪轴向档 + 灰度标定（valid/pol/bad/blk/wht/thr/jit）存到最后一页 0x0801F800；③标定改成 burst 连采 32 帧；④字模重生成（341 字形，body 7774B）。验证：临时块逼出一次真擦写 → J-Link 回读 160B，magic/version/length/CRC 全对（主机端重算 CRC32=0x46bdb6de 一致），字段=现场值；用 CubeProgrammer 植入 trace_speed=3333 的记录 → 复位 → RTT 打印 nvram loaded=1 且设置页显示「循迹速度 3333」「灰度接口 自动」；全片擦除后 loaded=0 且第 63 页保持 0xFF（开机不写）。构建 text 80552/data 220/bss 14256（bin 80780B≈63% 128K），只有既有的 ld RWX 警告。
-未完成：灰度模块仍不在手上，标定/三通道切换只能等实物；Flash 写路径只在单 bank（FLASH_OPTR bit22=0）下验证过
-下一步：等用户实机确认设置项与存档；顺着用户下一条需求走
-
-## 2026-09-29
-完成：灰度模块驱动升级并上板：trace_cal.h/.c 整文件重写（双通道 I2C/UART 自动选择、32 帧去极值平均标定、每路有效性、进度上报、trace_cal_src 通道标志）；board.h/board.c 新增 board_uart4_read_byte()；app_ui.c 新增 draw_progress()、循迹页标题按标定状态分四种提示、数据源指示 I2C/URT/DIG、无效通道画 '!'。构建 text 77876 / data 184 / bss 13792，bin 78068 字节 = 128KB 的 59.6%，flash.ps1 回读 firstDiff=none；RTT 7s：主循环仍约 235Hz、err=0、HOST 50Hz、无 HardFault。显存 dump（J-Link savebin oled_buffers 0x20001030 0x800 + Node 渲染 180 度翻转）确认：循迹页显示「循迹测试 DIG 中键标定」+8 柱+底行 0/1；强制采样态显示「全黑按中键 0/32」不压标题。
-未完成：模块实物接上后要实测：I2C 与 UART 两条通道哪条通、黑白标定后的柱高与 '!' 是否合理。
-下一步：等用户插上灰度模块后按中键标定一次，回报屏幕右上角显示 I2C 还是 URT。
-
-## 2026-09-29
-完成：固化两条调试手法：①显存 dump —— J-Link Commander（device/si SWD/speed 4000/connect/h/savebin out/vram.bin <oled_buffers> 800/w4 E000EDFC 0/go/qc，脚本 out/dump_vram.jlink），oled_buffers 地址每次构建后用 arm-none-eabi-nm 取；②Node 把 1024B/缓冲渲染成 128x64 PNG 并 180 度翻转（APP_UI_DISPLAY_ROT180）。踩坑：dump 时 h 会停 CPU，可能停在一帧画到一半的那个缓冲上（oled_buffers[2]），这时要改看另一个缓冲。
-下一步：无需后续。
-
-## 2026-09-29
-完成：长按环"卡"的第二半修掉并上板：main_app.c:166 的 40ms 改成 20ms。make → text 76608/data 184/bss 13296，tools/flash.ps1 回读 76800 字节 firstDiff=none；RTT 静止态 n=239Hz、update avg≈675us、oled tx_done=16/s、err=0（静止时脏页差分几乎不占总线，说明 20ms 闸门本身不产生额外流量）。
-未完成：等用户按住方向键实机确认流畅度；若还不够，可调 KK_UI_PAGE_MS_FAST(140ms)
-下一步：用户实机试长按绕环
-
-## 2026-09-29
-完成：解释"263~283Hz"口径：那是主循环圈数/秒（DWT 计，FRAME 行的 n），不是屏幕帧率。每圈 ~3.5ms = ~1.5ms 干活 + HAL_Delay(2)；**HAL_Delay 是空转等 SysTick，不是真睡眠**（早前说"睡眠"不准确）。屏幕真实上限 = KK_UI_FRAME_INTERVAL_MS 20ms(50fps) + I2C 搬运（整屏 8 页 1024B@400kHz≈23ms，脏页差分只搬变化的页/列）。
-
-## 2026-09-29
-完成：新增电流检测页并上板验证：app_ui.h 加 PAGE_CUSTOM_POWER=15/CUSTOM_POWER=6（PAGE_COUNT 15、CUSTOM_COUNT 7）；app_ui.c 加路由、首页环第 6 项「电流」+ 闪电图标 kk_icon_power(32x32 XBM，kk_icons.c)、draw_power_page()（标签 x=4、值右对齐到 x=122、fmt_milli 千分位单位切换）、OnTick 200ms 采三个量；board.c/.h 加 ina226_read_power_mw()。烧录 76800 字节 firstDiff=none，RTT err=0/n=263Hz。
-未完成：INA226 真值要等 12V 主线通电才能看（现在只有 3.3V：读出来 406mV/1mA/0mW）；顺带确认 P=U*I 数量级对不对
-下一步：12V 上电后进「电流」页对着万用表比一下电压/电流
-
-## 2026-09-29 · 固件-验证
-完成：掌握并用『设备显存 dump』验证新页面：J-Link Commander `h` + `savebin out/vram.bin <oled_buffers地址> 800`（本 build 0x20000E40，地址随静态量变化，先 `arm-none-eabi-nm | grep oled_buffers`）+ 复位 + 180° 翻转渲染 PNG（out/power_page.png、out/home_page.png）。抓非根页的办法：临时把 `.root_page` 指过去；抓首页环里第 N 项则再临时把 kk_ui_nav.c:23 的 `state->selected = 0U` 改成 N（两项都要改回来）。
-
-## 2026-09-29 · 固件-构建
-完成：构建/烧录口径：Makefile 在 firmware/，必须在 `D:\Today\haixinbei\firmware` 里跑 make（根目录直接 make 会报 No targets specified and no makefile found）；烧录用仓库根的 `& .\tools\flash.ps1`（走 CubeProgrammer CLI + J-Link 回读逐字节比对，不用 loadbin）。Flash 占用 76608+184=76792 / bin 76800 ≈ 58.6%（字模扩容 +3.6KB 是主因）。
-
-## 2026-09-29 · KK_UI 界面
-完成：修复长按环"卡一下"并烧录验证（回读 72280 字节 firstDiff=none，复位 IPSR/CFSR 干净）；量了帧率与占用：主循环 263~283 Hz（含 HAL_Delay(2)），app_ui_tick 空载 66~115 us、动画中 avg 1.2~1.4 ms 峰值 12.6 ms，OLED 过渡时约 220 次页写/s（≈27 整屏/s，400kHz 全屏 1024B≈23ms 是真正的帧率上限），err=0/st=0；Flash text 72088 + data 184 = 72272，bin 72280 = 128KB 的 44.8%，RAM data+bss 13456 B / 96KB
-下一步：等用户实机确认长按节奏是否连续加速；未验证项仍是左/中键实测、编码器手转、模块测试两端电压
-
-## 2026-09-29 · KK_UI 界面
-完成：长按环补上表盘 + 陀螺仪方框改实体渲染 + 默认档改 M3 + 去掉表盘停顿时长。verify: make text 71924/data 184/bss 13272；tools/flash.ps1 回读 72116 字节 firstDiff=none；Flash 后 IPSR=0/CFSR=HFSR=0（无假故障）。另外新学到的验证手段：J-Link savebin 读显存 0x20000E28（2×1024B，页式 bit0=页顶），Node 渲染成 PNG 就能在不上车的情况下看真屏内容——已据此确认主页『开始游戏』可见、陀螺仪页网点方框正常。
-未完成：等用户实机确认：长按环的节奏是否恢复『越来越快』、网点填充的疏密是否合意。
-下一步：用户反馈后：若要调网点疏密改 gy_fill_quad 的隔行条件；其余待办（循迹模块实物、编码器实测、renwu/TIM6/TIM7）不变。
-
-## 2026-09-29 · 固件移植
-完成：三层串级（编码器TIM3/TIM4 + speed_control速度环 + motion调度 + gyro_control角度环重写 + PID_tracing循迹环）编译通过并真正烧进板子：text 68992/data 180/bss 12956。RTT 实测 app 在跑：FRAME(OLED avg 300~1500us/max 7ms) / MOTION(mode=0 enc 0,0) / HOST(tx 50Hz) 每秒各一行，示波式确认 g_oled_tx_done 递增、g_oled_tx_err=0、Yaw≈-25(度)。J-Link 读寄存器确认编码器接口已配置正确：TIM3/TIM4 CR1=1(CEN)、SMCR=3(TI12 编码器模式)、CCMR1=0xA1A1(IC1F/IC2F=10 滤波,CC1S/CC2S=01)、CCER=0x11(双通道使能)、CNT=0(轮子没转)。
-未完成：编码器 counts 要手转轮子才能验证（CNT 仍为 0）；三个界面改动（主页「开始游戏」/陀螺仪方块转向/返回箭头）待用户肉眼确认。
-下一步：让用户手转左右轮各一次，读 out/rtt.log 的 MOTION 行确认 enc l/r 正负与大小。
-
-## 2026-09-29 · KK_UI 界面
-完成：PID 菜单按用户口径重构成三层串级：速度环/角度环/循迹环三个子页（firmware/App/Src/app_ui.c 的 k_pid_items/k_pid_speed_items/k_pid_angle_items/k_pid_trace_items，k_menu_pages 6 项，k_int_bindings 13 项，menu_page_count=6/int_binding_count=13）；中间件给 KK_UI_IntBinding 加 uint8_t decimals 并新增 KK_UI_FormatIntScaled()，菜单行与编辑框都改用它，屏幕显示真小数（3.75 而不是 375）；参数表新增 HP_SPEED_KP/KI/KD/ILIMIT 0x0601-0x0604。验证：firmware 下 make 成功（text 64124/data 164/bss 12428）；Node 复算参数表指纹 fw 与 host 双方 n=27 crc=0x661D 且顺序值逐项相同；python tools/host/tests/run_all.py 101 项全过；用 out/flash_app.jlink 烧录 Verify successful。
-未完成：三层串级的控制代码还没写：pid.c 仍直接输出 PWM、gyro_control.c 仍是保持启动角；速度环需要的 TIM3/TIM4 编码器模式与双轮 PI 完全不存在（新板与旧板 encoder.c 都是整份注释）。
-下一步：接用户新要求：写编码器+速度环+角度环/循迹环串级、主页两箭头间加「开始游戏」、修陀螺仪页方框转动方向。
-
-## 2026-09-29 · KK_UI 界面
-完成：「按键蜂鸣」原来只在任务 A/B 按中键一个分支里响，其它页面全不响（用户反馈"开了也不响"）。现在中间件 firmware/Middlewares/kk_ui/src/kk_ui.c:535 有通用钩子 `__attribute__((weak)) void KK_UI_OnKeyPress(uint8_t keys, uint32_t now)`，在 kk_ui_process_input 去抖后 :590 对每一次新的物理按下回调（长按重复不回调、过渡中按下的键也回调）；应用在 firmware/App/Src/app_ui.c:267 实现它→总使能+按键蜂鸣都开时 beep_ms(30)。beep_ms 同时从 HAL_Delay 改成非阻塞（app_ui.c:249-261 + app_ui_tick 顶部 :684 的 beep_poll()）。text 62,416 烧录 Verify successful。蜂鸣器是**有源 5V**、PD2 高有效、经 Q1(S8050) 低边驱动、挂 +5V 轨 → 只接调试口 3.3V 时 VCC5V≈2.7V 不会响；上板结果用户尚未回报。
-下一步：等用户回报：模块测试→蜂鸣器 是否响 + VCC5V 实测值，分清固件/5V 轨。
-
-## 2026-09-29 · KK_UI 界面
-完成：陀螺仪页按用户要求重排：三维线框移到屏幕左半边（中心 GY_CX=27/GY_CY=39、GY_SC=9），右侧改成三行全名「横滚/俯仰/偏航」，数值用 fmt_x10_compact 右对齐到 x=126（GY_TX=56/GY_TRIGHT=126，行 y=18/32/46）；无信号时右侧居中显示「无信号」。线框尺寸不是拍的：正方体投影后的外接半径最坏 = 2.42*GY_SC 像素（对角顶点朝向观察者时），旧值 GY_SC=11/中心(64,33) → 26px，上顶标题栏(y=7)、下压角度文字(y=59)，这就是用户说的「方框太大超出去」；GY_SC=9 → 22px，最坏跨度 x 6..48 / y 18..60 刚好落在标题栏以下。用新写的查字工具确认「横滚俯仰偏航无信号」都在 kk_font_body 的 187 字形子集里，**本轮不需要重新生成字模**。text 62,348 / data 132 / bss 12,404，已烧录 Verify successful。
-下一步：上板目视陀螺仪页：线框是否越界、三行标签与数值是否重叠。
-
-> 更早的会话条目已归档到 235 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 252 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。

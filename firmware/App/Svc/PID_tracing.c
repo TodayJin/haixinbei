@@ -25,36 +25,118 @@
 #include <math.h>
 
 #define TRACE_SETPOINT       4.5f    /* 车在线上正中时的重心值 */
-#define TRACE_ANGLE_PER_UNIT_DEFAULT 10.0f  /* 重心每偏 1 格 -> 10 度目标航向偏移（出厂值） */
-#define TRACE_ANGLE_MAX_DEFAULT      35.0f  /* 航向偏移上限（度）（出厂值） */
+#define TRACE_ANGLE_PER_UNIT_DEFAULT 30.0f  /* 重心每偏 1 格 -> 要求 30°/s 转率（出厂值，2026-10-05 定稿） */
+#define TRACE_ANGLE_MAX_DEFAULT      35.0f  /* 目标航向相对**当前**航向的最大前置量（度）（出厂值） */
 #define TRACE_ANGLE_PER_UNIT_MIN      0.5f  /* 台架/上位机写坏值时的兜底夹子 */
 #define TRACE_ANGLE_PER_UNIT_MAX     60.0f
 #define TRACE_ANGLE_MAX_LIMIT_MIN     1.0f
 #define TRACE_ANGLE_MAX_LIMIT_MAX    90.0f
 
-/* 串级外环（重心 -> 目标航向）的两个标定量：**真值在 host_link 的参数表里**
+/* 串级外环（重心误差 -> 修改全局目标航向）的两个标定量：**真值在 host_link 的参数表里**
  * （HP_TRACE_ANGLE_PER_UNIT / HP_TRACE_ANGLE_MAX），上位机「调参 → 串级」页能改、
  * 能固化进 Flash；下面的 DEFAULT 只是出厂值/坏值兜底。
  *
- * 这两个数决定"重心偏 1 格要求车头转多少度"。台架实测几何（重心 1 单位 ≈ 5~7° 车身角，
- * 细区，见 docs/自主优化记录.md 第 12/15 节）曾让人推测 10°/格 过量 1.5~2 倍，但第十轮
- * 受控阶梯实测（4/6/8/10/12/15/20，见第 16 节）结论是 **10.0f 最好**：外环还要对抗内环
- * 滞后与静摩擦死区，增益大反而有利。所以出厂默认保持 10.0f。 */
+ * ★2026-10-05 用户 m32880 把外环从"基准航向 + 有上限的偏移"改成"实时修改全局目标航向"
+ * （见下面那段注释），两者的量纲不一样了：
+ *   · per_unit 从「°/格」变成 **「(°/s)/格」**（重心偏 1 格要求多少转率）；
+ *   · aim_max 从「偏移上限」变成 **「目标航向相对当前航向的前置量上限」**（防积分饱和）。
+ * 第十轮受控阶梯实测（4/6/8/10/12/15/20，见 docs/自主优化记录.md 第 16 节）的"10 最好"
+ * 是**老量纲**下的结论，新量纲下必须重新整定（见第 17 节）。出厂默认先沿用同一个数字。 */
 #define TRACE_CROSS_MIN      4       /* ≥4 路同时压线 = 路口（说明书第七章，按线宽可改） */
 #define TRACE_LOST_MS        300U    /* 丢线超过这么久就减速找线 */
 #define TRACE_LOST_DECAY_MS  500U    /* 丢线超时后，再把"保持的满舵"线性收到 0 的时间 */
 
-/* 重记"基准航向"的窗口：重心偏离设定点多少格以内算"车真的压在中线上"。
+/* 外环每拍往目标航向上叠加的角度 = 转率 × 控制周期。控制周期 = Motion_Task() 的 TIM6
+ * 5ms（firmware/App/Svc/motion.c:136），motor_tracing_cascade() 就是这个周期被调的。 */
+#define TRACE_CASCADE_DT_S   0.005f
+#define TRACE_RATE_MAX_DEFAULT 110.0f /* 陀螺环的期望角速度上限读不到时的兜底（°/s）*/
+
+/* 外环为什么必须有微分项（用户 m33254："我是故意摆得斜的来检验你这个能力的?你肯定不可能
+ * 直指循迹直线吧"）。
  *
- * 为什么只在这么窄的窗口里重记：重记的那一刻 s_base_yaw := 当前航向，而目标航向 =
- * s_base_yaw + aim。如果 aim 还挂着（车只是"接近"中线、并不是真在线上），目标航向就永远
- * 比车当前航向偏 aim ⇒ 角度环把它当成"一直在转"的指令（rate_ref 恒非 0）⇒ 车原地画圈。
- * 2026-10-05 真车实测（旧窗口 0.6f）：base=2500 时 2.25s 偏航 -23.9°、angle.err 钉在
- * -5.0、rate_ref 钉在 -17.5、corr 140/212 拍贴在 ±2000 上来回翻；窗口给 0.6 还会把车
- * 斜着走的姿态锁住（车会一直漂到窗口边缘才纠，实测平均偏离中线 0.35 格）。
- * 窗口收到 0.15 之后：带外 aim 一直是活的（按 10°/格 做比例修正，第 16 节的整定值），
- * 带内才重记基准 + aim 归零 ⇒ 真在线上时按住当前航向、消陀螺漂移。 */
-#define TRACE_BASE_BAND      0.15f
+ * 只有 P 项时外环要求 ω = per_unit × e，而"车沿线"的横向运动学是 ė = −v × ψ、ψ̇ = ω
+ * ⇒ **ë = −v × per_unit × e，一个零阻尼简谐振荡**：ω_n = √(v × K_p)。
+ * 代入实测 v ≈ 0.35 m/s、per_unit = 60（K_p ≈ 123 rad/m，1 格 ≈ 8.5mm）
+ * ⇒ ω_n ≈ 6.6 rad/s ⇒ **周期 0.95s** —— 与 w 组真车日志里重心在 2.4↔6.0 格之间以 ~1s
+ * 周期来回穿完全吻合（out/_drv_7000_w1_pu60_kd10.txt）。
+ *
+ * 零阻尼的后果是"摆多少就永远摆多少"：斜着摆车（初始航向偏差 θ0）给出的位置振幅
+ * ∝ θ0 × √(v/K_p)，**per_unit 越小振幅越大**（x1/pu25 摆到 6.34 格、pu60 只到 1~2 格；
+ * base 6000 时 pu30 丢线 10% 而 pu60 只 1.3%）⇒ 调增益治不好，必须加阻尼项：
+ * 让要求的转率也吃"重心变化率"（微分），而不是只吃位置误差。
+ *
+ *     Δ = clamp(−(per_unit × e + pos_kd × ė), ±rate_max) × dt
+ *
+ * 二阶特征方程 s² + v·K_d·s + v·K_p = 0，阻尼比 ζ = (K_d/2)·√(v/K_p)：
+ * pos_kd = 13 时 ζ ≈ 0.7 @per_unit=60、ζ ≈ 1.0 @per_unit=30（单位 = °/s per (格/s)）——
+ * 斜摆/歪着进弯的初值会像二阶欠阻尼那样**衰减**，而不是一直摆。
+ * ė 只在**新的一帧**（50Hz，用 trace_pos_frames 当探针）上算，且一阶低通压噪。*/
+#define TRACE_POS_RATE_LPF   0.5f     /* 重心变化率的一阶低通系数（每个新帧一次）*/
+#define TRACE_FRAME_HZ       50.0f    /* 灰度帧率（20ms 一帧）*/
+#define TRACE_POS_KD_DEFAULT 12.0f    /* 外环微分项出厂值（°/s per (格/s)），2026-10-05 定稿 */
+#define TRACE_POS_KD_MAX     1000.0f  /* 参数表里是坏值时的兜底夹子 */
+
+/* 转率前馈通道自己的低通 + 死区（2026-10-05 第 8 轮，修用户 ≈m33762「加了以后感觉比之前
+ * 还差了, 晃来晃去的」）。详见文件头「前馈为什么要自己滤一道」。
+ *   · TRACE_FF_LPF：每个新灰度帧一次的一阶低通，α=0.25 @50Hz ⇒ 截止 ≈2Hz，
+ *     10~25Hz 的帧级抖动衰减 4~7 倍；
+ *   · TRACE_FF_MIN：|前馈| 低于这个值 (°/s) 就输出精确 0 —— gyro_control.c 里
+ *     "误差小就把转率要求清零"和"到位锁存"都靠 ff_rate == 0.0f 判定，低通是渐近的、
+ *     永远不等于 0，不清零的话那些保护就再也回不来了。 */
+#define TRACE_FF_LPF     0.25f
+#define TRACE_FF_MIN     1.0f
+
+/* 循迹外环怎么改"全局目标航向"（用户 m32880 定案，2026-10-05）。
+ *
+ * 老写法：`目标航向 = s_base_yaw + clamp(-per_unit × err, ±aim_max)`，s_base_yaw 是
+ * "进串级那一刻"的航向（只在 |err| < TRACE_BASE_BAND 0.15 格时才重记）。⇒ 在一条弯道上
+ * 目标航向最多只能相对进模式时的航向推进 ±aim_max，一顶死就退化成开环直冲：真车
+ * base=3000、车上残留的 per_unit=6 / aim_max=12 时 4s 丢线 29.9%（out/_drv_c1.txt）。
+ *
+ * 新写法：目标航向是一份**全局的、每拍都被修改**的量，只存在 gyro_control.c 的
+ * `target_angle` 里（发车时 GyroControl_Start() 把它定成当前航向），循迹环往里叠加增量，
+ * 并且**把同一个转率直接前馈给内环速率环**（2026-10-05 第 6 轮，用户 m33454「你继续就行」）：
+ *
+ *     rate = clamp(-(per_unit × err + pos_kd × ė), ±rate_max)          [°/s，>0 = 向左]
+ *     GyroControl_SetTraceRate(rate)        ← 主渠道：直接进内环速率环（低滞后）
+ *     GyroControl_AimRelative(rate × dt)    ← 副渠道：积分成目标航向（航向记忆/找线回正）
+ *
+ *   · per_unit 量纲 = (°/s)/格：误差 1 格 = 要求 10°/s 转率；
+ *   · pos_kd 是外环的**微分（阻尼）项**（文件头「为什么外环必须有微分项」），量纲 =
+ *     °/s per (格/s)，真值在 HP_LINE_KD；没有它这个环就是零阻尼振荡（斜着摆车永远摆下去）;
+ *   · rate_max 借用陀螺环自己的期望角速度上限 s_rate_max(HP_GYRO_RATE_MAX, 110°/s)，
+ *     保证"外环要求的转率"不超过"内环跟得上的转率"；
+ *   · 防积分饱和只留一条夹子：|目标 − 当前实际航向| ≤ aim_max。车在弯道上时当前航向
+ *     跟着目标一起走，所以这条夹子**不会**像老基准那样把弯道能力锁死成 ±十几度；
+ *   · 丢线时（data 是冻住的旧值）不用这个误差叠加，免得拿着过期误差把目标角推到天上；
+ *     改为按最后看到线的方向持续转（找线，见 TRACE_SEARCH_DELAY_MS），找线同样走前馈。
+ *
+ * ★为什么要前馈（第 6 轮的实测结论，别退回去）：只把转率积成目标航向时，"外环给转率 →
+ * 内环角度环 → 车身真的转"这条链是 τ ≈ 1/ang_kp ≈ 285ms 的一阶滞后（rate_ref = ang_kp×err），
+ * 而外环自己的 ω_n = √(v·per_unit) ≈ 5.9 rad/s（周期 1.07s）⇒ **内环滞后正好压在 ω_n 上、
+ * 外环几乎没有相位裕度**，实测就是那个 ~1s 的等幅大摆（line_kd 0/13/25 三轮 |e| 0.97/0.78/0.47，
+ * 有一点用但远不是"阻尼旋钮"）。极点分析（out\_poles.py）证明外环微分项救不了：
+ * Routh 门槛 line_kd > τ·per_unit ≈ 17，过了门槛 ω_n 被推高、阻尼比反而趋近 0.01。
+ *
+ * ★前馈为什么要自己滤一道（2026-10-05 第 8 轮，用户 ≈m33762「加了以后还感觉比之前还差了,
+ * 晃来晃去的」）：上面公式里的 pos_kd × ė 是**对 50Hz 灰重心做差分**算出来的，噪声增益很高。
+ * 老结构（只把转率积成目标航向）里这个噪声先变成"目标航向每拍抖 0.3°"，再被内环角度环
+ * (ang_kp=3.5) 衰减，落到内环转率要求上只剩 0.8~2.1 °/s；改成前馈后同一个噪声**直接**进
+ * 速率环，实测 rate_ref 的帧级抖动 29.5~31.9 °/s（out\_noise.py 的 pstdev，差 15~40 倍），
+ * 而 rate_kp=250 × 30°/s = 7500 > corr_limit 7000 ⇒ **光噪声就把修正量打满**，两个轮子
+ * 每帧被反向猛拽 = 肉眼看得到的"晃来晃去"。所以前馈这条路必须自己滤：
+ *   · 一阶低通 TRACE_FF_LPF（α=0.25 @50Hz ≈ 2Hz 截止）：10~25Hz 抖动衰减 4~7 倍，
+ *     而外环真正要用的控制信号（~1Hz 的摆、起步那一下）相位滞后只有十几度；
+ *   · 1°/s 死区 TRACE_FF_MIN：小到可以忽略时输出精确 0，把内环那些"ff_rate == 0"的保护
+ *     还给 gyro_control.c；
+ *   · 副渠道 GyroControl_AimRelative 仍吃**未滤**的 rate_cmd —— 那条路本质是积分，
+ *     噪声自己会被抹平，而它的滞后正是外环需要的（积分 = 航向记忆）。
+ * 前馈把"期望转率→实际转率"变成低滞后通道，外环退化成干净二阶
+ * ë = −v(per_unit·e + line_kd·ė) ⇒ ζ = (line_kd/2)√(v/per_unit)，line_kd=13 时 ζ≈0.7。
+ * 前馈是**消费式**的（gyro_control 每拍读走即清），所以每拍都要重新给，本函数开头先给 0。
+ *
+ * 符号约定（与 gyro_angles 一致）：偏航角**增大 = 向左转**。
+ * 线偏到车的右侧（data > 4.5）要向右转 -> 目标航向要减小 -> Δ < 0 ✓。 */
 
 /* 「这帧到底有没有线」的对比度门（用户 m29852）。
  * 单帧自适应把本帧最黑那一路归一化到满量程，所以一片均匀表面（车被支起来、探头底下
@@ -66,6 +148,16 @@
 #define TRACE_UNIFORM_MIN    0.75f
 #define TRACE_LOST_STOP_MS   1000U   /* 连续丢线超过这么久：停车，不再闷头直冲（用户 m29239/m29852）*/
 
+/* 丢线找线（用户 m33109：直角弯"拐不过去"）。
+ * 老行为：线一丢，目标航向就冻住 -> 车按丢线那一刻的航向**直着冲**，弯越急冲出去越快；
+ * 真车 base=7000 实测（out/_drv_7000_v0_pu60_kd4.txt）3.6s 在弯口丢线，之后就一路直行
+ * 开出了白色赛道（8 路灰度全黑）。
+ * 新行为：先按原航向走 TRACE_SEARCH_DELAY_MS（容忍个别弱帧/过缝），还在丢就朝
+ * **最后看到线的方向**持续转（TRACE_SEARCH_RATE ≈ 内环能跟的满转率），一路扫到
+ * TRACE_LOST_STOP_MS 还没找到才停车。方向取最后一次有效帧的 err 符号。*/
+#define TRACE_SEARCH_DELAY_MS 120U    /* 丢线先保持航向这么久（ms）*/
+#define TRACE_SEARCH_RATE     110.0f  /* 找线时的转率（°/s），会被期望角速度上限夹住 */
+
 #define TRACE_EDGE_SAT       0.9f    /* 最外一路黑度 ≥ 0.9×最黑 = 黑带被阵边界切掉（外推的唯一入口）*/
 #define TRACE_BARW_INIT      3.0f    /* 黑带宽度初值（格=传感器间距），前面几帧就会自己收敛 */
 #define TRACE_BARW_TAU       0.02f   /* 宽度跟踪系数（50Hz -> 约 1s 时间常数）*/
@@ -76,7 +168,16 @@ static float   data       = TRACE_SETPOINT;   /* 当前重心 */
 static float   last_data  = TRACE_SETPOINT;
 static uint8_t all_sensors_lost = 0;
 static uint8_t s_lost_stop       = 0;   /* 丢线停车已经执行过（每次丢线只执行一次）*/
+static int8_t  s_search_dir      = 0;   /* 最后一次看到线时它偏在哪一侧：+1 右 / -1 左（丢线找线用）*/
 static float   last_pid_output  = 0.0f;
+
+/* 外环微分项（阻尼）的状态：重心变化率 ė（格/s），只在新的灰度帧上更新 */
+static float    s_pos_rate    = 0.0f;   /* ė 的一阶低通值 */
+static float    s_prev_data_f = TRACE_SETPOINT;
+static uint32_t s_rate_frame  = 0U;     /* 上次算微分时的 trace_pos_frames */
+static uint8_t  s_rate_valid  = 0U;     /* 已经有过一帧（第一帧不产生微分冲击）*/
+static uint8_t  s_rate_resync = 1U;     /* 上一帧是丢线帧：重新压线那一下 data 会跳变，微分项重新起步 */
+static float    s_ff_lp       = 0.0f;   /* 转率前馈的一阶低通值（只在新的一帧上更新，≈2Hz）*/
 
 /* 边缘外推（用户 m07972 第 1 条）*/
 static float   s_bar_w    = TRACE_BARW_INIT;
@@ -107,8 +208,8 @@ static uint32_t s_cross_at    = 0;
 static uint8_t  s_cross_cnt   = 0;
 static uint32_t s_lost_since  = 0;
 
-/* 串级：循迹基准航向 */
-static float   s_base_yaw   = 0.0f;
+/* 串级：本环"发车"了没有。0 = 下一拍把全局目标航向钉成当前航向
+ * （用户 m32880：发车时目标角度 = 当前角度），之后每拍只往那个目标上叠增量。 */
 static uint8_t s_base_valid = 0;
 
 static void apply_speeds(float left, float right)
@@ -131,11 +232,11 @@ static void apply_speeds(float left, float right)
 /**
  * @brief 读 8 路灰度 -> 加权重心 data / all_sensors_lost / 路口
  *
- * 两条路：
- *   ① 单帧自适应（trace_cal.h 末「单帧自适应」，默认开）：8 路归一化黑度当权重，
- *      重心连续取值（1..8，正中 4.5），亚克力/换灯/电压漂带来的"整体抬高、
- *      对比度变小"它自己每帧补偿；真的没对比度（塌到噪声里）就判 WEAK 当丢线
- *      （data 保持上一帧），**不会**像固定阈值那样把噪声判成压线。
+ * 两条路（判线口径 2026-10-05 用户 m31902 整改后，详见 trace_cal.h「判线口径」）：
+ *   ① 标定阈值 + 离阈值的距离（trace_cal_frame 回的 8 路权重：0 = 没越过阈值、1 = 到标定
+ *      黑值）：权重直接当重心权重（1..8，正中 4.5），过本帧半高算这一路压线；阈值是标定
+ *      出来的，白侧权重恒 0，所以整片路面变亮/变暗不会把重心往中间拽。
+ *      "整片一个样"（离地/全黑地面）由下面的 TRACE_UNIFORM_MIN 明暗结构判据兜（见 ⓪）。
  *   ② 老的中点阈值二值法（没标定 / 没模拟量 / trace_adapt_enable = 0）：消抖 + 8 个 0/1 取平均。
  */
 void read_tracing_data_pid(void)
@@ -164,9 +265,10 @@ void read_tracing_data_pid(void)
             sum += w[i] * (float)(i + 1);
         }
         /* ---- ⓪ 先判"这帧到底有没有线"（用户 m29852）----
-         * 一片均匀表面被自适应归一化放大后，8 路全过本帧半高、重心正好 4.5 = 正中 ⇒
-         * 车"以为线在正中"直着走。最亮那一路也得暗不到最黑那一路的 TRACE_UNIFORM_MIN
-         * 倍以上，才算有明暗结构 = 有线；否则（探头底下没线/车被拿走）判丢线。 */
+         * 均匀表面（探头底下没线 / 车被拿走 / 整片一色）也会有一套稳定的权重，
+         * 重心可能正好落在 4.5 = 正中 ⇒ 车"以为线在正中"直着走。最亮那一路也得
+         * 暗不到最黑那一路的 TRACE_UNIFORM_MIN 倍以上，才算有明暗结构 = 有线；
+         * 否则判丢线。权重本身已经按标定阈值折算过，这里只看"有没有结构"。 */
         if (wmax <= 0.0f || wmin > TRACE_UNIFORM_MIN * wmax) {
             lost = 1U;
             on   = 0;   /* 均匀帧以前 on = 8，还会顺手误报"路口" */
@@ -382,12 +484,12 @@ void motor_tracing_pid_speed(int base_speed)
 }
 
 /**
- * @brief 设置三级串级的外环标定量（重心偏 1 格 -> 目标航向偏多少度）
+ * @brief 设置三级串级的外环标定量（重心误差 -> 转率 / 目标航向相对当前航向的前置量上限）
  *
  * 这两个量的真值现在放在 host_link 的参数表里（HP_TRACE_ANGLE_PER_UNIT / _MAX），
  * 所以这个 setter 就是"写参数表"；超范围的写不进（参数表自己带上下限）。
- * 参数表的兜底出厂值是 10°/格、±35°，来自第十轮受控阶梯实测（第 16 节）：
- * 4/6 收不干净，10/12/15/20 等价，10 最优。
+ * 量纲见文件头那段「循迹外环怎么改全局目标航向」：per_unit = (°/s)/格、
+ * aim_max = 前置量上限(°)。出厂兜底 10.0f / 35.0f。
  */
 void PID_Tracing_SetCascadeGains(float deg_per_unit, float aim_max_deg)
 {
@@ -418,43 +520,105 @@ static float cascade_aim_max(void)
     return v;
 }
 
+/* 外环微分项增益（°/s per (格/s)）。参数表里复用了 HP_LINE_KD —— 老 mode-2 循迹 PID
+ * （motor_tracing_pid_speed）在现在的固件里没有任何调用者，那套 Kp/Ki/Kd 是死的；
+ * 但"循迹 D 项"这个名字与量纲正好是这里要的，所以 2026-10-05 起它归串级外环用（用户 m33254）。*/
+static float cascade_pos_kd(void)
+{
+    float v = host_param_get(HP_LINE_KD, TRACE_POS_KD_DEFAULT);
+    if (!(v >= 0.0f && v <= TRACE_POS_KD_MAX)) {
+        v = TRACE_POS_KD_DEFAULT;
+    }
+    return v;
+}
+
 void PID_Tracing_GetCascadeGains(float *deg_per_unit, float *aim_max_deg)
 {
     if (deg_per_unit != 0) { *deg_per_unit = cascade_per_unit(); }
     if (aim_max_deg  != 0) { *aim_max_deg  = cascade_aim_max(); }
 }
-
 /**
- * @brief 三层串级：灰度误差 -> 目标航向 -> 角度环 -> 左右轮目标速度 -> 速度环
+ * @brief 三层串级：灰度误差 -> 修改全局目标航向 -> 角度环 -> 左右轮目标速度 -> 速度环
  *
- * 符号约定（与 gyro_angles 一致）：偏航角**增大 = 向左转**。
- * 线偏到车的右侧（data > 4.5）要向右转 -> 目标航向要减小。
+ * 目标航向只有一份，归角度环持有（gyro_control.c 的 target_angle，发车时被
+ * GyroControl_Start() 定成当前航向）；本函数每拍按灰度重心误差把它往线所在的方向推。
+ * 详细口径见文件头「循迹外环怎么改全局目标航向」（用户 m32880 定案）。
  */
 void motor_tracing_cascade(int base_speed)
 {
-    float err, aim, now_yaw;
+    float err;
 
     read_tracing_data_pid();
 
+    /* 本拍默认没有转率前馈：只有下面"真的在看线"和"找线"两个分支会给出值。
+     * 前馈是消费式的（gyro_control 每拍读走即清），所以每拍都必须重新给，
+     * 别指望上一拍的值还在。 */
+    GyroControl_SetTraceRate(0.0f);
+
     err = data - s_setpoint;                 /* >0：线在车的右侧 */
 
-    /* 丢线时 aim 不更新（data 保持），等于保持上一拍的方向 */
-    {
-        float per_unit = cascade_per_unit();
-        float aim_max  = cascade_aim_max();
-        aim = -per_unit * err;
-        if (aim >  aim_max) aim =  aim_max;
-        if (aim < -aim_max) aim = -aim_max;
+    if (all_sensors_lost) {
+        /* 丢线期间有效帧不再产生（trace_pos_frames 不前进），重新压线那一帧 data 会从冻住的
+         * 旧值跳回来 ⇒ 标一下，让微分项重新起步，别把这个跳变当成"重心在飞"。*/
+        s_rate_resync = 1U;
+        s_ff_lp       = 0.0f;   /* 前馈低通也重新起步：丢线期间它冻在旧值上，压回线时别拿旧值冲一下 */
     }
 
-    now_yaw = NormalizeAngle(Yaw);
-
     if (!s_base_valid) {
-        s_base_yaw   = now_yaw;              /* 进串级那一刻的航向 = 基准 */
+        /* 发车：全局目标航向 = 当前航向。GyroControl_Start() 进模式时已经做过一次，
+         * 这里再钉一遍，保证不管从哪条路（上位机/任务/台架）进串级，起点都是"现在朝哪"。*/
         s_base_valid = 1U;
-    } else if (fabsf(err) < TRACE_BASE_BAND) {
-        s_base_yaw = now_yaw;                /* 车压在中线上时重记基准，消掉陀螺仪漂移 */
-        aim        = 0.0f;                   /* ★带内 aim 必须归零，否则就是"绕圈"（见 TRACE_BASE_BAND） */
+        GyroControl_SetTargetAngle(NormalizeAngle(Yaw));
+    } else if (!all_sensors_lost) {
+        /* 只在这一拍**真的看到线**时才改目标航向：丢线时 data 是冻住的旧值，
+         * 继续积分就是拿着一个过期误差把目标角一路推到天上（积分饱和）。*/
+        float per_unit = cascade_per_unit();
+        float pos_kd   = cascade_pos_kd();
+        float rate_max = (s_trace_rate_max > 0.0f) ? s_trace_rate_max : TRACE_RATE_MAX_DEFAULT;
+        float rate_cmd;
+        float d;
+        float ff_out;
+        uint8_t new_frame = (trace_pos_frames != s_rate_frame) ? 1U : 0U;
+
+        /* 重心变化率 ė（格/s）：只在新的一帧上更新（50Hz），一阶低通压噪。
+         * 它给外环提供阻尼 —— 没有它外环就是零阻尼振荡（见文件头「为什么必须有微分项」）。*/
+        if (new_frame) {
+            float dp = 0.0f;
+
+            if (s_rate_valid && !s_rate_resync) dp = data - s_prev_data_f;
+            s_rate_valid  = 1U;
+            s_rate_resync = 0U;
+            s_prev_data_f = data;
+            s_rate_frame  = trace_pos_frames;
+            s_pos_rate += (dp * TRACE_FRAME_HZ - s_pos_rate) * TRACE_POS_RATE_LPF;
+        }
+
+        /* 正负号与 P 项一致：ė > 0 = 线在往车的右边跑 = 车偏左 = 要往右转 = rate_cmd < 0 */
+        rate_cmd = -(per_unit * err + pos_kd * s_pos_rate);   /* °/s，>0 = 向左 */
+        if (rate_cmd >  rate_max) rate_cmd =  rate_max;
+        if (rate_cmd < -rate_max) rate_cmd = -rate_max;
+
+        /* 两条路一起给（2026-10-05 第 6 轮起）：
+         *   ① 期望转率直接前馈进内环速率环 —— "跟得上线"的主渠道，低滞后；
+         *   ② 同一个量积成目标航向增量 —— 外环的"航向记忆"（丢线期间不再改，见上面的分支）。
+         * 为什么必须前馈：只推目标航向时，外环→内环→车身是一条 τ≈1/ang_kp≈285ms 的一阶
+         * 滞后，正压在外环 ω_n=√(v·per_unit)≈5.9rad/s 上 ⇒ 几乎没有相位裕度，表现为实测
+         * 的 1s 等幅大摆；此时外环微分项也治不好（Routh 门槛 + 极点分析见 out\_poles.py）。
+         *
+         * ★第 8 轮修的是"晃"：前馈这条路把 D 项的帧级噪声**直接**灌进速率环，实测
+         * rate_ref 抖动 30°/s（老结构只有 1~2°/s），乘上 rate_kp=250 就超过 corr_limit
+         * ⇒ 光噪声把修正量打满，轮子每帧被反向猛拽。所以前馈先过低通（见 TRACE_FF_LPF）。*/
+        if (new_frame) {
+            s_ff_lp += (rate_cmd - s_ff_lp) * TRACE_FF_LPF;
+        }
+        ff_out = (s_ff_lp > TRACE_FF_MIN || s_ff_lp < -TRACE_FF_MIN) ? s_ff_lp : 0.0f;
+        GyroControl_SetTraceRate(ff_out);
+        d = rate_cmd * TRACE_CASCADE_DT_S;
+        GyroControl_AimRelative(d);
+
+        /* 记住线偏在哪一侧（带死区，不记噪声），丢线找线要用 */
+        if (err >  0.05f) s_search_dir =  1;
+        if (err < -0.05f) s_search_dir = -1;
     }
 
     if (all_sensors_lost && s_lost_since != 0U) {
@@ -473,11 +637,35 @@ void motor_tracing_cascade(int base_speed)
             return;
         }
         if (lost_ms > TRACE_LOST_MS) base_speed = base_speed / 2;   /* 丢线太久：减速找线 */
+
+        /* 找线：还在丢就朝最后看到线的方向持续转（见 TRACE_SEARCH_DELAY_MS 注释）。
+         * 直角弯就靠这一下拐过去 —— 目标航向冻住的话车会直着冲出赛道。*/
+        if (lost_ms > TRACE_SEARCH_DELAY_MS && s_search_dir != 0) {
+            float rate  = TRACE_SEARCH_RATE;
+            float rate_max = ((s_trace_rate_max > 0.0f) ? s_trace_rate_max : TRACE_RATE_MAX_DEFAULT);
+            float rate_cmd = -(float)s_search_dir * rate;  /* >0 = 向左 */
+
+            if (rate_cmd >  rate_max) rate_cmd =  rate_max;
+            if (rate_cmd < -rate_max) rate_cmd = -rate_max;
+            /* 找线也走"前馈 + 目标航向"两条路：前馈让车当下就按这个转率转起来
+             * （丢线时航向误差可能还很小，光推目标的话要等误差长出来才动）。 */
+            GyroControl_SetTraceRate(rate_cmd);
+            GyroControl_AimRelative(rate_cmd * TRACE_CASCADE_DT_S);
+        }
     }
     s_lost_stop = 0U;
 
+    /* 防积分饱和：目标航向不许离开**当前实际航向**超过 aim_max。弯道上当前航向跟着
+     * 目标一起走，所以这条夹子不会限制"一共能转多少度"，只限制"目标领先车头多少度"。*/
+    {
+        float aim_max = cascade_aim_max();
+        float lead    = GyroControl_HeadingError();      /* 目标 - 当前，±180 */
+
+        if (lead >  aim_max) GyroControl_SetTargetAngle(NormalizeAngle(Yaw + aim_max));
+        if (lead < -aim_max) GyroControl_SetTargetAngle(NormalizeAngle(Yaw - aim_max));
+    }
+
     /* 外两层：目标航向 -> 角度环 -> 左右轮目标速度 */
-    GyroControl_SetTargetAngle(NormalizeAngle(s_base_yaw + aim));
     GyroControl_SetBaseSpeed(base_speed, base_speed);
     GyroControl_Task();
 }
@@ -485,12 +673,20 @@ void motor_tracing_cascade(int base_speed)
 void motor_tracing_reset_cascade(void)
 {
     s_base_valid    = 0U;
+    s_search_dir    = 0;
     last_pid_output = 0.0f;
     s_lost_since    = 0U;
     s_lost_stop     = 0U;
     data            = TRACE_SETPOINT;
     last_data       = TRACE_SETPOINT;
     all_sensors_lost = 0U;
+    /* 微分项状态：发车这一刻没有历史帧，第一帧只用来"对表"，不产生 D 冲击 */
+    s_pos_rate    = 0.0f;
+    s_ff_lp       = 0.0f;
+    s_prev_data_f = TRACE_SETPOINT;
+    s_rate_frame  = trace_pos_frames;
+    s_rate_valid  = 0U;
+    s_rate_resync = 1U;
 }
 
 /* ============= 后台循迹环的基准速度（2026-09-30 m02112 同步） =============

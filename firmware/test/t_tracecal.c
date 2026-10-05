@@ -124,7 +124,7 @@ int main(void)
     CHECK_EQ_I(host_i2c_wd_idle(), 1);        /* 屏空闲：允许它执行恢复 */
     CHECK_EQ_I(host_i2c_wd_busy(), 0);
 
-    /* ---------- 3. 标定 -> 柱高/阈值/极性（走固定阈值那条，先关自适应） ---------- */
+    /* ---------- 3. 标定 -> 柱高/阈值/极性（先切纯 0/1 口径：越过阈值 = 满格） ---------- */
     make_cal(&d);
     trace_cal_set_data(&d);
     trace_cal_set_adapt(0U);
@@ -138,11 +138,13 @@ int main(void)
     feed_i2c_ch(1U, 900U);                    /* 第 1 路压白底 */
     poll_in(20U);
     CHECK_EQ_I(trace_cal_raw[0], 100);
+    poll_in(20U);                             /* frame_compute() 在 source_read() 之前 =>
+                                               * 判定要等下一拍（迟 20ms，实车无感） */
     CHECK_EQ_I(trace_cal_level(0), 255);      /* 黑 -> 满格 */
     CHECK_EQ_I(trace_cal_level(1), 0);        /* 白 -> 空 */
     CHECK_EQ_I(trace_cal_channel(0), 1);      /* 压线 */
     CHECK_EQ_I(trace_cal_channel(1), 0);      /* 没压 */
-    CHECK_EQ_I(trace_cal_thr_level(0), 127);  /* 500 映射到半高附近 */
+    CHECK_EQ_I(trace_cal_thr_level(0), 128);  /* 阈值正好画在半高 */
 
     d.bad[2] = 1U;                            /* 把第 2 路标成无效 */
     trace_cal_set_data(&d);
@@ -168,6 +170,7 @@ int main(void)
     trace_cal_set_mode(TRACE_MODE_I2C);
     host_i2c_fail_set(1);
     host_i2c_stats_reset();
+    tick_to(t_now + 900U);                    /* 上一次真读到帧早就过去了：粘性窗口不适用 */
     poll_in(20U);
     CHECK_EQ_I(host_i2c_report_fail(), 1);
     CHECK_EQ_I(host_i2c_report_ok(), 0);
@@ -176,11 +179,29 @@ int main(void)
     CHECK_EQ_I(trace_cal_analog_ok, 0);       /* 判"没有模拟量" */
     CHECK_EQ_I(trace_cal_src, TRACE_SRC_I2C); /* 用户定死的通道要留着（界面要显示） */
 
-    /* ---------- 6. 自动模式：串口不通 -> IIC -> 回落数字口 + 2s 退避 ---------- */
+    /* ---------- 5b. 刚读到过帧又连丢 5 帧：只重试，不换源、不判死（用户 m31580） ----------
+     * 现场：进循迹模式那几拍会连丢几帧，老代码据此判"串口死了" -> 换到本车不存在的 IIC
+     * -> 再把模拟量整条关掉退避 2s ⇒ 界面空 2~3 秒、循迹层判丢线。 */
+    trace_cal_set_mode(TRACE_MODE_AUTO);
+    host_i2c_fail_set(1);
+    host_uart4_reset();
+    make_uart_frame(900U, 0U);
+    s_frame[1] = 0x00U; s_frame[2] = 0x64U;      /* 一帧好数据（ch0 压黑） */
+    host_uart4_reply_set(s_frame, sizeof(s_frame));
+    poll_in(20U);
+    CHECK_EQ_I(trace_cal_analog_ok, 1);
+    CHECK_EQ_I(trace_cal_src, TRACE_SRC_UART);
+    host_uart4_reply_set(NULL, 0);               /* 模块突然不出声 */
+    for (int i = 0; i < 10; i++) poll_in(20U);   /* 200ms：跨过两次"连丢 5 帧" */
+    CHECK_EQ_I(trace_cal_src, TRACE_SRC_UART);   /* 不换源（老代码这里换到 IIC） */
+    CHECK_EQ_I(trace_cal_analog_ok, 1);          /* 不判"没有模拟量"（老代码这里 0） */
+
+    /* ---------- 6. 自动模式：串口真不通 -> IIC -> 回落数字口 + TRACE_OFF_RETRY_MS 退避 ---------- */
     trace_cal_set_mode(TRACE_MODE_AUTO);
     host_i2c_fail_set(1);
     host_uart4_reset();
     CHECK_EQ_I(trace_cal_src, TRACE_SRC_UART);
+    tick_to(t_now + 900U);                    /* 走出粘性窗口（上一次真读到帧已经 900ms 前） */
     for (int i = 0; i < 5; i++) poll_in(20U);
     CHECK_EQ_I(trace_cal_src, TRACE_SRC_I2C); /* 串口判死，换 IIC */
     for (int i = 0; i < 5; i++) poll_in(20U);
@@ -188,7 +209,7 @@ int main(void)
     CHECK_EQ_I(trace_cal_analog_ok, 0);
     poll_in(100U);                            /* 退避期内：什么都不做 */
     CHECK_EQ_I(trace_cal_src, TRACE_SRC_NONE);
-    poll_in(2001U);                           /* 退避满 -> 按设置从头试 */
+    poll_in(301U);                            /* 退避满（TRACE_OFF_RETRY_MS=300）-> 按设置从头试 */
     CHECK_EQ_I(trace_cal_src, TRACE_SRC_UART);
 
     /* ---------- 7. 串口 18 字节读取帧的解析（模块"应答"由桩提供） ---------- */
@@ -345,7 +366,7 @@ int main(void)
     {
         uint8_t ok0, ok1;
 
-        /* 13a. 先造一帧"好帧"当按住值：第 0 路压黑、其余压白（自适应开着才判 OK）
+        /* 13a. 先造一帧"好帧"当按住值：第 0 路压黑、其余压白（有路越过标定阈值才判 OK）
          * 注意 trace_cal_poll() 里 frame_compute() 跑在 source_read() **之前**，
          * 所以喂进去的帧要到**下一次** poll 才参与运算：这里 poll 两次。 */
         make_cal(&d);
@@ -382,9 +403,8 @@ int main(void)
         CHECK_EQ_I(trace_cal_level(0), 0);      /* 判定口照旧按丢线（任务块的「探头全白」要成立） */
         CHECK_EQ_I(trace_cal_channel(0), 0);
 
-        /* 13c. 模拟量彻底断了：5 帧失败 => analog_ok=0；判定先按按住值顶 TRACE_HOLD_MS，
-         *      超时才认丢线。**关键：不再回落数字口**（老行为这里 trace_cal_channel = -1、
-         *      trace_cal_level = 255 ⇒ 8 路全 1 ⇒ 任务的「探头全白」永远不成立）。 */
+        /* 13c. 链路抖一下（读到过帧之后短时间内连丢 5 帧，用户 m31580 现场）：不再判"串口死了"、
+         *      不换源、analog_ok 保持 1，界面和判定口继续用上一帧好帧 ⇒ 不闪「丢线」。 */
         make_uart_frame(900U, 0U);
         s_frame[1] = 0x00U; s_frame[2] = 0x64U;    /* 再回"好帧"，让快照是它 */
         host_uart4_reply_set(s_frame, sizeof(s_frame));
@@ -395,16 +415,28 @@ int main(void)
         ok0 = trace_cal_level(0);
         host_uart4_reply_set(NULL, 0);          /* 模块不应答了 */
         for (int i = 0; i < 5; i++) poll_in(20U);
-        CHECK_EQ_I(trace_cal_analog_ok, 0);
+        CHECK_EQ_I(trace_cal_analog_ok, 1);         /* 只丢几帧：不判"没有模拟量" */
+        CHECK_EQ_I(trace_cal_src, TRACE_SRC_UART);  /* 也不换源 */
+        CHECK_EQ_I(trace_cal_held(), 0);            /* 手上那帧还是好的：界面不打「丢线」 */
+        CHECK_EQ_I(trace_cal_disp_level(0), ok0);
+        CHECK_EQ_I(trace_cal_level(0), ok0);
+        CHECK_EQ_I(trace_cal_channel(0), 1);
+
+        /* 13d. 真的断了：一直读不到、跨过粘性窗口再连丢 5 帧才判死 ⇒ analog_ok=0，界面按住
+         *      上一帧顶 TRACE_HOLD_MS，超时才认丢线。**关键：不再回落数字口**（老行为这里
+         *      trace_cal_channel = -1、trace_cal_level = 255 ⇒ 8 路全 1 ⇒ 任务的「探头全白」
+         *      永远不成立，用户 m26712 第 2 条）。 */
+        for (int i = 0; i < 45; i++) poll_in(20U);  /* 900ms：跨过粘性窗口（其间一直"只重试"）*/
+        CHECK_EQ_I(trace_cal_analog_ok, 0);         /* 这才是真判死 */
         CHECK_EQ_I(trace_cal_held(), 1);
-        CHECK_EQ_I(trace_cal_disp_level(0), ok0);   /* 界面：按住上一帧 */
-        CHECK_EQ_I(trace_cal_level(0), ok0);        /* 判定：链路抖一下先别当真丢线 */
+        CHECK_EQ_I(trace_cal_disp_level(0), ok0);   /* 界面：按住最后一帧好帧 */
+        CHECK_EQ_I(trace_cal_level(0), ok0);        /* 判定：还没超 HOLD，先别当真丢线 */
         CHECK_EQ_I(trace_cal_channel(0), 1);
         poll_in(600U);                              /* 超过 TRACE_HOLD_MS */
         CHECK_EQ_I(trace_cal_held(), 1);
         CHECK_EQ_I(trace_cal_disp_level(0), 0);     /* 按住到期：柱高归零 */
         CHECK_EQ_I(trace_cal_disp_bit(0), 0);
-        CHECK_EQ_I(trace_cal_level(0), 0);          /* 判定：真丢线 */
+        CHECK_EQ_I(trace_cal_level(0), 0);          /* 判定：真丢线（不是 -1/满格那套回落） */
         CHECK_EQ_I(trace_cal_channel(0), 0);
     }
 
@@ -458,6 +490,96 @@ int main(void)
 
         host_i2c_fail_set(0);
         trace_cal_set_mode(TRACE_MODE_AUTO);
+    }
+
+    /* ---------- 15. 「有没有线」= 有没有一路越过标定阈值（用户 m31122/m31902） ---------- */
+    {
+        make_cal(&d);
+        trace_cal_set_data(&d);
+        trace_cal_set_adapt(1U);
+        trace_cal_set_mode(TRACE_MODE_UART);
+        host_uart4_reset();
+
+        /* 15a. 真线：ch0 压在标定黑值上、其余在标定白值上 => OK，两个计数器都立起来 */
+        make_uart_frame(900U, 0U);
+        s_frame[1] = 0x00U; s_frame[2] = 0x64U;         /* ch0 = 100（标定黑值） */
+        host_uart4_reply_set(s_frame, sizeof(s_frame));
+        poll_in(20U); poll_in(20U);
+        CHECK_EQ_I(trace_cal_frame_dbg.state, (uint8_t)TRACE_FRAME_OK);
+        CHECK(trace_cal_frame_dbg.black_thr >= 1U);     /* 越过标定阈值(500)的路数 */
+        CHECK(trace_cal_frame_dbg.white_ref >= 6U);     /* 真读到标定白值(900)的路数 */
+
+        /* 15b. 探头底下没线：整片均匀偏暗到 700 —— 一路都没越过标定阈值 => 丢线。
+         *      老自适应就是在这个档位上把 lvl_max(63) 过了 s_minlvl(60) 判 OK、
+         *      再把最黑那路拉到满格 ⇒ 8 路权重差不多 ⇒ 重心 4.5 ⇒ "以为线在正中"直着走
+         *      （用户 m29852/m31122 现场）。现在规矩只有一条：有没有越过阈值。 */
+        make_uart_frame(700U, 0U);
+        host_uart4_reply_set(s_frame, sizeof(s_frame));
+        poll_in(20U); poll_in(20U);
+        CHECK_EQ_I(trace_cal_frame_dbg.state, (uint8_t)TRACE_FRAME_WEAK);
+        CHECK_EQ_I(trace_cal_frame_dbg.black_thr, 0);
+        CHECK_EQ_I(trace_cal_level(0), 0);
+        CHECK_EQ_I(trace_cal_channel(0), 0);
+
+        /* 15c. 整片都脏、比阈值黑但远没到标定黑值：这一层按 0/1 走就是"8 路全压线"（OK），
+         *      "这帧到底有没有线"交给循迹层 PID_tracing.c 的 TRACE_UNIFORM_MIN
+         *      （8 路权重一样 ⇒ 没有明暗结构 ⇒ 丢线）。自适应删掉后 trace_cal 不再自己造
+         *      black_sat/white_ref 那套兜底 —— 就是它把用户 m31580 的正常帧判成丢线的。 */
+        make_uart_frame(400U, 0U);
+        host_uart4_reply_set(s_frame, sizeof(s_frame));
+        poll_in(20U); poll_in(20U);
+        CHECK_EQ_I(trace_cal_frame_dbg.state, (uint8_t)TRACE_FRAME_OK);
+        CHECK_EQ_I(trace_cal_frame_dbg.black_thr, 8);
+        CHECK_EQ_I(trace_cal_frame_dbg.white_ref, 0);    /* 没有一路在读标定白值 */
+        CHECK_EQ_I(trace_cal_channel(0), 1);
+        {
+            float w[TRACE_CAL_CH];
+            uint8_t k;
+            CHECK_EQ_I((int)trace_cal_frame(w), (int)TRACE_FRAME_OK);
+            for (k = 1U; k < TRACE_CAL_CH; k++) CHECK(w[k] == w[0]);   /* 整片同色：没结构 */
+        }
+
+        /* 15d. 真的全黑块（8 路都在标定黑值上）：这才是路口/大黑块，照旧 OK 且 8 路满格 */
+        make_uart_frame(100U, 0U);
+        host_uart4_reply_set(s_frame, sizeof(s_frame));
+        poll_in(20U); poll_in(20U);
+        CHECK_EQ_I(trace_cal_frame_dbg.state, (uint8_t)TRACE_FRAME_OK);
+        CHECK_EQ_I(trace_cal_frame_dbg.black_thr, 8);
+        CHECK_EQ_I(trace_cal_level(0), 255);
+        CHECK_EQ_I(trace_cal_level(7), 255);
+
+        /* 15e. 整个场景变暗但线还在（地板 900->700、ch0 还是 100）：白侧柱子会从 1 涨到 65，
+         *      但**权重**仍然恒 0（没越过阈值）⇒ 线在重心里还是绝对优势，不会被拽向中间。 */
+        make_uart_frame(700U, 0U);
+        s_frame[1] = 0x00U; s_frame[2] = 0x64U;
+        host_uart4_reply_set(s_frame, sizeof(s_frame));
+        poll_in(20U); poll_in(20U);
+        CHECK_EQ_I(trace_cal_frame_dbg.state, (uint8_t)TRACE_FRAME_OK);
+        CHECK_EQ_I(trace_cal_frame_dbg.white_ref, 0);    /* 地板已经漂出容差 */
+        CHECK_EQ_I(trace_cal_level(0), 255);             /* 线：满格 */
+        CHECK_EQ_I(trace_cal_level(7), 65);              /* 白底：柱子落在"没过半高"那一侧 */
+        {
+            float w[TRACE_CAL_CH];
+            CHECK_EQ_I((int)trace_cal_frame(w), (int)TRACE_FRAME_OK);
+            CHECK(w[0] > 0.9f);                          /* 线：权重满 */
+            CHECK(w[7] == 0.0f);                         /* 白底：权重 0，不拖重心 */
+        }
+
+        /* 15f. 用户 m31580 现场：白底整体漂出容差（一路都没在读标定白值）但线还在。
+         *      老口径"没有白底又没饱和黑 ⇒ 丢线"会把这种正常帧判成 WEAK ⇒ 界面明明压在
+         *      线上却显示"丢线"，按住 500ms 到期后 8 根柱子全 0。现在只问"有没有越过阈值"：
+         *      线(100)越过了、白底(560)没过（黑度 109 < 128）⇒ OK。 */
+        make_uart_frame(560U, 0U);
+        s_frame[7]  = 0x00U; s_frame[8]  = 0x64U;        /* ch3 = 100（线） */
+        s_frame[9]  = 0x00U; s_frame[10] = 0x64U;        /* ch4 = 100（线） */
+        host_uart4_reply_set(s_frame, sizeof(s_frame));
+        poll_in(20U); poll_in(20U);
+        CHECK_EQ_I(trace_cal_frame_dbg.state, (uint8_t)TRACE_FRAME_OK);
+        CHECK_EQ_I(trace_cal_frame_dbg.white_ref, 0);    /* 就是这一档：没有一路在标定白值上 */
+        CHECK_EQ_I(trace_cal_frame_dbg.black_thr, 2);
+        CHECK_EQ_I(trace_cal_level(0), 109);             /* 白底：柱子在半高以下 */
+        CHECK_EQ_I(trace_cal_channel(3), 1);             /* 线照样认出来 */
+        CHECK_EQ_I(trace_cal_channel(0), 0);
     }
 
     return T_SUMMARY();

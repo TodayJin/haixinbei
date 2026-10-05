@@ -81,6 +81,9 @@ float PID_Compute(float setpoint, float current_value)
     } else {
         Kp = host_param_get(HP_LINE_KP, 2700.0f); // 比例系数（旧 375.0 ×7.2）
         Ki = host_param_get(HP_LINE_KI,   10.8f); // 积分系数（旧   1.5 ×7.2）
+        /* 这条 mode-2 直出差速路径（motor_tracing_pid_speed）在现在的固件里没有调用者。
+         * HP_LINE_KD 2026-10-05 起已改归**串级外环的微分（阻尼）项**用，量纲不再一样
+         * （°/s per (格/s)，默认 13），见 PID_tracing.c 的文件头。 */
         Kd = host_param_get(HP_LINE_KD,  360.0f); // 微分系数（旧  50.0 ×7.2）
     }
 

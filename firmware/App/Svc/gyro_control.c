@@ -115,6 +115,10 @@ volatile float s_ang_kp      = 10.0f;  /* (°/s)/°：角度误差 → 期望角
                                         * ⚠ 与循迹共用（PID_tracing 每拍改目标航向）⇒ 赛道需复验。
                                         * 注意这里只是兜底初值 —— 每拍都会被参数表 HP_GYRO_ANG_KP 覆盖。 */
 volatile float s_rate_max    = 120.0f; /* 期望角速度上限 °/s（2026-10-05 与参数表默认对齐；原地转圈扫 60~300 无差别） */
+volatile float s_trace_rate_max = 300.0f; /* **循迹专用**的期望角速度上限 °/s（ff_rate != 0 时用它，pivot 仍用 s_rate_max）。
+                                           * 为什么必须分开：corr = s_rate_kp × (rate_ref − v) ⇒ corr 上限 = rate_kp × rate_max。
+                                           * pivot 的 40×120 = 4800，而 base=7000 时"把内侧轮刹到 0"就要 7000、要变负数还更多
+                                           * ⇒ 直角这种大转弯永远跟不住。见 host_link.c 的 HP_TRACE_RATE_MAX 注释。 */
 volatile float s_rate_band   = 10.0f;  /* s_law=1 内环滞环带宽 °/s（防抖） */
 volatile float s_corr_spin   = 3600.0f;/* s_law=1 加速档：> 起转阈值(≈3450) */
 volatile float s_corr_hold   = 1300.0f;/* s_law=2 摩擦前馈；s_law=1 维持档 */
@@ -518,7 +522,28 @@ float GyroControl_CorrLimit(void)
     if (b2 < 0) b2 = -b2;
     if (b2 > b) b = b2;                      /* 两轮基准里取大的那个 */
     if (ref > 1.0f && (float)b > ref) cap *= (float)b / ref;
-    if (cap > (float)MOTOR_PWM_MAX) cap = (float)MOTOR_PWM_MAX;
+    /* ★2026-10-06 夹子从 MOTOR_PWM_MAX 放宽到 MOTOR_PWM_MAX + |base|（用户 m 明确放行：
+     *   「如果这个转弯要特别大，比如碰见90°的直角之类的，它的左轮或者右轮是可以变成负数的」）。
+     *
+     * 为什么需要：左轮目标 = base − corr（本文件 :886）。旧夹子把 corr 钉在 7200，
+     * 于是 base=7000 时左轮最低只到 **−200 ≈ 停住**、**内侧轮永远无法反转** ⇒ 最大差速
+     * 只有 7200（≈135 °/s）。而直角/大偏差要的是"先把车头拧过来"，那时**要的是差速本身**：
+     * 只有两轮反向对转（差速 14400）才给得出 ≈240 °/s。放宽后 base=7000 时 corr 可到
+     * 14200 ⇒ 左轮到底 −7200（全反转）。
+     *
+     * 为什么不会污染精细循迹：corr = rate_kp×(rate_ref − v)，小偏差时它只有一两千，
+     * 离夹子很远 ⇒ 放宽夹子**只在"环自己要上万"的大转弯时才生效**。
+     * （另外：横向拉回工况的最优点确实是 left=0 —— 因为 A·B = right²−left²，
+     *   A+B=2·right 被单轮满量程夹住时 left=0 最优。两个工况由环的需求量自己区分，
+     *   所以这里只放宽**上限**、不改变任何工作点。）
+     *
+     * 安全性不变：真正的轮量程边界是下面 left/right 各自夹到 ±MOTOR_PWM_MAX（:890-893），
+     * 那两行才是"轮子不会超量程"的保证；这一行只是**差速**的上限。
+     * 原地转（base=0）时 b=0 ⇒ 硬上限仍是 7200 ⇒ 与旧行为**逐位相同**，pivot 不受影响。 */
+    {
+        float cap_hard = (float)MOTOR_PWM_MAX + (float)b;
+        if (cap > cap_hard) cap = cap_hard;
+    }
     return cap;
 }
 
@@ -559,6 +584,7 @@ void GyroControl_Task(void)
     s_rate_kp    = host_param_get(HP_GYRO_RATE_KP,    s_rate_kp);
     s_rate_kd    = host_param_get(HP_GYRO_RATE_KD,    s_rate_kd);
     s_rate_max   = host_param_get(HP_GYRO_RATE_MAX,   s_rate_max);
+    s_trace_rate_max = host_param_get(HP_TRACE_RATE_MAX, s_trace_rate_max);
     s_corr_limit = host_param_get(HP_GYRO_CORR_LIMIT, s_corr_limit);
     s_corr_ref   = host_param_get(HP_GYRO_CORR_REF,   s_corr_ref);
     s_corr_slew  = host_param_get(HP_GYRO_CORR_SLEW,  s_corr_slew);
@@ -759,11 +785,17 @@ void GyroControl_Task(void)
              * 停车带里 rate_ref 直接给 0（只刹车、不再给方向）——**有前馈时不能这么做**：
              * 循迹时车要一直按外环的转率转，停车带清掉 rate_ref 就等于把前馈吃了。 */
             float rate_ref = s_ang_kp * err + ff_rate;
+            /* 期望角速度上限**分两种工况**：pivot（无前馈）用 s_rate_max，循迹（有前馈，
+             * 来自 PID_tracing 的串级）用 s_trace_rate_max。为什么必须分开：
+             * corr = s_rate_kp×(rate_ref − v) ⇒ **corr 的上限 = rate_kp × rate_max**。
+             * pivot 那套 40×120 = 4800 在 base=7000 时连"把内侧轮刹到 0"（需要 7000）都不够，
+             * 更别说用户要的"直角时内侧轮可以变负"。分开之后 ff_rate == 0 这条路**逐位不变**。 */
+            float rmax = (ff_rate == 0.0f) ? s_rate_max : s_trace_rate_max;
             if (fabsf(err) < s_settle_deg && ff_rate == 0.0f) {
                 rate_ref = 0.0f;
             } else {
-                if (rate_ref >  s_rate_max) rate_ref =  s_rate_max;
-                if (rate_ref < -s_rate_max) rate_ref = -s_rate_max;
+                if (rate_ref >  rmax) rate_ref =  rmax;
+                if (rate_ref < -rmax) rate_ref = -rmax;
                 if (s_v_floor > 0.0f && fabsf(rate_ref) < s_v_floor) {
                     rate_ref = (rate_ref >= 0.0f) ? s_v_floor : -s_v_floor;  /* 可选下限，默认关 */
                 }

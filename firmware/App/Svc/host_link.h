@@ -73,8 +73,9 @@
 #define HP_GYRO_SETTLE_DEG   0x0110u  /* 停车带半宽 °（|err| 内认为到位） */
 #define HP_GYRO_SETTLE_MS    0x0111u  /* 待在停车带里多久算到位 ms */
 #define HP_GYRO_CORR_REF     0x0112u  /* 差速天花板随基准速度放大的参考刻度（0 = 关闭，退回旧行为） */
-#define HP_TRACE_ANGLE_PER_UNIT 0x0205u /* 串级外环：重心偏 1 格 -> 目标航向度数 */
-#define HP_TRACE_ANGLE_MAX   0x0206u  /* 串级外环：目标航向偏移上限 ° */
+#define HP_TRACE_ANGLE_PER_UNIT 0x0205u /* 串级外环：重心误差 -> 转率 (°/s)/格（用户 m32880 改口径） */
+#define HP_TRACE_ANGLE_MAX   0x0206u  /* 串级外环：目标航向相对**当前**航向的前置量上限 °（防积分饱和） */
+#define HP_TRACE_RATE_MAX    0x020Au  /* 串级：**循迹时**的期望角速度上限 °/s（pivot 仍用 HP_GYRO_RATE_MAX） */
 #define HP_PIVOT_KP          0x0207u  /* 原地 pivot（base=0）循迹 PID：比例 */
 #define HP_PIVOT_KI          0x0208u  /* 原地 pivot：积分（实测 0 最好，防 windup） */
 #define HP_PIVOT_KD          0x0209u  /* 原地 pivot：微分 */

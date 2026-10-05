@@ -29,6 +29,11 @@ float GyroControl_HeadingError(void);            /* 目标 - 实际，已折算�
 float GyroControl_DebugRateRef(void);
 float GyroControl_DebugCorr(void);
 void  GyroControl_AimRelative(float delta_deg);  /* 在当前目标上叠加 */
+/* 循迹串级专用：给速率环直接前馈"期望偏航角速度"（°/s，正 = 向左）。
+ * 消费式语义 —— GyroControl_Task() 每拍读走并清零，只影响设置它的那一拍。
+ * 为什么需要（内环 τ≈1/ang_kp 的一阶滞后压在外环 ω_n 上）见 gyro_control.c 里的注释。 */
+void  GyroControl_SetTraceRate(float rate_deg_s);
+float GyroControl_GetTraceRate(void);
 
 /* 转到某个航向：可查是否到位（用 HP_TURN_TOLERANCE / HP_TURN_TIMEOUT 判定） */
 void    GyroControl_TurnTo(float deg, uint32_t now_ms);
@@ -49,7 +54,8 @@ extern volatile uint8_t s_law;        /* 0 老PID / 1 三档开关 / 2 连续速
 extern volatile float s_corr_limit;   /* 修正量安全上限（PWM 刻度） */
 extern volatile float s_corr_ref;     /* 差速天花板随基准速度放大的参考刻度（0 = 不放大） */
 extern volatile float s_ang_kp;       /* 外环 Kp：(°/s)/° */
-extern volatile float s_rate_max;     /* 期望角速度上限 °/s */
+extern volatile float s_rate_max;     /* 期望角速度上限 °/s（pivot：ff_rate == 0 时用） */
+extern volatile float s_trace_rate_max; /* **循迹专用**期望角速度上限 °/s（ff_rate != 0 时用；HP_TRACE_RATE_MAX） */
 extern volatile float s_rate_band;    /* s_law=1 内环滞环带宽 °/s */
 extern volatile float s_corr_spin;    /* s_law=1 加速档 / s_law=2,3 起转助推上限 */
 extern volatile float s_corr_hold;    /* s_law=1 维持档 / s_law=2 摩擦前馈 */

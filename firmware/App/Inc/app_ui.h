@@ -100,7 +100,7 @@ typedef struct {
     bool    beep_key;       /* 按键时响一下 */
     bool    beep_marker;    /* 任务每过一个点响一下 */
     bool    trace_invert;   /* 循迹黑白反转 */
-    bool    trace_adapt;    /* 「自动判线」：单帧自适应（关掉就走固定中点阈值） */
+    bool    trace_adapt;    /* 「连续判线」：1 = 连续插值（离阈值多远），0 = 纯 0/1（见 trace_cal.h「判线口径」） */
     int32_t gray_mode;      /* 灰度模块通讯方式 TRACE_MODE_xxx（自动/I2C/串口/数字） */
     int32_t trace_cal_set;  /* 用第几套标定：0=普通 1=亚克力（用户 m07888） */
 } app_settings_t;

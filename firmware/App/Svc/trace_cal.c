@@ -37,8 +37,9 @@
 #include <string.h>
 
 #define TRACE_READ_PERIOD_MS   20U    /* 采集周期：16 字节 @400kHz ≈ 0.45ms */
-#define TRACE_FAIL_LIMIT        5U    /* 连续失败这么多帧就换通道 / 判"没有模拟量" */
-#define TRACE_OFF_RETRY_MS   2000U    /* 两条都不通：多久后再从头试一遍 */
+#define TRACE_FAIL_LIMIT        5U    /* 连续失败这么多帧：按下面的"粘性"规则处理 */
+#define TRACE_SRC_STICK_MS    800U    /* 这个源 800ms 内还读到过帧 ⇒ 只重试，不换源/不判死（m31580） */
+#define TRACE_OFF_RETRY_MS    300U    /* 两条都不通：多久后再从头试一遍（原 2000 ⇒ 黑屏 2~3s，用户 m31580） */
 #define TRACE_MODE_REQ_MS     500U    /* 读不通时重播"输出=全部"的最小间隔（用户 m29611） */
 #define TRACE_MIN_SPAN         32U    /* 黑白原值差小于这个 = 这一路没数据 */
 #define TRACE_UART_BYTE_MS      2U    /* 每字节超时：115200 下一字节 87us，2ms 很宽裕 */
@@ -53,7 +54,7 @@ uint8_t  trace_cal_analog_ok;
 uint8_t  trace_cal_valid;
 uint8_t  trace_cal_src;
 uint8_t  trace_cal_mode = TRACE_MODE_AUTO;
-uint8_t  trace_adapt_enable = 1U;         /* 单帧自适应（见 trace_cal.h 末） */
+uint8_t  trace_adapt_enable = 1U;         /* 口径：1 = 连续（离阈值插值，默认）/ 0 = 纯 0/1 */
 trace_cal_frame_dbg_t trace_cal_frame_dbg;
 
 static uint16_t s_blk[TRACE_CAL_CH];      /* 全黑时各路的原值 */
@@ -74,8 +75,9 @@ static trace_cal_data_t s_other;
 static uint8_t s_other_ok;
 static uint8_t s_set;                     /* 当前用第几套：0=普通 1=亚克力 */
 
-/* 单帧自适应：本帧每路的归一化黑度（0..255，最黑那一路 = 255）+ 本帧判定结果。
- * 在 trace_cal_poll() 里跟着模拟量一起算，取值口直接读缓存（和 trace_cal_raw[] 同时刻）。 */
+/* 本帧每路的黑度（0..255，128 = 正好压在标定阈值上 = 0/1 分界；用户 m31902 起不再归一化）
+ * + 本帧判定结果。在 trace_cal_poll() 里跟着模拟量一起算，取值口直接读缓存
+ * （和 trace_cal_raw[] 同时刻）。 */
 static uint8_t s_fl_lvl[TRACE_CAL_CH];
 static uint8_t s_fl_state;
 
@@ -85,41 +87,24 @@ static uint8_t  s_hold_lvl[TRACE_CAL_CH];
 static uint32_t s_hold_ms;
 static uint8_t  s_hold_valid;
 
-/* 每路"白底基线"：标定时的白值和现在跑的时候可以差几十个计数（换路面、换高度、
- * 白天晚上灯不一样），而且**每路差得不一样**（实测同一帧里 ch1 比它的标定白值高 22、
- * ch3 低 52）。一个全局偏置补不了这种每路不同的漂移，光用标定白值会让没压线的路
- * 带上半格权重（会看到 ch3=126/255、ch6=107/255 这种假黑度）。
- * 所以白底参考 = 标定白值起头 + 每帧极慢地跟着这段路的观测白值走。
+/* ★★ 单帧自适应已按用户 m31902 删除（2026-10-05）★★
+ * 用户原话：「你把这个"自适应"还是删除了吧，我感觉没有用…你还不如去优化一下之前说的那个
+ * 阈值，可以把它设为一个区间之类的…如果非要细分,也可以根据它离阈值的距离来确定中间的位置」
  *
- * ⚠ 用户 m07626：「两三个传感器扫到的都是黑的了，但它现在识别的只是一个」。
- * 原因是**半压线**的路也在学：老判据只看"黑度不到本帧最黑的一半"，而黑线裙边上的路
- * 黑度正好是 0.3~0.5 倍（实测停在线上的那一帧：最黑 224/255，两侧裙边 92/255 和
- * 69/255，两条都过了老闸门）→ 基线每帧往下挪一点 → 黑度更小 → 继续学，几十秒就把
- * 基线学到黑线上（实测 ch3 的基线被学到 198，而它的标定白值是 336 = 学掉了 86% 跨度）。
- * 于是"压线的路"全被学成白底，只剩最黑那一路还认得出黑。
- * 现在三道闸门 + 一道硬夹子，缺一不可：
- *   a) 本路黑度 < 本帧最黑的 1/4（lvl*4 < lvl_max）—— 直接排除裙边上的邻路；
- *   b) 相对**标定白值 + ŝ** 的黑度 < 本路跨度的 1/8 —— 这一条不跟着基线一起漂，
- *      所以不会出现"越学越黑"的正反馈；长期停在裙边的路永远进不来；
- *   c) 整帧必须有一个真白点（whiteish > 0，8 路全压线的路口全部 lvl≈满格 → 不学）；
- *   d) 硬夹子：s_base 只允许在**标定白值 ± span/4** 之间微调。黑线离白底整整一个
- *      span，所以"把白底学到黑线上"在原理上不可能，最坏也只偏掉对比度的 1/4。
- * 每帧只动 1/32（残差累加器，不是直接除：小残差也要能一点点学到）。
- * 改标定（向导/Flash 恢复）时 s_base_ok 清零，重新用新白值起头；硬夹子每帧都会
- * 把已经学歪的基线拉回来（所以即使烧录前基线已经学到黑上，这一版一上电就自愈）。 */
-static uint16_t s_base[TRACE_CAL_CH];
-static int32_t  s_base_acc[TRACE_CAL_CH];
-static uint8_t  s_base_ok;
-#define TRACE_BASE_LEARN_DEN 32    /* 每帧学 1/32：20ms 一帧 -> 时间常数 ≈0.64s */
-#define TRACE_BASE_DRIFT_DEN  4    /* 硬夹子：允许漂移 = span/4 */
-#define TRACE_BASE_DRIFT_MIN 24    /* span 很小的那几路至少给 24 个计数 */
-
-/* 整体偏置 ŝ：本帧观测到的中位数先放 s_shift_raw，**限速**后才进 s_shift 给本帧用。
- * 限速 + "跳变超 TRACE_ADAPT_JOLT 就判扰动帧" 是用户 m07343 报"轻轻一晃就都变了、
- * 要等好久才恢复"的解法：单路尖峰被中位数扔掉，整片一起跳也只准一帧挪 16 个计数，
- * 还会先丢线几帧（循迹层沿用上一帧重心），绝不把跳变直接喂进 PID。 */
-static int32_t s_shift;        /* 当前生效的 ŝ */
-static uint8_t s_shift_ok;     /* 0 = 还没有 ŝ（第一次算出来直接采用，不限速） */
+ * 删掉的是：每路白底基线 s_base（慢学 + 硬夹子）、每帧整体偏置 ŝ（s_shift + 中位数 +
+ * 限速 + jolt 判扰动）、漂移半径 s_dr、饱和黑/白底计数兜底、最小对比度 s_minlvl。
+ * 它们原本是为了跟"白值随路面/高度/灯光漂几十个计数"，但代价是判据一多就在现场互相打架：
+ * 2026-10-05 实测（用户 m31580）车明明白白摆在线上，帧却在 OK/WEAK 之间跳 —— WEAK 那一拍
+ * 全是 white_ref == 0 触发的（本车标定白值当时漂了 ~50 个计数），WEAK 一按住 500ms 就到
+ * 期，界面 8 根柱子整个塌成 0 = 用户看到的"丢线/全是零"。
+ *
+ * 现在只有一条路：**标定阈值 + 离阈值的距离**（见下面 frame_compute_body 的注释）。
+ * 白值漂移由"距离"天然吸收：白地比标定白值亮/暗几十个计数，只是柱高在 0 附近动几十个数，
+ * 判定线（阈值 = 128）不会跟着乱跳。
+ * trace_adapt_enable（设置页「连续判线」，2026-10-05 用户 m32216 前叫「自动判线」）现在只区分两种显示/权重口径：
+ *   1 = 连续（默认）：阈值上 = 128，按离阈值的距离插值到 0/255；
+ *   0 = 纯 0/1：越过阈值就是 255、没越过就是 0（老的中点阈值二值法）。
+ */
 
 /* ---------------------------------------------------------------- 几何缓存
  * 用户 m07689：「自适应里它实际上也有一些参数，这个参数可以靠我标定的来计算」。
@@ -127,24 +112,14 @@ static uint8_t s_shift_ok;     /* 0 = 还没有 ŝ（第一次算出来直接采
  * Cortex-M4 上 2~12 个周期一条，8 路×2 处 = 16 条，比这个函数其它部分加起来还贵。所以
  * 标定一变（向导收尾 / Flash 恢复）就把每路的几何量算一次，之后每帧只剩乘 + 移位：
  *   s_sp[i] = |跨度|（原值计数）
- *   s_rq[i] = (255 << TRACE_LVL_SHIFT) / s_sp[i]  ->  黑度 = (b * s_rq[i]) >> TRACE_LVL_SHIFT
- *   s_dr[i] = 基线允许漂移的半径 = max(跨度/4, max(24, 3×这一路标定抖动))
- *   s_an[i] = 学基线时"相对标定白值"的容差 = max(跨度/8, max(16, 3×这一路抖动))
- * 后面两个里的抖动项就是"参数靠标定算"：s_jit[] 是标定时测出来的这套传感器自己的噪声底，
- * 用它当地板比写死 24/16 更贴这台车（手特别稳时也不会紧到没法用）。三条全局阈值同理，
- * 取有效路的中位数（抗单路离群），标定时算一次：
- *   s_jolt   = 夹(max(4×抖动中位数, 跨度中位数/4), 24, 255)  一帧里 ŝ 观测值跳这么多 = 晃/离地
- *   s_step   = 夹(跨度中位数/8, 6, 40)                         ŝ 每帧最多挪多少（追踪速度上限）
- *   s_minlvl = max(60, 6×抖动折算的中位黑度)                  本帧最黑低于它 = 这帧没信息
- * 没标定（跨度=0）时全部保持"保守默认值"（老常量），行为与不标定时一致。 */
-#define TRACE_LVL_SHIFT 12         /* 定点倒数的移位：12 位足够，b 夹 ±2047 不会溢出 */
+ *   s_rq[i] = (255 << TRACE_LVL_SHIFT) / s_sp[i]
+ *             ->  离阈值的距离折算成黑度 = (距离 * s_rq[i]) >> TRACE_LVL_SHIFT
+ *   s_an[i] = "还压在标定白值上"的容差 = max(跨度/8, max(16, 3×这一路标定抖动))
+ *             （只喂调试口 white_ref，判据已经不用它了） */
+#define TRACE_LVL_SHIFT 12         /* 定点倒数的移位：12 位足够，距离夹 ±2047 不会溢出 */
 static int32_t s_sp[TRACE_CAL_CH];
 static int32_t s_rq[TRACE_CAL_CH];
-static int32_t s_dr[TRACE_CAL_CH];
 static int32_t s_an[TRACE_CAL_CH];
-static int32_t s_jolt   = (int32_t)TRACE_ADAPT_JOLT;
-static int32_t s_step   = (int32_t)TRACE_ADAPT_SHIFT_STEP;
-static int32_t s_minlvl = (int32_t)TRACE_ADAPT_MIN_LEVEL;
 trace_geom_t trace_geom;           /* 只读调试口，见 trace_cal.h */
 uint32_t trace_frame_cycles;       /* 上一帧 frame_compute() 的 DWT 周期数 */
 uint32_t trace_frame_cycles_max;   /* 上电以来最坏的一次（实时性证据，只增不减） */
@@ -161,6 +136,7 @@ static uint8_t  s_tried;                  /* 1 = 已经为本次探测换过通�
 static uint8_t  s_first;                  /* 首选通道（自动模式：串口优先） */
 static uint32_t s_last_ms;
 static uint32_t s_off_until_ms;
+static uint32_t s_ok_ms;                  /* 上一次读成帧的时刻（AUTO 换源的"粘性"判据，m31580） */
 static uint32_t s_done_ms;
 static uint32_t s_retry_ms;               /* 上一次"整点被抖动判掉"的时刻（0 = 没有） */
 static uint32_t s_req_ms;                 /* 上一次重播"输出=全部"的时刻 */
@@ -342,6 +318,7 @@ static uint8_t uart_read_analog(uint8_t *b16)
             return 1U;
         }
     }
+
     return 0U;
 }
 
@@ -450,11 +427,8 @@ static void sample_finish(void)
     s_done_ms = HAL_GetTick();
     s_state   = (trace_cal_valid != 0U) ? TRACE_CAL_DONE : TRACE_CAL_FAILED;
 
-    /* 刚标完：白底基线/整体偏置全部重新起头（用新的白值），否则旧基线要靠
-     * "每帧 1/32" 慢慢爬过来 —— 那要几十秒，用户会觉得"标了不管用"（m07343）。
-     * 几何缓存/运行时阈值也一起按新标定重算（用户 m07689：参数靠标定算）。 */
-    s_base_ok  = 0U;
-    s_shift_ok = 0U;
+    /* 刚标完：几何缓存按新标定重算（用户 m07689：参数靠标定算）。
+     * 自适应删掉后没有"白底基线要重新起头"这回事了：阈值/极性就在新标定里，下一帧直接生效。 */
     s_recalc_geom();
 }
 
@@ -485,14 +459,14 @@ void trace_cal_poll(void)
      * 会把正在 DMA 搬运的屏打断）。这里只是"报个空闲"，不满足条件时它自己什么都不做。 */
     (void)board_i2c_watchdog((uint8_t)(OLED_IsBusy() ? 0U : 1U));
 
-    /* 单帧自适应：跟着采集周期算一遍（读值口直接读这份缓存）。
+    /* 算这一帧的黑度/判定（读值口直接读这份缓存），算法见 trace_cal.h「判线口径」。
      * 必须放在这个 20ms 闸门**之后**：poll 是主循环每圈都调的（~1ms 一圈），
-     * 放前面会让基线跟踪"每帧 1/32"变成 1ms 学一次，几十毫秒就把黑线学成白底。
+     * 放在前面会把"每 20ms 一帧"变成 1ms 一帧（判定跟着抖）。
      * 放在这里，下面每条提前 return（退避/等 OLED/读失败）都不再算 —— 那几种情况
      * 本来也没有新模拟量，用上一帧的缓存和 trace_cal_raw[] 同样是旧的，节奏一致。 */
     frame_compute();
 
-    /* 当前这条判死了（AUTO 两条都试过 / 固定通道失败）：退避 2s 再按用户
+    /* 当前这条判死了（AUTO 两条都试过 / 固定通道失败）：退避 TRACE_OFF_RETRY_MS 再按用户
      * 设的方式重试，别一直拿超时堵着总线。 */
     if (trace_cal_src == TRACE_SRC_NONE) {
         if ((int32_t)(now - s_off_until_ms) < 0) return;
@@ -512,15 +486,20 @@ void trace_cal_poll(void)
         maybe_request_analog_mode(now);
         if (s_fail >= TRACE_FAIL_LIMIT) {
             s_fail = 0U;
-            if (trace_cal_mode == TRACE_MODE_AUTO && !s_tried) {
-                /* AUTO：当前通道判死，换另一条试（IIC <-> 串口）。**只换一次**，
+            if ((uint32_t)(now - s_ok_ms) < TRACE_SRC_STICK_MS) {
+                /* 这个源刚刚（< TRACE_SRC_STICK_MS）还读到过帧：当成一次瞬时丢帧，原地继续重试。
+                 * 用户 m31580 现场："摆在线上有时候显示丢线、有时候全是零" —— 进循迹模式那几拍
+                 * 会连丢几帧，老代码据此判"串口死了"，换到本车不存在的 I2C，再把模拟量整条关掉
+                 * 退避 2s ⇒ 界面空 2~3 秒（LED 柱全 0、丢线标亮）。这类抖动现在只重试。 */
+            } else if (trace_cal_mode == TRACE_MODE_AUTO && !s_tried) {
+                /* AUTO：确实一直读不到才换另一条试（IIC <-> 串口）。**只换一次**，
                  * 否则两条都不通时会 IIC/UART 来回弹，UART 那条每次要干等
                  * 几十毫秒，把主循环拖慢。 */
                 s_tried       = 1U;
                 trace_cal_src = other_source(trace_cal_src);
             } else {
                 /* 固定通道失败，或 AUTO 两条都试过了：判"没有模拟量"，
-                 * 上位层回落 PA0–PA7 数字口；2s 后再按设置重试。
+                 * 上位层回落 PA0–PA7 数字口；TRACE_OFF_RETRY_MS 后再按设置重试。
                  * 固定通道时把 src 留着（界面显示"用户选的是哪条"）。 */
                 if (trace_cal_mode == TRACE_MODE_AUTO) {
                     trace_cal_src = TRACE_SRC_NONE;
@@ -535,6 +514,7 @@ void trace_cal_poll(void)
     s_fail = 0U;
     s_tried = 0U;
     s_off_until_ms = 0U;
+    s_ok_ms = now;                       /* 这一拍读到了：AUTO 的"粘性"从此算起（m31580） */
     trace_cal_analog_ok = 1U;
 
     for (i = 0; i < TRACE_CAL_CH; i++) {
@@ -547,8 +527,8 @@ void trace_cal_poll(void)
 
 /* ------------------------------------------------- 取值 */
 
-/* 单帧自适应（算法说明见 trace_cal.h 末「单帧自适应」）。
- * 每 20ms 跟着一帧模拟量算一次，结果放 s_fl_lvl[]/s_fl_state 给取值口读。 */
+/* 每 20ms 跟着一帧模拟量算一次，结果放 s_fl_lvl[]/s_fl_state 给取值口读
+ * （算法说明见 trace_cal.h「判线口径」）。 */
 /* ------------------------------------------------- 标定 -> 几何缓存 / 计时壳 */
 
 /* 就地插入排序 + 取上中位数（n ≤ 8，比调 qsort 便宜得多；调用者给的是可改的副本） */
@@ -565,11 +545,13 @@ static int32_t s_median(int32_t *v, uint8_t n)
     return v[n / 2U];
 }
 
-/* 标定一变就重算几何缓存 + 三条阈值（用户 m07689："参数靠我标定的来计算"）。
- * 除法/排序只在这里做一次，之后每帧只剩乘 + 移位。 */
+/* 标定一变就重算几何缓存（用户 m07689："参数靠我标定的来计算"）。
+ * 除法/排序只在这里做一次，之后每帧只剩乘 + 移位。
+ * 自适应（2026-10-05 用户 m31902 删）走了以后这里只剩：每路跨度 s_sp、定点倒数 s_rq、
+ * 白值容差 s_an，外加两个只给调试口看的中位数（trace_geom，out/_base_read.jlink dump）。 */
 static void s_recalc_geom(void)
 {
-    int32_t sp[TRACE_CAL_CH], jt[TRACE_CAL_CH], sh[TRACE_CAL_CH];
+    int32_t sp[TRACE_CAL_CH], jt[TRACE_CAL_CH];
     uint8_t i, n = 0U;
 
     trace_geom.rq_shift = TRACE_LVL_SHIFT;
@@ -579,67 +561,32 @@ static void s_recalc_geom(void)
     for (i = 0; i < TRACE_CAL_CH; i++) {
         int32_t sp_i = (int32_t)s_blk[i] - (int32_t)s_wht[i];
         int32_t jt_i = (int32_t)s_jit[i];
-        int32_t floor_dr, floor_an;
+        int32_t floor_an;
 
         if (sp_i < 0) sp_i = -sp_i;
         s_sp[i] = sp_i;
 
-        /* 地板用"噪声底"：3 倍标定抖动，但至少给 24（漂移半径）/16（学习容差）个计数 */
-        floor_dr = jt_i * 3;  if (floor_dr < 24) floor_dr = 24;
-        floor_an = jt_i * 3;  if (floor_an < 16) floor_an = 16;
+        floor_an = jt_i * 3;  if (floor_an < 16) floor_an = 16;  /* 噪声底：3 倍抖动，至少 16 个计数 */
 
         if (sp_i > 0) {
-            int32_t dv = (sp_i < 8) ? 8 : sp_i;   /* 跨度特别小时防溢出：b 夹在 ±4095 */
+            int32_t dv = (sp_i < 8) ? 8 : sp_i;   /* 跨度特别小时防溢出：距离夹在 ±2047 */
             s_rq[i] = ((int32_t)255 << TRACE_LVL_SHIFT) / dv;
         } else {
             s_rq[i] = 0;                          /* 0 = 这一路没法换算 */
         }
-        s_dr[i] = (sp_i / (int32_t)TRACE_BASE_DRIFT_DEN > floor_dr)
-                  ? (sp_i / (int32_t)TRACE_BASE_DRIFT_DEN) : floor_dr;
         s_an[i] = (sp_i / 8 > floor_an) ? (sp_i / 8) : floor_an;
 
         if (trace_cal_valid && !s_bad[i] && sp_i > 0) {
-            int32_t lvl = (int32_t)s_jit[i] * 255 / sp_i;   /* 抖动折算成黑度 */
             sp[n] = sp_i;
             jt[n] = jt_i;
-            sh[n] = (lvl > 255) ? 255 : lvl;
             n++;
         }
     }
 
-    /* 没标定 / 一路都不好：保持保守默认值（行为跟不标定时一模一样） */
-    if (n == 0U) {
-        s_jolt   = (int32_t)TRACE_ADAPT_JOLT;
-        s_step   = (int32_t)TRACE_ADAPT_SHIFT_STEP;
-        s_minlvl = (int32_t)TRACE_ADAPT_MIN_LEVEL;
-        trace_geom.jolt   = s_jolt;
-        trace_geom.step   = s_step;
-        trace_geom.minlvl = s_minlvl;
-        return;
+    if (n > 0U) {
+        trace_geom.sp_med  = s_median(sp, n);
+        trace_geom.jit_med = s_median(jt, n);
     }
-
-    trace_geom.sp_med  = s_median(sp, n);
-    trace_geom.jit_med = s_median(jt, n);
-
-    /* ŝ 的扰动判定：一帧里观测中位数离当前 ŝ 跳这么多 = 晃/离地。
-     * 取"4 倍抖动"与"1/4 个对比度"里大的那个：前者是噪声底，后者是"路面真变了"的门槛。 */
-    s_jolt = 4 * trace_geom.jit_med;
-    if (s_jolt < trace_geom.sp_med / 4) s_jolt = trace_geom.sp_med / 4;
-    if (s_jolt < 24)  s_jolt = 24;
-    if (s_jolt > 255) s_jolt = 255;
-
-    /* ŝ 每帧限速 = 跨度中位数/8（本车约 18 个计数/帧 = 900 计数/s） */
-    s_step = trace_geom.sp_med / 8;
-    if (s_step < 6)  s_step = 6;
-    if (s_step > 40) s_step = 40;
-
-    /* "这帧有信息"的最低对比度：60（无量纲，约 1/4 格）与 6 倍噪声里大的那个 */
-    s_minlvl = 6 * s_median(sh, n);
-    if (s_minlvl < (int32_t)TRACE_ADAPT_MIN_LEVEL) s_minlvl = (int32_t)TRACE_ADAPT_MIN_LEVEL;
-
-    trace_geom.jolt   = s_jolt;
-    trace_geom.step   = s_step;
-    trace_geom.minlvl = s_minlvl;
 }
 
 /* 计时壳：frame_compute() 的真实开销用 DWT 周期数记账（用户 m07689 要的实时性证据）。
@@ -655,195 +602,92 @@ static void frame_compute(void)
     if (trace_frame_cycles > trace_frame_cycles_max) trace_frame_cycles_max = trace_frame_cycles;
 }
 
+/* 每帧判定：**标定阈值 + 离阈值的距离**（用户 m31902 整改后的唯一一条路）。
+ *
+ *   d = 原值 - 阈值（按标定学出的极性取符号）：d > 0 = 已经越过阈值 = 黑侧。
+ *   黑度 = 128 ± |d| / 半个跨度 × 127     → d = 0 时正好 128（0/1 的判定线），
+ *                                          |d| = 半个跨度（= 标定黑值/白值）时饱和到 255/0。
+ *
+ * 所以"阈值"不是一根线而是一段区间：白侧 [标定白值, 阈值]、黑侧 [阈值, 标定黑值]，
+ * 中间的柱高由**离阈值的距离**插值出来（用户 m31902 原话：「可以根据它离阈值的距离
+ * 来确定中间的位置」）。没有白底基线、没有整体偏置 ŝ、没有中位数/jolt/最小对比度那一套。
+ *
+ * 判据只有一条：**有一路越过标定阈值 ⇒ 这一帧认到线（TRACE_FRAME_OK）**；一路都没越过 ⇒ WEAK。
+ * "探头底下整片一个样"（离地 / 全黑地面 / 整片脏）不在这层判：那是循迹层
+ * PID_tracing.c 的 TRACE_UNIFORM_MIN（本帧最亮与最黑之比在 0.75 以内 = 没结构 = 丢线）的活。
+ * 两层分工明确，就不会再出现"车明明在线上、这一层先把自己判死"（用户 m31580 / m31902）。
+ *
+ * 没有模拟量（数字口 / 读不通）或者没标定：保持 TRACE_FRAME_FALLBACK —— 界面按住上一帧，
+ * 循迹口按丢线走（数字口模式另有回落，见 trace_cal_channel）。
+ */
 static void frame_compute_body(void)
 {
     uint8_t i;
-    int32_t span, b, lvl, lvl_max = 0, noise = 0, shift = 0, shift_raw = 0, d;
-    int32_t ped = 0;
-    int32_t rs[TRACE_CAL_CH];
-    uint8_t whiteish = 0;
-    uint8_t n = 0;
-    uint8_t jolt = 0U;
+    int32_t lvl_max   = 0;
+    int32_t noise     = 0;
+    int32_t black_thr = 0;   /* 越过标定阈值的路数（= 黑） */
+    int32_t white_ref = 0;   /* 还稳稳压在标定白值上的路数（只在调试口里看） */
+    uint8_t whiteish  = 0U;  /* 没过阈值的路数（= 白） */
 
     s_fl_state = TRACE_FRAME_FALLBACK;
     for (i = 0; i < TRACE_CAL_CH; i++) s_fl_lvl[i] = 0U;
-    trace_cal_frame_dbg.shift     = 0;
+    trace_cal_frame_dbg.shift     = 0;   /* 自适应删了：这两个字段保留但恒 0 */
     trace_cal_frame_dbg.shift_raw = 0;
     trace_cal_frame_dbg.lvl_max   = 0U;
     trace_cal_frame_dbg.noise     = 0U;
     trace_cal_frame_dbg.whiteish  = 0U;
     trace_cal_frame_dbg.jolt      = 0U;
     trace_cal_frame_dbg.state     = TRACE_FRAME_FALLBACK;
+    trace_cal_frame_dbg.ped       = 0U;
+    trace_cal_frame_dbg.black_thr = 0U;
+    trace_cal_frame_dbg.white_ref = 0U;
 
-    /* 没标定 / 没有模拟量 / 用户关掉自适应：一律回落老的中点阈值 */
-    if (!trace_adapt_enable) return;
-    if (!trace_cal_analog_ok) return;
-    if (!trace_cal_valid)     return;
+    if (!trace_cal_analog_ok) return;   /* 没有模拟量：界面按住上一帧、循迹走回落 */
+    if (!trace_cal_valid)     return;   /* 没标定：没有阈值可用 */
 
-    /* 白底基线第一次用：从标定白值起头（之后每帧极慢地跟着观测白值走，见 s_base 注释） */
-    if (!s_base_ok) {
-        for (i = 0; i < TRACE_CAL_CH; i++) {
-            s_base[i]     = s_wht[i];
-            s_base_acc[i] = 0;
-        }
-        s_base_ok  = 1U;
-        s_shift_ok = 0U;    /* 基线换了：老 ŝ 对比新基线没意义，下一帧直接采用新中位数 */
-    }
-
-    /* ① 本帧整体偏置 ŝ：在"自己看着像白底"（黑度不到半跨）的路里取残差 (原值-基线)
-     * 的**中位数**。取中位数而不是最大值：某一路抖出尖峰时（轻轻一晃/传感器离地）
-     * 最大值会被它拉走、8 路黑度一起跳，中位数把这种离群点直接扔掉。 */
     for (i = 0; i < TRACE_CAL_CH; i++) {
-        int32_t raw, ref0;
+        int32_t raw, d, mag, off, lvl, nz;
 
-        if (s_bad[i]) continue;
-        span = s_sp[i];                     /* 标定时算好的 |跨度|（几何缓存，不再每次调） */
-        if (span == 0) continue;
+        if (s_bad[i]) continue;                        /* 这一路标定无效：当白 */
+        if (s_sp[i] <= 0 || s_rq[i] <= 0) continue;    /* 跨度太小：没法换算 */
 
-        raw  = (int32_t)trace_cal_raw[i];
-        ref0 = (int32_t)s_base[i];          /* 本路"白底"当前值（标定起头 + 慢跟踪） */
-        b = s_pol[i] ? (raw - ref0) : (ref0 - raw);
-        if (b * 2 < span) {                       /* 这一路自己认为没压线 */
-            rs[n++] = raw - ref0;
-        }
-    }
-    whiteish = n;
+        raw = (int32_t)trace_cal_raw[i];
+        /* 带符号的距离：> 0 = 越过阈值（黑侧）。极性是标定时学的（黑值比白值大或小都行）。 */
+        d   = s_pol[i] ? (raw - (int32_t)s_thr[i]) : ((int32_t)s_thr[i] - raw);
+        mag = (d < 0) ? -d : d;
+        /* 距离夹 ±2047：模块吐野值（raw 最大 65535）时 mag × s_rq 不能溢出 32 位。
+         * 本车一路跨度只有 85~300，夹到 2047 远在正常读数之外，判定不受影响。 */
+        if (mag > 2047) mag = 2047;
+        off = (int32_t)(((uint32_t)mag * (uint32_t)s_rq[i]) >> TRACE_LVL_SHIFT);  /* 255 × 距离/跨度 */
 
-    /* 8 路全压线（n=0，路口/大黑块）时没有"白"可参考：ŝ 保持不变，也不判扰动。 */
-    if (n > 0U) {
-        shift_raw = s_median(rs, n);              /* 上中位数：偏向"更亮"的那一侧 */
-        if (shift_raw >  2047) shift_raw =  2047;
-        if (shift_raw < -2047) shift_raw = -2047;
-
-        if (!s_shift_ok) {
-            s_shift    = shift_raw;               /* 第一次算出来：直接采用 */
-            s_shift_ok = 1U;
+        if (!trace_adapt_enable) {
+            lvl = (d >= 0) ? 255 : 0;                  /* 关掉插值：退回纯 0/1 */
         } else {
-            d = shift_raw - s_shift;
-            if (d > s_jolt || d < -s_jolt) {
-                jolt = 1U;                        /* 一帧跳这么多 = 车在晃/离地，判扰动 */
-            }
-            if (d > s_step) {
-                s_shift += s_step;
-            } else if (d < -s_step) {
-                s_shift -= s_step;
-            } else {
-                s_shift = shift_raw;
-            }
+            lvl = (d >= 0) ? (128 + off) : (128 - off);   /* 128 = 正好压在阈值上 */
+            if (lvl < 0)   lvl = 0;
+            if (lvl > 255) lvl = 255;
         }
-    }
-    shift = s_shift;                              /* 本帧真正用的 ŝ（限速后） */
-
-    /* ①.5 8 路全压线（whiteish==0：大黑块 / 路口 / 用户把车整个摆在全黑上）时 ŝ 没有白参考，
-     * 这时候 s_shift 是"车刚压上黑线那几帧"（还有一两路是白的）冻结下来的值 —— 拿它去减
-     * (基线-原值)，等于按**原值计数**整条扣掉一截，而黑度是按**各路自己的跨度**归一化的：
-     * 跨度越窄的边路被扣得越狠。2026-10-02 用户 m08812 报的"全黑时两头的 1 和 8 明显比中间低、
-     * 第 8 路有时掉成 0"就是这个：实测 ŝ=-58、第 8 路跨度只有 85 ⇒ 58×255/85 ≈ 174 个黑度
-     * 白扣（同一帧 8 路的实际黑度其实都在 90~98%）。
-     * 全黑帧里"谁更黑"本来就是相对比较，用中性 0；白底回来（whiteish>0）立刻按新中位数收敛。 */
-    if (whiteish == 0U) {
-        shift = 0;
-    }
-
-    /* ② 每路黑度：相对"基线 + ŝ"、按**自己**的黑白跨度归一化到 0..255。
-     * 换算用标定时算好的定点倒数 s_rq[]：只剩乘 + 移位（去掉每帧 8+8 条整数除法，
-     * 用户 m07689 要的实时性）。b 最大 ±4095、s_rq 最大 255<<12/8 → 32 位内不会溢出。 */
-    for (i = 0; i < TRACE_CAL_CH; i++) {
-        int32_t ref;
-
-        if (s_bad[i]) continue;
-        if (s_sp[i] == 0 || s_rq[i] == 0) continue;
-
-        ref = (int32_t)s_base[i] + shift;
-        b = s_pol[i] ? ((int32_t)trace_cal_raw[i] - ref)
-                     : (ref - (int32_t)trace_cal_raw[i]);
-        lvl = (b * s_rq[i]) >> TRACE_LVL_SHIFT;
-        if (lvl < 0)   lvl = 0;
-        if (lvl > 255) lvl = 255;
         s_fl_lvl[i] = (uint8_t)lvl;
-        if (lvl > lvl_max) lvl_max = lvl;
 
-        /* 这一路的采样抖动折算成黑度：信噪比 = lvl_max / noise（noise 取最差的那路） */
-        lvl = ((int32_t)s_jit[i] * s_rq[i]) >> TRACE_LVL_SHIFT;
-        if (lvl > noise) noise = lvl;
+        if (lvl > lvl_max) lvl_max = lvl;
+        if (d >= 0) black_thr++; else whiteish++;
+
+        /* 调试口：还压在标定白值 ±s_an 里的路数（m31122 那条判据已经不用它判了） */
+        nz = (int32_t)s_wht[i] - raw;
+        if (nz < 0) nz = -nz;
+        if (nz <= s_an[i]) white_ref++;
+
+        /* 这一路的标定抖动折算成黑度：调试口看信噪比（noise 取最差的那路） */
+        nz = (int32_t)(((uint32_t)s_jit[i] * (uint32_t)s_rq[i]) >> TRACE_LVL_SHIFT);
+        if (nz > noise) noise = nz;
     }
 
-    /* ③ 本帧没信息（对比度塌到接近噪声）或本帧是扰动帧（ŝ 一帧跳太多）：判 WEAK 当丢线，
-     * 绝不瞎判压线。扰动帧只丢几帧：ŝ 每帧能挪 s_step 个计数，追上以后自动回 OK。 */
-    if (jolt || lvl_max < s_minlvl || lvl_max < noise * 2) {
+    if (black_thr == 0) {
+        /* 一路都没越过阈值 = 这帧没看到线（白地 / 车被拿起来 / 线在探头外面） */
         for (i = 0; i < TRACE_CAL_CH; i++) s_fl_lvl[i] = 0U;
         s_fl_state = TRACE_FRAME_WEAK;
     } else {
-        /* ③.4 硬夹子：不管本帧学不学，先把每条基线拉回"标定白值 ± s_dr"（=max(跨度/4, 3×抖动)）。
-         * 既防学歪，也让上一版/上一块板已经学到黑线上的基线在一帧内自愈（见 s_base 注释）。 */
-        for (i = 0; i < TRACE_CAL_CH; i++) {
-            int32_t lo, hi;
-
-            if (s_bad[i]) continue;
-            if (s_sp[i] == 0) continue;
-
-            lo = (int32_t)s_wht[i] - s_dr[i];  if (lo < 0) lo = 0;
-            hi = (int32_t)s_wht[i] + s_dr[i];  if (hi > 4095) hi = 4095;
-            if ((int32_t)s_base[i] < lo)      s_base[i] = (uint16_t)lo;
-            else if ((int32_t)s_base[i] > hi) s_base[i] = (uint16_t)hi;
-        }
-
-        /* ③.5 学白底基线（闸门/夹子的来由见 s_base 上面的注释，用户 m07626）：
-         * 只有"本帧相对地白"**且**"相对标定白值+ŝ 也确实白"的路才学 —— 半压线、黑线裙边上
-         * 的路一个计数都学不到，所以不会再出现"两三个传感器压在黑上只认得出一个"。 */
-        if (whiteish > 0U) {
-            for (i = 0; i < TRACE_CAL_CH; i++) {
-                int32_t raw, lo, hi, anchor;
-                uint16_t wht;
-
-                if (s_bad[i]) continue;
-                if (s_sp[i] == 0) continue;
-
-                raw = (int32_t)trace_cal_raw[i];
-                wht = s_wht[i];
-
-                if ((int32_t)s_fl_lvl[i] * 4 >= lvl_max) continue;  /* a) 本帧最黑的 1/4 以内 */
-
-                /* b) 相对"标定白值 + ŝ"的黑度：用它当锚，不跟着基线漂，堵掉"越学越黑"。
-                 *    容差 s_an = max(跨度/8, max(16, 3×抖动))：抖得厉害的路放宽一点。 */
-                anchor = s_pol[i] ? (raw - ((int32_t)wht + shift))
-                                  : (((int32_t)wht + shift) - raw);
-                if (anchor >= s_an[i] || anchor <= -s_an[i]) continue;
-
-                lo = (int32_t)wht - s_dr[i];  if (lo < 0) lo = 0;
-                hi = (int32_t)wht + s_dr[i];  if (hi > 4095) hi = 4095;
-
-                s_base_acc[i] += raw - (int32_t)s_base[i];
-                if (s_base_acc[i] >= (int32_t)TRACE_BASE_LEARN_DEN) {
-                    s_base_acc[i] -= (int32_t)TRACE_BASE_LEARN_DEN;
-                    if ((int32_t)s_base[i] < hi) s_base[i]++;
-                } else if (s_base_acc[i] <= -(int32_t)TRACE_BASE_LEARN_DEN) {
-                    s_base_acc[i] += (int32_t)TRACE_BASE_LEARN_DEN;
-                    if ((int32_t)s_base[i] > lo) s_base[i]--;
-                }
-            }
-        }
-
-        /* ④ 去零偏 + 归一化成本帧的相对黑度（用户 m07888 第 2 条）：
-         * 先减掉**零点**（本帧采样抖动折算出来的黑度 noise —— 低于它的黑度跟 0 没法区分，
-         * 它们加进重心就是白路上的假权重），再归一化：最黑那一路 = 255 -> 0/1 分界永远是
-         * 半高(128)，对比度整体变小也照样成立（这就是"亚克力也能判"的来源）。
-         * 一条除法算好整帧的倒数，8 路只做一次减法 + 乘 + 移位。 */
-        {
-            int32_t  off = noise;                       /* 零点：本帧的噪声地板 */
-            uint32_t nrq = ((uint32_t)255U << TRACE_LVL_SHIFT) / (uint32_t)lvl_max;
-
-            if (off > lvl_max) off = lvl_max;
-            for (i = 0; i < TRACE_CAL_CH; i++) {
-                int32_t v = (int32_t)s_fl_lvl[i] - off;
-
-                if (v < 0) v = 0;
-                s_fl_lvl[i] = (uint8_t)(((uint32_t)v * nrq) >> TRACE_LVL_SHIFT);
-            }
-            ped = off;
-        }
         s_fl_state = TRACE_FRAME_OK;
-
         /* 好帧留一份快照，给「丢线时按住上一帧」用（trace_cal.h 那条规矩）。
          * 只存柱高：界面那个 0/1 位本来就是"柱高 >= 半高 128"，不另存一份、免得两处口径。 */
         for (i = 0; i < TRACE_CAL_CH; i++) s_hold_lvl[i] = s_fl_lvl[i];
@@ -851,14 +695,12 @@ static void frame_compute_body(void)
         s_hold_valid = 1U;
     }
 
-    trace_cal_frame_dbg.shift     = (int16_t)shift;
-    trace_cal_frame_dbg.shift_raw = (int16_t)shift_raw;
-    trace_cal_frame_dbg.lvl_max   = (uint8_t)lvl_max;
+    trace_cal_frame_dbg.lvl_max   = (uint8_t)((lvl_max > 255) ? 255 : lvl_max);
     trace_cal_frame_dbg.noise     = (uint8_t)((noise > 255) ? 255 : noise);
     trace_cal_frame_dbg.whiteish  = whiteish;
-    trace_cal_frame_dbg.jolt      = jolt;
     trace_cal_frame_dbg.state     = s_fl_state;
-    trace_cal_frame_dbg.ped       = (uint8_t)((ped < 0) ? 0 : ((ped > 255) ? 255 : ped));
+    trace_cal_frame_dbg.black_thr = (uint8_t)((black_thr > 255) ? 255 : black_thr);
+    trace_cal_frame_dbg.white_ref = (uint8_t)((white_ref > 255) ? 255 : white_ref);
 }
 
 trace_frame_t trace_cal_frame(float w[TRACE_CAL_CH])
@@ -867,7 +709,15 @@ trace_frame_t trace_cal_frame(float w[TRACE_CAL_CH])
 
     if (s_fl_state != TRACE_FRAME_OK) return (trace_frame_t)s_fl_state;
 
-    for (i = 0; i < TRACE_CAL_CH; i++) w[i] = (float)s_fl_lvl[i] / 255.0f;
+    /* 重心权重 = **越过标定阈值多少**（0 = 没越过；1 = 到标定黑值），用户 m31902：
+     * 「这个循迹模块输出那几个值就可以了…如果非要细分,也可以根据它离阈值的距离来确定中间的位置」。
+     * 白侧（黑度 ≤ 128，也就是没越过阈值）一律给 0 —— 这样整片路面变亮/变暗（标定漂了）
+     * 只是让白路的黑度在 0..128 之间动，**不会**给它们一份非零权重把重心往中间拽
+     * （那正是"明明偏了却直着走"的老毛病）。柱高（界面 OSD 那个 0..255）仍是对称的，
+     * 128 = 正好压在阈值上，好让操作者看出"压了多少"。 */
+    for (i = 0; i < TRACE_CAL_CH; i++) {
+        w[i] = (s_fl_lvl[i] > 128U) ? ((float)(s_fl_lvl[i] - 128U) / 127.0f) : 0.0f;
+    }
     return TRACE_FRAME_OK;
 }
 
@@ -892,7 +742,7 @@ int trace_cal_channel(uint8_t idx)
     }
     if (!trace_cal_valid || s_bad[idx]) return -1;    /* 没标定 / 这一路标定无效 */
 
-    /* 单帧自适应在跑：0/1 就是"本帧黑度过不过半高"，和重心用的是同一份权重 */
+    /* 这一帧算过了：0/1 就是"本帧黑度过不过半高（= 标定阈值）"，和重心用的是同一份权重 */
     if (s_fl_state == TRACE_FRAME_OK)   return (s_fl_lvl[idx] >= 128U) ? 1 : 0;
     if (s_fl_state == TRACE_FRAME_WEAK) return 0;     /* 这帧没信息：一路都不算压线 */
 
@@ -913,7 +763,7 @@ uint8_t trace_cal_level(uint8_t idx)
         if (trace_cal_mode == TRACE_MODE_DIGITAL) return trace_read_channel(idx) ? 255U : 0U;
         return hold_ready() ? s_hold_lvl[idx] : 0U;
     }
-    /* 单帧自适应在跑：柱高 = 本帧相对黑度（最黑那一路满格），
+    /* 这一帧算过了：柱高 = 离标定阈值的距离（128 = 正好在阈值上），
      * 于是"半高的那条分界线"就是真正的判定线（对比度变小也对得上） */
     if (s_fl_state == TRACE_FRAME_OK)   return s_fl_lvl[idx];
     if (s_fl_state == TRACE_FRAME_WEAK) return 0U;
@@ -955,15 +805,15 @@ int16_t trace_cal_thr_level(uint8_t idx)
 {
     if (idx >= TRACE_CAL_CH) return -1;
     if (!trace_cal_analog_ok) return -1;      /* 没有模拟量：数字口那个比较器不是这根线 */
-    if (!trace_cal_valid) return 128;         /* 只有自适应量程：先画中点当临时分界 */
+    if (!trace_cal_valid) return 128;         /* 没标定（只有观察量程）：先画中点当临时分界 */
     if (s_bad[idx]) return -1;
 
-    /* 自适应在跑：判定线就是"本帧最黑那一路的一半"，画在半高 */
+    /* 这一帧算过了：判定线就是标定阈值，黑度在阈值处正好 128，画在半高 */
     if (s_fl_state == TRACE_FRAME_OK)   return 128;
     if (s_fl_state == TRACE_FRAME_WEAK) return -1;
 
-    /* 映射是两点线性的，阈值一定落在柱高的一半（±1 的取整误差），
-     * 直接算一遍而不是写死 128，将来换映射公式这里不用跟着改。 */
+    /* 落到这儿说明这帧根本没算（没模拟量之外的 FALLBACK）：映射是两点线性的，
+     * 阈值一定落在柱高的一半（±1 的取整误差），直接算一遍而不是写死 128。 */
     return (int16_t)level_of(idx, s_thr[idx]);
 }
 
@@ -1117,11 +967,9 @@ void trace_cal_set_data(const trace_cal_data_t *in)
     memcpy(s_thr, in->thr, sizeof(s_thr));
     memcpy(s_jit, in->jit, sizeof(s_jit));
 
-    /* 换了标定（或者从 Flash 恢复了另一份）：白底基线/整体偏置重新起头，
-     * 几何缓存/运行时阈值按新标定重算（用户 m07689：参数靠标定算）。
-     * 注意这也在 nvram 开机恢复时走一遍 —— 所以上电那一刻阈值就已经是这台车的数了。 */
-    s_base_ok  = 0U;
-    s_shift_ok = 0U;
+    /* 换了标定（或者从 Flash 恢复了另一份）：几何缓存按新标定重算（用户 m07689：参数靠标定算）。
+     * 自适应删掉后没有基线要起头；注意这也在 nvram 开机恢复时走一遍 —— 所以上电那一刻
+     * 阈值就已经是这台车的数了。 */
     s_recalc_geom();
 }
 
@@ -1131,9 +979,8 @@ void trace_cal_set_adapt(uint8_t on)
 
     if (v == trace_adapt_enable) return;
     trace_adapt_enable = v;
-    /* 重新打开时从当前标定重新起头（关了这段时间里路面可能已经变了） */
-    s_base_ok  = 0U;
-    s_shift_ok = 0U;
+    /* 自适应已经删了（用户 m31902）：这里只是"连续插值 / 纯 0/1"两种口径的切换，
+     * 没有任何残留状态要清，下一帧 frame_compute_body 直接按新口径算。 */
 }
 
 /* ------------------------------------------------ 两套标定（普通 / 亚克力） */

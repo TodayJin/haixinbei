@@ -45,7 +45,15 @@ app_settings_t g_cfg = {
      * **积分限幅不换算**：它的量纲是「误差」本身（循迹=灰度重心、角度=度），不是 PWM。 */
     .line_kp_x100 = 270000,  /* HP_LINE_KP      2700.0 = 旧 375.0 ×7.2 */
     .line_ki_x100 = 1080,    /* HP_LINE_KI        10.8 = 旧   1.5 ×7.2 */
-    .line_kd_x100 = 36000,   /* HP_LINE_KD       360.0 = 旧  50.0 ×7.2 */
+    /* ★2026-10-06 抓到的真 bug：这一格当初漏改了。
+     * `HP_LINE_KD` 的默认值 2026-10-05 从 360.0（旧量纲 ×7.2）改成 12.0（新量纲 =
+     * 串级外环的阻尼项，°/s per (格/s)），同步改了 host_link.c 的 SPECS[] 与上位机镜像
+     * params.py，**但漏了这里和下面 pull_pid_params() 的兜底值**。而 NVRAM 存档里正是
+     * 这份 36000 ⇒ 每次开机 push_pid_params() 都把 360.0 盖回参数表 ⇒ 车上真正跑的
+     * D 项是 12 的 30 倍（1 格/s 的重心变化就要求 360°/s，远超 rate_max=120 ⇒
+     * 对灰度噪声 bang-bang）。实测证据：上位机 /api/params/reload 读回 line_kd=360.0，
+     * 而 SPECS/params.py 都是 12.0。 */
+    .line_kd_x100 = 1200,    /* HP_LINE_KD        12.0（串级外环 D 项，见上） */
     .line_ilim    = 50,      /* HP_LINE_ILIMIT   50（误差单位，不换算） */
     /* 角度环增益（HP_GYRO_*）：**不能**沿用「旧值 ×7.2」。2026-10-01 原地台架实测
      * （out/_angletest.ps1，只改 RAM 不烧录）：
@@ -65,7 +73,7 @@ app_settings_t g_cfg = {
     .beep_key     = false,
     .beep_marker  = true,
     .trace_invert = false,
-    .trace_adapt  = true,    /* 「自动判线」默认开（用户 m07030 要的单帧自适应） */
+    .trace_adapt  = true,    /* 「连续判线」默认开 = 连续插值口径（见 trace_cal.h「判线口径」） */
     .gray_mode    = TRACE_MODE_AUTO,
     .trace_cal_set = 0       /* 默认用第 0 套（普通路面） */
 };
@@ -180,7 +188,7 @@ static void motor_test_apply(void)
 static uint8_t s_gyro_axis_mode = 2U;
 static uint8_t s_nv_last;           /* 上一次看到的 Flash 保存状态（用于弹提示） */
 static uint8_t s_nv_lock;           /* 1 = "正在保存"已真的画上屏，按键才锁 */
-static uint8_t s_adapt_applied = 0xFFU;  /* 「自动判线」上一次推给 trace_cal 的值（0xFF = 还没推） */
+static uint8_t s_adapt_applied = 0xFFU;  /* 「连续判线」上一次推给 trace_cal 的值（0xFF = 还没推） */
 
 /* ---- 屏幕故障自愈（用户 m26333：屏幕有时候特别卡、帧率特别低）----
  * KK_UI 只要 latch 一次显示错误（OLED 传输报错，或者一次传输拖过
@@ -303,7 +311,7 @@ bool KK_UI_HomeOnMove(int16_t direction, uint16_t selected,
 static const KK_UI_MenuItem k_settings_items[] = {
     { "循迹速度", KK_UI_MENU_INT,    0 },
     { "灰度接口", KK_UI_MENU_INT,   13 },   /* 0=自动 1=I2C 2=串口 3=数字 */
-    { "自动判线", KK_UI_MENU_BOOL,   4 },   /* 单帧自适应；关掉 = 固定中点阈值 */
+    { "连续判线", KK_UI_MENU_BOOL,   4 },   /* = 连续插值(开) / 纯 0/1(关)；单帧自适应已删(m31902) */
     { "陀螺仪闭环", KK_UI_MENU_BOOL, 0 },
     { "按键蜂鸣", KK_UI_MENU_BOOL,  2 },
     { "过点蜂鸣", KK_UI_MENU_BOOL,  3 },
@@ -405,9 +413,10 @@ static const KK_UI_BoolBinding k_bool_bindings[] = {
     { "循迹反转",   &g_cfg.trace_invert, EV_NONE },
     { "按键蜂鸣",   &g_cfg.beep_key,     EV_NONE },
     { "过点蜂鸣",   &g_cfg.beep_marker,  EV_NONE },
-    /* 「自动判线」= 单帧自适应开关（trace_cal_set_adapt），设置页第 3 行引用它。
-     * 名字不能叫"循迹自适应"：字库是子集，"适"没字形（会静默不画）。 */
-    { "自动判线",   &g_cfg.trace_adapt,  EV_NONE }
+    /* 「连续判线」= 连续插值 / 纯 0/1 两种判线口径的切换（trace_cal_set_adapt），设置页第 3 行引用它。
+     * 名字从「自动判线」改过来（用户 m32216）：单帧自适应已按用户 m31902 删掉，这行现在只是
+     * 口径开关，"自动"名不副实；上屏同时按 tools/font/gen_font.mjs 重新生成了字模补 连/续 两字。 */
+    { "连续判线",   &g_cfg.trace_adapt,  EV_NONE }
 };
 
 static const KK_UI_App k_app = {
@@ -486,7 +495,7 @@ static void pull_pid_params(void)
      * 实测选定值 150/15（旧刻度 ×7.2 的 720/72 在本板自激，见 g_cfg 默认值注释）。 */
     g_cfg.line_kp_x100 = param_to_x100(HP_LINE_KP,    2700.0f);
     g_cfg.line_ki_x100 = param_to_x100(HP_LINE_KI,      10.8f);
-    g_cfg.line_kd_x100 = param_to_x100(HP_LINE_KD,     360.0f);
+    g_cfg.line_kd_x100 = param_to_x100(HP_LINE_KD,      12.0f);
     g_cfg.line_ilim    = (int32_t)host_param_get(HP_LINE_ILIMIT, 50.0f);
     g_cfg.gyro_kp_x100 = param_to_x100(HP_GYRO_KP,     150.0f);
     g_cfg.gyro_ki_x100 = param_to_x100(HP_GYRO_KI,       0.0f);
@@ -2833,6 +2842,14 @@ void app_ui_set_gyro_axis_mode(uint8_t mode)
 #define CFG_GYRO_KP_OLD_X100 72000
 #define CFG_GYRO_KD_OLD_X100  7200
 
+/* ★2026-10-06 循迹外环 D 项（HP_LINE_KD）的旧默认值 = 360.0（旧量纲 ×7.2）。
+ * 2026-10-05 把默认值改成 12.0 时漏改了 g_cfg 与 pull 的兜底，而存档里一直是 36000
+ * ⇒ 这块板每次开机都让 push_pid_params() 把 360.0 盖回参数表（实测上位机
+ * /api/params/reload 读回 line_kd = 360.0，而 SPECS / params.py 都是 12.0）。
+ * 与上面角度环同理：只在"存档里还是那个旧默认值"时迁移，用户自己调过的不动；
+ * 迁移后 nvram_poll() 会发现 s_live != s_saved 并自动回写存档。 */
+#define CFG_LINE_KD_OLD_X100 36000
+
 /* nvram 把存档盖回 g_cfg 之后调用：把新值推到运行时（灰度通道选择 + PID
  * 参数表），并让界面重画一遍。顺序很重要——app_ui_init() 里的
  * pull_pid_params() 会把 g_cfg 的 PID 字段按参数表覆盖掉，所以存档恢复
@@ -2845,14 +2862,18 @@ void app_ui_settings_loaded(void)
         g_cfg.gyro_kp_x100 = 15000;
         g_cfg.gyro_kd_x100 =  1500;
     }
+    /* 循迹外环 D 项迁移：旧默认 360.0 → 12.0（2026-10-06，见 CFG_LINE_KD_OLD_X100 注释） */
+    if (g_cfg.line_kd_x100 == CFG_LINE_KD_OLD_X100) {
+        g_cfg.line_kd_x100 = 1200;
+    }
     /* 角度 Ki 迁移：10.8 是旧默认（补静摩擦死区），现在默认 0 ——
      * 积分会被死区喂成常驻推力，车停在停车带外（实测 2.1~2.4°）一直抽。 */
     if (g_cfg.gyro_ki_x100 == 1080) {
         g_cfg.gyro_ki_x100 = 0;
     }
     trace_cal_set_mode((uint8_t)g_cfg.gray_mode);
-    /* Flash 里的「自动判线」可能和上电默认不同：清掉"已推送"标记，
-     * 让 app_ui_tick 下一拍推一次（trace_cal_set_adapt 会重新起头基线）。 */
+    /* Flash 里的「连续判线」可能和上电默认不同：清掉"已推送"标记，
+     * 让 app_ui_tick 下一拍推一次。 */
     s_adapt_applied = 0xFFU;
     push_pid_params();
     KK_UI_Invalidate();
@@ -2941,9 +2962,8 @@ void app_ui_tick(uint32_t now_ms)
     /* 循迹传感器极性：菜单里的「循迹反转」跟随生效（第五代模块默认压黑线=高） */
     trace_invert = g_cfg.trace_invert ? 1U : 0U;
 
-    /* 设置里的「自动判线」（单帧自适应）跟随生效。
-     * **只在变化时调**：trace_cal_set_adapt 会把白底基线清零重新起头，
-     * 每拍都调等于永远起不了头。 */
+    /* 设置里的「连续判线」（连续插值 / 纯 0/1）跟随生效。
+     * 只在变化时调（口径切换没有残留状态，但没必要每拍都写）。 */
     if (s_adapt_applied != (uint8_t)(g_cfg.trace_adapt ? 1U : 0U)) {
         s_adapt_applied = (uint8_t)(g_cfg.trace_adapt ? 1U : 0U);
         trace_cal_set_adapt(s_adapt_applied);

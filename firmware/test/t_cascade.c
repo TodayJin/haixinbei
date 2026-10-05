@@ -52,10 +52,20 @@ uint8_t SpeedControl_IsEnabled(void)  { return (uint8_t)g_sc_enabled; }
 void    SpeedControl_SetTarget(int l, int r) { g_sc_l = l; g_sc_r = r; }
 void    SpeedControl_Stop(void)       { g_sc_stops++; g_sc_enabled = 0; g_sc_l = g_sc_r = 0; }
 
-static float g_gyro_target;
+static float g_gyro_target;          /* 桩里的"全局目标航向"（真值 = gyro_control.c 的 target_angle）*/
 static int   g_gyro_l, g_gyro_r, g_gyro_tasks, g_gyro_stops;
-void GyroControl_SetTargetAngle(float deg) { g_gyro_target = deg; }
-void GyroControl_SetBaseSpeed(int l, int r) { g_gyro_l = l; g_gyro_r = r; }
+static float g_ff_rate;              /* 桩里的"转率前馈"（真值 = gyro_control.c 的 s_ff_rate）*/
+static int   g_ff_calls;
+volatile float s_rate_max = 110.0f;  /* HP_GYRO_RATE_MAX 的镜像：外环借它夹"要求的转率" */
+volatile float s_trace_rate_max = 110.0f; /* HP_TRACE_RATE_MAX 的镜像（2026-10-06 起循迹外环改用这个夹） */
+
+void GyroControl_SetTargetAngle(float deg)   { g_gyro_target = deg; }                  /* 绝对目标 */
+void GyroControl_AimRelative(float delta)    { g_gyro_target = NormalizeAngle(g_gyro_target + delta); }
+void GyroControl_SetTraceRate(float rate)    { g_ff_rate = rate; g_ff_calls++; }
+float GyroControl_GetTraceRate(void)         { return g_ff_rate; }
+float GyroControl_GetTargetAngle(void)       { return g_gyro_target; }
+float GyroControl_HeadingError(void)         { return NormalizeAngle(g_gyro_target - Yaw); }
+void GyroControl_SetBaseSpeed(int l, int r)  { g_gyro_l = l; g_gyro_r = r; }
 void GyroControl_Task(void)  { g_gyro_tasks++; }
 void GyroControl_Stop(void)  { g_gyro_stops++; }
 
@@ -98,6 +108,9 @@ static void scene(void)
     for (int i = 0; i < (int)TRACE_CAL_CH; i++) { g_w[i] = 0.0f; if (i < 8) g_dig[i] = 0; }
     g_sc_enabled = 0; g_sc_l = g_sc_r = 0; g_sc_stops = 0;
     g_gyro_l = g_gyro_r = 0; g_gyro_tasks = 0; g_gyro_stops = 0; g_gyro_target = 999.0f;
+    g_ff_rate = 0.0f; g_ff_calls = 0;
+    s_rate_max = 110.0f;
+    s_trace_rate_max = 110.0f;
     g_pid_resets = 0; g_pid_calls = 0; g_pid_pivot = -1;
     Yaw = 0.0f; g_pu = 10.0f; g_amax = 35.0f;
 }
@@ -112,45 +125,134 @@ int main(void)
 {
     CHECK_EQ_I(TRACE_CAL_CH, 8);
 
-    /* §1 正中间：重心 4.5，航向偏移 0，基准速度原样交给角度环 */
+    /* §1 正中间：重心 4.5、误差 0；**发车那一拍**把全局目标航向钉成当前航向(0)，
+     *    基准速度原样交给角度环 */
     scene();
     g_w[3] = 200.0f; g_w[4] = 200.0f;
     motor_tracing_cascade(1200);
     CHECK_EQ_I(tracing_lost(), 0);
     CHECK(fabsf(PID_Tracing_TracePos() - 4.5f) < 0.01f);
-    CHECK(fabsf(g_gyro_target - 0.0f) < 0.01f);
+    CHECK(fabsf(g_gyro_target - 0.0f) < 0.01f);              /* 发车：目标航向 = 当前航向 */
     CHECK_EQ_I(g_gyro_l, 1200);
     CHECK_EQ_I(g_gyro_r, 1200);
     CHECK_EQ_I(g_gyro_tasks, 1);
 
-    /* §2 线在右边 ⇒ 目标航向往右（负）：aim = -per_unit*err，随重心连续变化 */
+    /* §2 线在右边 ⇒ 每拍把目标航向往右推（用户 m32880 的"实时修改"）：
+     *    Δ = clamp(-per_unit × err, ±rate_max) × dt */
     scene();
     g_w[5] = 200.0f; g_w[4] = 100.0f;
-    motor_tracing_cascade(1200);
+    for (int i = 0; i < 4; i++) motor_tracing_cascade(1200); /* 头 3 拍过重心中值窗，第 1 拍是发车 */
     {
         float err = PID_Tracing_TracePos() - 4.5f;
-        CHECK(err > 0.5f);                                    /* 确认真在右边 */
-        CHECK(fabsf(g_gyro_target - (0.0f + (-g_pu * err))) < 0.05f);
+        float t0  = g_gyro_target;
+        CHECK(err > 0.5f);                                   /* 确认真在右边 */
+        CHECK(t0 < -0.01f);                                  /* 已经往右推过了（负 = 向右）*/
+        motor_tracing_cascade(1200);
+        CHECK(fabsf((g_gyro_target - t0) - (-g_pu * err * 0.005f)) < 0.001f);
     }
 
-    /* §3 线在左边 ⇒ 目标航向往左（正），且与 §2 反号 */
+    /* §3 线在左边 ⇒ 往左推（正），且与 §2 反号 */
     scene();
     g_w[2] = 200.0f; g_w[3] = 100.0f;
-    motor_tracing_cascade(1200);
+    for (int i = 0; i < 4; i++) motor_tracing_cascade(1200);
     {
         float err = PID_Tracing_TracePos() - 4.5f;
+        float t0  = g_gyro_target;
         CHECK(err < -0.5f);
-        CHECK(fabsf(g_gyro_target - (0.0f + (-g_pu * err))) < 0.05f);
-        CHECK(g_gyro_target > 0.0f);
+        CHECK(t0 > 0.01f);
+        motor_tracing_cascade(1200);
+        CHECK(fabsf((g_gyro_target - t0) - (-g_pu * err * 0.005f)) < 0.001f);
     }
 
-    /* §4 航向偏移夹到 trace_angle_max（参数 518） */
+    /* §4 防积分饱和：车不转（Yaw 恒 0）却一直往一个方向推 ⇒ 目标航向最多停在 ±aim_max
+     *    （参数 518）。40 拍 × 60×2.5×0.005 = 7.5°/拍，不夹的话早到 +30°。 */
+    scene();
+    g_pu = 60.0f; g_amax = 12.0f;
+    w_line(2, 200.0f);                                       /* 重心 2 ⇒ err -2.5 */
+    for (int i = 0; i < 40; i++) motor_tracing_cascade(1200);
+    CHECK(PID_Tracing_TracePos() - 4.5f < -2.0f);
+    CHECK(fabsf(g_gyro_target - 12.0f) < 0.01f);
+
+    /* §4b ★用户 m32880：目标航向是**实时修改**的，不是"进模式基准 + 有上限的偏移"。
+     *     车头跟着目标一起转（模拟内环收敛）时，目标航向必须能一路推过 aim_max 很多倍 ——
+     *     老写法（target = s_base_yaw + clamp(±aim_max)）永远到不了 2×aim_max。 */
     scene();
     g_pu = 10.0f; g_amax = 12.0f;
-    w_line(2, 200.0f);                                       /* 重心 2 ⇒ err -2.5 ⇒ raw aim +25 */
-    for (int i = 0; i < 3; i++) motor_tracing_cascade(1200); /* 3 帧过掉重心中值滤波 */
-    CHECK(PID_Tracing_TracePos() - 4.5f < -2.0f);
-    CHECK(fabsf(g_gyro_target - 12.0f) < 0.01f);              /* 不夹的话会是 +25 */
+    w_line(2, 200.0f);
+    for (int i = 0; i < 400; i++) {
+        motor_tracing_cascade(1200);
+        Yaw = g_gyro_target;                                 /* 内环把车头拉到目标上 */
+    }
+    CHECK(g_gyro_target > 24.0f);
+    CHECK(fabsf(GyroControl_HeadingError()) < 0.01f);        /* 目标没离开车头：前置量夹子不误触发 */
+
+    /* §4c 丢线时**不许**继续积分目标航向：data 是冻住的旧值，拿它推目标角 = 积分饱和 */
+    scene();
+    g_pu = 60.0f; g_amax = 35.0f;
+    w_line(2, 200.0f);
+    for (int i = 0; i < 4; i++) motor_tracing_cascade(1200);
+    CHECK(g_gyro_target > 0.5f);
+    for (int i = 0; i < 8; i++) g_w[i] = 200.0f;             /* 一片均匀 = 探头底下没线 */
+    for (int i = 0; i < 4; i++) motor_tracing_cascade(1200); /* 刷掉位置中值窗，进入丢线 */
+    CHECK_EQ_I(tracing_lost(), 1);
+    {
+        float held = g_gyro_target;
+        host_tick_add(100u);                                 /* 还没到减速(300ms)/停车(1000ms)门限 */
+        for (int i = 0; i < 10; i++) motor_tracing_cascade(1200);
+        CHECK(fabsf(g_gyro_target - held) < 0.01f);
+    }
+
+    /* §4d ★用户 m33254（"我是故意摆得斜的来检验你这个能力"）：外环必须有**微分（阻尼）项**。
+     *     只有 P 项时环是零阻尼振荡（ë = −v·per_unit·e），斜摆给出的初值永远摆下去；
+     *     有了 D 项，"重心正在往右跑"本身就要往右推（刹车+反向），振荡才会衰减。
+     *     这里把 P 项关掉（per_unit = 0、误差恒正也不再推），只看 D 项。 */
+    scene();
+    g_pu = 0.0f; g_amax = 35.0f;
+    g_w[3] = 200.0f; g_w[4] = 200.0f;                         /* 重心 4.5 */
+    for (int i = 0; i < 5; i++) motor_tracing_cascade(1200);  /* 让 data 与"上帧重心"对齐 */
+    {
+        float t0 = g_gyro_target;
+        g_w[4] = 0.0f; g_w[5] = 200.0f; g_w[6] = 200.0f;       /* 重心一步跳到 5.5（= 线在往右跑）*/
+        for (int i = 0; i < 6; i++) motor_tracing_cascade(1200);
+        CHECK(g_gyro_target < t0 - 0.5f);                     /* 往右推（负方向），且幅度可见 */
+    }
+
+    /* §4e ★第 6 轮（用户 m33454「你继续就行了,一直调」）：外环算出的转率必须**同时**前馈进
+     *     内环速率环（GyroControl_SetTraceRate），不能只积成目标航向 —— 只推目标航向时，
+     *     "外环→内环→车身"是 τ≈1/ang_kp≈285ms 的一阶滞后，正压在外环 ω_n≈5.9rad/s 上，
+     *     实测就是那个 1s 等幅大摆（外环微分项也治不好，见 out/_poles.py）。 */
+    scene();
+    g_pu = 60.0f; g_amax = 35.0f;
+    w_line(6, 200.0f);                                       /* 线在很右边 ⇒ err > 0 ⇒ 要向右转 */
+    {
+        float first = 0.0f;
+        int   got   = 0;
+        for (int i = 0; i < 20; i++) {
+            motor_tracing_cascade(1200);
+            /* §4e-2 ★第 8 轮（用户 ≈m33762「晃来晃去的」）：前馈必须**先过低通**
+             * （TRACE_FF_LPF），否则 D 项的帧级噪声直接灌进速率环，把修正量打满。
+             * 抓"第一个真正非零的前馈值"：它应该明显小于稳态值（低通 + 1°/s 死区）。*/
+            if (!got && g_ff_rate < -0.1f) { first = g_ff_rate; got = 1; }
+        }
+        float err = PID_Tracing_TracePos() - 4.5f;
+        CHECK(err > 1.0f);                                   /* 确认真在右边 */
+        CHECK(g_ff_calls > 0);                               /* 每拍都给前馈（含清零那一拍）*/
+        CHECK(g_ff_rate < -0.1f);                            /* 向右 = 负转率 */
+        CHECK(fabsf(g_ff_rate + g_pu * err) < 3.0f);         /* 稳态：低通已经跟上 = per_unit × err */
+        CHECK(got && fabsf(first) < fabsf(g_ff_rate) * 0.8f);/* 起步那一帧明显小 ⇒ 低通真的在滤 */
+    }
+
+    /* §4f 丢线找线也要给前馈（丢线时航向误差可能还很小，光推目标要等误差长出来才动） */
+    scene();
+    g_pu = 60.0f;
+    w_line(6, 200.0f);
+    for (int i = 0; i < 4; i++) motor_tracing_cascade(1200); /* 先看到线，记住"线在右侧" */
+    for (int i = 0; i < 8; i++) g_w[i] = 200.0f;             /* 一片均匀 = 丢线 */
+    for (int i = 0; i < 4; i++) motor_tracing_cascade(1200); /* 刷掉位置中值窗，进入丢线 */
+    CHECK_EQ_I(tracing_lost(), 1);
+    host_tick_add(200u);                                     /* 过 TRACE_SEARCH_DELAY_MS(120) */
+    motor_tracing_cascade(1200);
+    CHECK(g_ff_rate < -0.1f);                                /* 朝最后看到线的方向（右）持续转 */
 
     /* §5 ★幻影中线（用户 m29852）：探头底下没线，自适应帧 8 路全白 ⇒ 必须判丢线 */
     scene();
