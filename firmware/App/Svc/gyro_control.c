@@ -42,8 +42,10 @@ static uint8_t gyro_control_enabled = 0;
  * （corr = Kp×err，Kp=720 时 6° 就是 4320 → 前馈 5187），车冲过头后刹不住、
  * 原地来回甩好几圈。现在当成"安全网"：正常指令由 s_corr_* 三档自己定上限
  * （加速档 3600 是最大的），这里给 4000 兜底，别把加速档夹掉。
- * 台架可 SWD 改（不用重烧）：s_corr_limit。 */
-volatile float s_corr_limit = 2000.0f;
+ * 台架可 SWD 改（不用重烧）：s_corr_limit。
+ * ★2026-10-05 第 21 轮真车 A/B：默认 **2000 → 3000**（上面这句"给 4000 兜底"的原意才对得上）。
+ *   见 `firmware/App/Svc/host_link.c` 里 `HP_GYRO_CORR_LIMIT` 那段的实测表。 */
+volatile float s_corr_limit = 3000.0f;
 
 /* 差速天花板随基准速度放大的参考刻度（2026-10-04，用户 m24215）。
  *

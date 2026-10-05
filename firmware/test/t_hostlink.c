@@ -391,7 +391,9 @@ int main(void)
         CHECK(lo == 0.0f);
         CHECK(hi == 20000.0f);
         CHECK_EQ_I(host_param_bounds(HP_GYRO_RATE_KP, &def, &lo, &hi), 1);
-        CHECK(def == 250.0f && lo == 10.0f && hi == 2000.0f);
+        /* 2026-10-05 真车循迹定稿：速率环 P 250 → 80（3~4Hz 横向极限环的根因），
+         * 与 `out/_sweep18..21.log` 的验证条件一致 */
+        CHECK(def == 80.0f && lo == 10.0f && hi == 2000.0f);
         CHECK_EQ_I(host_param_bounds(0x7777u, NULL, NULL, NULL), 0);
         CHECK_EQ_I(host_param_id_at(n), 0u);         /* 越界返回 0，不崩 */
         CHECK(host_param_table_crc() != 0u);
