@@ -118,9 +118,9 @@ export const api = {
   health: () => request<HealthInfo>('/api/health'),
   link: () => request<LinkInfo>('/api/link'),
   ports: () => request<{ ok: true; ports: { port: string; desc?: string }[] }>('/api/ports'),
-  /** 波特率默认 230400（固件 `board.c` 的 `DL_BAUD` 就是它，车上那颗 J-Link VCOM 上限也是它）；
-   *  要 921600 得换普通 USB-TTL 接 U12，并把固件与桥一起改回；sim 用不到但照样带上 */
-  connect: (mode: 'serial' | 'sim', port?: string, baud = 230400) =>
+  /** 波特率默认 921600（2026-10-05 定档：固件 `board.c` 的 `DL_BAUD` 就是它，车上第二颗探针
+   *  的 VCOM 实测能到 3 Mbaud）；sim 用不到但照样带上 */
+  connect: (mode: 'serial' | 'sim', port?: string, baud = 921600) =>
     post<{ ok: true; link: LinkInfo }>('/api/link/connect', { mode, port, baud }),
   disconnect: () => post<{ ok: true }>('/api/link/disconnect'),
 

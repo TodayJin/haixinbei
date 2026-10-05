@@ -165,7 +165,17 @@ export interface Telem {
 
 export interface StatsEvent {
   stats: LinkStats
+  /** **实测**遥测帧率（桥按 1s 窗口数出来的）—— 显示帧率用这个。
+   *  区分见 `telem_hz_set`：那是车上固件报的**设定值**（`/api/link` 的 `telem_hz` 也是它，
+   *  「控制 → 遥测频率」滑块的初值取设定值）。2026-10-05 修：桥原来只回设定值 ⇒
+   *  用户把频率调到 200Hz，界面还显示 100Hz，永远看不出链路真实吞吐。 */
   telem_hz: number
+  /** 车上固件报的设定帧率（`CMD_SET_TELEM_HZ` 的那个目标值） */
+  telem_hz_set: number
+  /** 实测的**下行**帧率（桥每秒往车上发的命令/轮询帧数） */
+  telem_tx_hz: number
+  /** 车上主循环里界面刷新耗时，单位 us（固件遥测 loop_us，不是控制中断耗时） */
+  loop_us: number
   last_rx_ms: number | null
   busy_pct: number
 }

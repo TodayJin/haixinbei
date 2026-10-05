@@ -15,9 +15,10 @@ r"""链路体检：不启动桥、不起网页，直接按一串波特率静听�
 一帧 HELLO_REQ（只读命令，固件回 T_HELLO）。波特率不匹配时那串字节在车上看来是
 乱码，理论上极小概率被解析成别的帧类型 —— 所以默认关；要开请先把车轮架空。
 
-安全（波特率）：**J-Link 的 CDC VCOM 实测上限 230400** —— 试 460800/921600 不但打不开，
-还会把探针打进 bootloader 态（`USB\VID_1366&PID_0101`，只能物理拔插 USB 才能恢复）。
-所以 J-Link 口上超过 230400 的档会被自动跳过（`bridge/serial_safety.py`），
+安全（波特率）：J-Link 的 CDC VCOM 有**按探针型号分的实测上限** —— 旧 V9（PID_0105）是
+230400，试 460800/921600 不但打不开，还会把探针打进 bootloader 态（`USB\VID_1366&PID_0101`，
+只能物理拔插 USB 才能恢复）；车上现在这颗 OB-RA4M2-Full（PID_1024）逐档实测到 3 Mbaud 全通，
+2026-10-05 定档 921600。所以超过**当前这颗**上限的档会被自动跳过（`bridge/serial_safety.py`），
 警告打在 stderr；确实要试请显式 `--force-baud`。
 
 用法（工作目录必须是 `tools/console`）：
@@ -173,7 +174,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="监听后再补发一帧 HELLO_REQ（默认只收不发；开之前把车轮架空）")
     ap.add_argument("--list", action="store_true", help="只列出本机串口")
     ap.add_argument("--force-baud", action="store_true", dest="force_baud",
-                    help="不跳过 J-Link CDC 口上 >230400 的档（会让探针崩进 bootloader 态，慎用）")
+                    help="不跳过超过探针实测上限的档（旧探针 PID_0105 上限 230400，超了会崩进 bootloader 态，慎用）")
     args = ap.parse_args(argv)
 
     if list_ports is not None and (args.list or not args.port):

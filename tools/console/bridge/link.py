@@ -53,8 +53,9 @@ class LinkError(RuntimeError):
 class LinkBase:
     mode = "?"
     port = ""
-    # 固件 2026-10-04 实机烧的是 DL_BAUD 230400（车上 J-Link VCOM 的上限），两边必须一致
-    baud = 230400
+    # 固件 2026-10-05 实机烧的是 DL_BAUD 921600（车上第二颗探针 PID_1024 的 VCOM 能吃），
+    # 两边必须一致；改这里要连 main.py --baud / 网页默认值 / board.c 的 DL_BAUD 一起改
+    baud = 921600
 
     def __init__(self):
         self.dec = pr.FrameDecoder()
@@ -99,11 +100,11 @@ class LinkBase:
 
 
 class SerialLink(LinkBase):
-    """真车：USB 虚拟串口（无线下载器）/ J-Link VCOM，默认 230400 8N1。"""
+    """真车：USB 虚拟串口（无线下载器）/ J-Link VCOM，默认 921600 8N1。"""
 
     mode = "serial"
 
-    def __init__(self, port: str, baud: int = 230400):
+    def __init__(self, port: str, baud: int = 921600):
         super().__init__()
         self.port = port
         self.baud = baud

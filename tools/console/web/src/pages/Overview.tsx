@@ -51,20 +51,26 @@ export function OverviewPage() {
           <div className="flex items-center justify-between">
             <span className="text-slate-400">状态</span>
             <span className="num text-slate-200">
-              {link?.connected ? `${link.port ?? ''} @ ${link.baud ?? 230400}` : '未连接'}
+              {link?.connected ? `${link.port ?? ''} @ ${link.baud ?? 921600}` : '未连接'}
             </span>
           </div>
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between" title="实测 = 桥按 1s 窗口数出来的帧率；设定 = 车上固件报的目标值（CMD_SET_TELEM_HZ）">
             <span className="text-slate-400">遥测帧率</span>
-            <span className="num text-slate-200">{fmt(stats?.telem_hz ?? link?.telem_hz, 1)} Hz</span>
+            <span className="num text-slate-200">
+              {stats?.telem_hz !== undefined ? `${fmt(stats.telem_hz, 1)} Hz` : '--'}
+              <span className="ml-1 text-[11px] text-slate-500">/ 设定 {link?.telem_hz ?? '--'}</span>
+            </span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-slate-400">最后收包</span>
             <span className="num text-slate-200">{stats?.last_rx_ms !== undefined ? `${fmt(stats.last_rx_ms, 0)} ms 前` : '--'}</span>
           </div>
-          <div className="flex items-center justify-between" title="车上控制器每 5 毫秒跑一拍，这里是这 5 毫秒被占掉了多少 —— 不是电脑的负载">
-            <span className="text-slate-400">车上控制占用</span>
-            <span className="num text-slate-200">{fmt(stats?.busy_pct, 1)} %</span>
+          <div className="flex items-center justify-between" title="车上主循环里那拍界面刷新（app_ui_tick）的耗时占 5ms 控制拍的比例（固件遥测 loop_us/5000）。它不是控制中断的占用 —— 控制中断实测只有 ~9µs；这个数随刷屏在 0.2%~81% 之间跳，看平均才准（平均约 17%）">
+            <span className="text-slate-400">界面刷新占用</span>
+            <span className="num text-slate-200">
+              {fmt(stats?.busy_pct, 1)} %
+              <span className="ml-1 text-[11px] text-slate-500">({fmt(stats?.loop_us, 0)}µs/5ms)</span>
+            </span>
           </div>
           <div className="flex items-center justify-between">
             <span className="text-slate-400">固件 / 协议</span>

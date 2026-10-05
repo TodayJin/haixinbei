@@ -326,7 +326,9 @@ class ConsoleStore {
       },
       onTelem: (t) => this.onTelem(t),
       onStats: (s) => {
-        this.snap = { ...this.snap, stats: s, link: this.snap.link ? { ...this.snap.link, stats: s.stats, telem_hz: s.telem_hz, last_rx_ms: s.last_rx_ms } : this.snap.link }
+        // s.telem_hz 是**实测**帧率、link.telem_hz 是车上报的**设定**值：别把实测写回 link，
+        // 否则「控制 → 遥测频率」滑块的初值会跟着实测抖（2026-10-05 用户 m30228）。
+        this.snap = { ...this.snap, stats: s, link: this.snap.link ? { ...this.snap.link, stats: s.stats, telem_hz: s.telem_hz_set ?? this.snap.link.telem_hz, last_rx_ms: s.last_rx_ms } : this.snap.link }
         this.emit()
       },
       onLog: (item) => {

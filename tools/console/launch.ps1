@@ -1,8 +1,8 @@
-﻿# 上位机桥的一键启动器（真车 / 仿真）。
+# 上位机桥的一键启动器（真车 / 仿真）。
 #
 # 同目录的三个 .bat 只是双击入口（**保持纯 ASCII**，中文提示一律从这里出：
 # chcp 65001 和同一个 .bat 里的非 ASCII 字节会让 cmd 按错位重新读文件、把注释片段当命令跑）；
-#   启动上位机.bat        —— 真车：自动找串口，230400（= 固件 firmware/Core/Src/board.c 的 DL_BAUD）
+#   启动上位机.bat        —— 真车：自动找串口，921600（= 固件 firmware/Core/Src/board.c 的 DL_BAUD）
 #   启动上位机-仿真.bat   —— 内置仿真车，没插车也能开界面
 #   启动上位机-列串口.bat —— 只列串口（诊断：车插上没、是哪个 COM）
 # 仓库根还有一个同名的 启动上位机.bat 转发到这里，可以直接带开关：-Sim / -ListPorts / -HttpPort 8791。
@@ -14,7 +14,7 @@ param(
     [switch]$Sim,                                   # 用内置仿真车
     [switch]$ListPorts,                             # 只列串口后退出
     [string]$Port = "",                             # 串口号，例如 COM26；空 = 自动找
-    [int]$Baud = 230400,                            # 和板上固件一致；车上 J-Link VCOM 上限就是它
+    [int]$Baud = 921600,                            # 和板上固件一致；车上第二颗探针的 VCOM 实测能到 3 Mbaud
     [int]$HttpPort = 8770,                          # 浏览器访问的端口（= 桥的 --port，不是串口！）
     [switch]$NoBrowser,                             # 不自动开浏览器
     [switch]$Pause,                                 # 结束后停一下（双击进来的默认行为）

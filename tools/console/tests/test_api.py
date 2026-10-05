@@ -31,8 +31,8 @@ def test_health_and_link(live):
     code, j, _ = GET(base + "/api/link")
     assert code == 200 and j["ok"] is True
     assert j["mode"] == "sim" and j["connected"] is True
-    # 230400：2026-10-04 实机烧的 DL_BAUD（车上 J-Link VCOM 的上限），桥的默认值必须跟着
-    assert j["baud"] == 230400 and isinstance(j["telem_hz"], (int, float))
+    # 921600：2026-10-05 定档后实机烧的 DL_BAUD（车上第二颗探针的 VCOM 能吃），桥的默认值必须跟着
+    assert j["baud"] == 921600 and isinstance(j["telem_hz"], (int, float))
     assert set(j["stats"]) == {"rx", "tx", "crc", "resync", "drops"}
     assert j["stats"]["rx"] >= 1, "仿真车已经在发遥测了"
     assert j["last_rx_ms"] is None or j["last_rx_ms"] >= 0
@@ -290,6 +290,31 @@ def test_set_telem_hz_actually_reaches_the_car(live):
     # 收尾：把速率还原成仿真车默认的 50Hz，别让后面用 live 的用例跟着一起变
     assert POST(base + "/api/cmd", {"cmd": "set_telem_hz", "arg": 50})[1]["ok"] is True
     assert con.runner.link.car.hz == 50
+
+
+def test_stats_hz_is_measured_not_setpoint(live):
+    """回归（2026-10-05 用户 m30228）：`stats` 事件里的帧率必须是**实测**值。
+
+    桥原来把 1s 窗口数出来的实测帧率算进一个本地 dict 就丢掉，`stats` 事件回的是车上固件
+    报的**设定值** ⇒ 用户把遥测频率调到 200Hz，网页（设置页/总览/IMU）显示的永远是设定值，
+    "调了没反应"根本看不出来。这里故意把设定值和实测值掰成两个不同的数字钉住这个区分。
+    """
+    base, _, con = live
+    with con.lock:
+        con.hz = 137              # 车上报的设定值（hello / cmd ack 那条路）
+        con.measured_hz = 42      # 1s 窗口数出来的实测值
+        con.measured_tx_hz = 7
+        con._rate_t = time.time()  # 把统计窗口推后 1s，免得后台 tick 在这几毫秒里改写实测值
+    # 契约：`/api/link` 的 telem_hz 仍是**设定值**（"遥测频率"滑块的初值读它）
+    assert GET(base + "/api/link")[1]["telem_hz"] == 137
+    snap = con.stats_payload()
+    assert snap["telem_hz"] == 42, "stats 事件的 telem_hz 必须是实测值"
+    assert snap["telem_hz_set"] == 137
+    assert snap["telem_tx_hz"] == 7
+    assert "loop_us" in snap and "busy_pct" in snap
+    # 收尾：设定值还回仿真车默认的 50Hz（live 是 session 级夹具，状态会漏给后面的用例）
+    assert POST(base + "/api/cmd", {"cmd": "set_telem_hz", "arg": 50})[1]["ok"] is True
+    assert GET(base + "/api/link")[1]["telem_hz"] == 50
 
 
 def test_cal_endpoint(live):

@@ -123,6 +123,10 @@ class Console:
         self._rate = {"telem": 0, "tx": 0}
         self._rate_t = time.time()
         self._rate_n = {"telem": 0, "tx": 0}
+        # **实测**帧率（每 1s 由 _maybe_stats 数出来）。别和 `self.hz` 混：那是车上固件
+        # 报上来的**设定值**（T_HELLO 的 telem_hz / link_payload 的 telem_hz）。
+        self.measured_hz = 0
+        self.measured_tx_hz = 0
         self.reload_params()
 
     # ------------------------------------------------------------------ 参数表
@@ -406,9 +410,13 @@ class Console:
                 self._rate = {k: int(v / dt) for k, v in self._rate_n.items()}
                 self._rate_n = {k: 0 for k in self._rate_n}
                 self._rate_t = now
-                stats = dict(self.stats, telem_hz=self._rate["telem"], tx_hz=self._rate["tx"],
-                             frames_seen=self.runner.frames_seen)
-                link = self.runner.status()
+                # 实测帧率只在这个 1s 窗口里算得出来，**必须存下来给 stats 事件用**。
+                # 2026-10-05 修（用户 m30228「不是还换了 200Hz 吗，为什么还是 100Hz」）：
+                # 原来这里把实测值算进一个本地 dict 就丢了，stats 事件回的还是固件
+                # 上报的**设定值** ⇒ 车上设定 200Hz，界面也永远显示 200（或调之前的值），
+                # 从来没人知道链路真正跑出来是多少。
+                self.measured_hz = self._rate["telem"]
+                self.measured_tx_hz = self._rate["tx"]
             else:
                 return
         self.emit({"n": "stats", "src": self.stats_payload()})
@@ -432,7 +440,7 @@ class Console:
             "ok": True,
             "mode": st.get("mode"),
             "port": st.get("port") or None,
-            "baud": int(st.get("baud") or 230400),
+            "baud": int(st.get("baud") or 921600),
             "connected": bool(st.get("open")),
             "stats": {
                 "rx": int(st.get("rx_frames", 0)), "tx": int(st.get("tx_frames", 0)),
@@ -449,18 +457,31 @@ class Console:
     def stats_payload(self) -> dict:
         """契约 §4 的 `stats` 事件。
 
-        `busy_pct` = 车上控制中断占用率（`loop_us / 5000µs`，控制周期 5ms）—— 这是桥上
-        唯一能真实拿到的"负载"，不用假数字。
-        """
+        两个帧率**别混**：
+          · `telem_hz`      = **实测**（1s 窗口数出来的帧率）—— 界面显示帧率用这个；
+          · `telem_hz_set`  = 车上固件报的**设定值**（和 `/api/link` 的 `telem_hz` 同源）。
+        2026-10-05 修（用户 m30228「不是还换了 200Hz 吗，为什么还是 100Hz」）：原来这里回的是
+        设定值，实测值算完就丢 ⇒ 界面上"设成 200 还是显示 100/之前的值"，永远看不出链路
+        真实吞吐（921600 下 100Hz 只占约 8% 带宽、200Hz 约 15%，到底跑没跑得动只能看实测）。
+
+        `busy_pct` = 车上**主循环里界面刷新**（`app_ui_tick`）耗时占 5ms 控制拍的比例，
+        源自固件遥测 `loop_us`（`host_link.c:465`）。它**不是**控制中断占用 —— 实测控制中断
+        只有 ~9µs（RTT `ISR: avg=9 us`），而界面刷新平均 834µs、峰值 4.3ms，所以这个数会
+        在 0.2% 和 81% 之间跳。"""
         with self.lock:
             link = self.link_payload()
             t = self.telem or {}
             busy = 0.0
             try:
                 busy = max(0.0, min(100.0, float(t.get("loop_us", 0)) / 5000.0 * 100.0))
+                loop_us = max(0, int(t.get("loop_us", 0) or 0))
             except Exception:
                 busy = 0.0
-        return {"stats": link["stats"], "telem_hz": link["telem_hz"],
+                loop_us = 0
+            measured = int(self.measured_hz)
+            measured_tx = int(self.measured_tx_hz)
+        return {"stats": link["stats"], "telem_hz": measured, "telem_hz_set": link["telem_hz"],
+                "telem_tx_hz": measured_tx, "loop_us": loop_us,
                 "last_rx_ms": link["last_rx_ms"], "busy_pct": round(busy, 1)}
 
     def params_payload(self) -> dict:

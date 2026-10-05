@@ -78,7 +78,9 @@ const HZ_MAX = 200
 export function ControlPage() {
   const { link, stats, params, telem } = useStore()
   const isTaskRunning = telem?.task_id !== undefined && telem.task_id !== 0xff
-  const [hz, setHz] = React.useState(50)
+  // 初值取车上固件的默认值（`host_link.c:1087 s_stats.telem_hz = 200u`）：以前写 50，后来 100，
+  // 没连车时显示的数字跟车上打架。连上后由 link.telem_hz（车上报的**设定值**）覆盖。
+  const [hz, setHz] = React.useState(200)
 
   React.useEffect(() => {
     if (link?.telem_hz) {
@@ -129,13 +131,16 @@ export function ControlPage() {
             下发频率
           </button>
           <div className="mt-2 text-[12px] text-slate-400">
-            车上钳在 {HZ_MIN}–{HZ_MAX}Hz（默认 100）。调高后盯下面的
+            车上钳在 {HZ_MIN}–{HZ_MAX}Hz（默认 100）。调高后看右边的
+            <span className="text-slate-300"> 实测帧率 </span>
+            有没有跟上设定值；再盯
             <span className="text-slate-300"> 丢帧 / 校验错 </span>
             不为 0 就说明链路吃不消，降回来。
           </div>
           <div className="mt-3 grid grid-cols-2 gap-3">
             <div className="text-[12px] text-slate-400">
-              实测帧率 <span className="num text-slate-200">{fmt(stats?.telem_hz ?? link?.telem_hz, 1)} Hz</span>
+              实测帧率 <span className="num text-slate-200">{fmt(stats?.telem_hz ?? null, 1)} Hz</span>
+              <span className="text-slate-500"> / 设定 {link?.telem_hz ?? '--'} Hz</span>
             </div>
             <div className="text-[12px] text-slate-400" title="半截或认不出来的帧数，正常是 0">
               丢帧 <span className="num text-slate-200">{fmt(stats?.stats.drops ?? link?.stats.drops, 0)}</span>

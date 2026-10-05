@@ -7,8 +7,12 @@ import { bytesToHuman, fmt, fmtInt } from '../lib/format'
 export function SettingsPage() {
   const { link, settings, sse, stats, ports, presets } = useMeta()
   const [port, setPort] = React.useState(link?.port ?? 'COM26')
-  const [baud, setBaud] = React.useState(String(link?.baud ?? 230400))
+  const [baud, setBaud] = React.useState(String(link?.baud ?? 921600))
   const [busy, setBusy] = React.useState(false)
+  // 环形缓冲能装多久取决于**实际**遥测帧率（车上固件默认 100Hz，不是老文案里的 50Hz）：
+  // 优先用桥数出来的**实测**值，没收到 stats 事件就退回车上报的设定值，再没有按 100 估。
+  const measuredHz = stats?.telem_hz ?? 0
+  const hzEff = measuredHz > 0 ? measuredHz : (link?.telem_hz ?? 100)
 
   // 只在"真串口"这条链路上把口名同步进输入框：不然会拿着一个不是串口的字符串去连
   // （出过一次事故，见 bridge/server.py 里 _serial_port_ok 的注释）。
@@ -79,8 +83,13 @@ export function SettingsPage() {
               <div title="网页和本地桥之间的实时推送通道：已连 = 正常">
                 实时推送：{sse === 'open' ? '已连' : sse === 'connecting' ? '连接中' : '断开'}
               </div>
-              <div title="车上控制器每 5 毫秒跑一拍，这里是这 5 毫秒被占掉了多少 —— 不是电脑的负载">
-                车上控制占用：{fmt(stats?.busy_pct, 1)}%
+              <div title="车上主循环里那拍界面刷新（app_ui_tick）的耗时占 5ms 控制拍的比例，来自固件遥测 loop_us/5000。它不是控制中断的占用（控制中断实测只有 ~9µs），也不是电脑的负载；随刷屏在 0.2%~81% 之间跳，平均约 17%">
+                车上界面刷新：{fmt(stats?.busy_pct, 1)}%
+              </div>
+              <div title="实测 = 桥按 1s 窗口数出来的帧率；设定 = 车上固件报的目标值（CMD_SET_TELEM_HZ）。两个不一样就说明链路没跑到设定值">
+                遥测帧率：<span className="num">{fmt(stats?.telem_hz, 1)}</span>
+                <span className="text-slate-500"> / 设定 </span>
+                <span className="num">{link?.telem_hz ?? '--'}</span> Hz
               </div>
               <div title="桥从车上收到的帧数 / 往车上发出的帧数">
                 收到 / 发出帧：<span className="num">{fmtInt(link?.stats.rx)}/{fmtInt(link?.stats.tx)}</span>
@@ -90,7 +99,10 @@ export function SettingsPage() {
               </div>
             </div>
             <p className="text-[12px] leading-relaxed text-slate-500">
-              真车要连的是无线下载器那个虚拟串口（默认 230400 8N1，跟板上固件 `board.c` 的 `DL_BAUD` 一致；车上那颗 J-Link VCOM 的上限也是 230400）。桥只监听 127.0.0.1，不对外开放。
+              波特率的唯一真值是固件 `firmware/Core/Src/board.c` 里的 `DL_BAUD`（2026-10-05
+              起是 921600 8N1）—— 桥的 `--baud`、这个输入框、文档都得跟它一致。车上的第二颗
+              探针（`OB-RA4M2-Full`，COM27）VCOM 逐档实测到 3 Mbaud 都通；旧那颗 V9
+              （PID_0105）的上限才是 230400，对它会先拦下来（`bridge/serial_safety.py`）。
             </p>
           </div>
         </Card>
@@ -109,7 +121,8 @@ export function SettingsPage() {
               />
             </div>
             <div className="text-[12px] text-slate-500">
-              约 {bytesToHuman(settings.ringPoints * (8 + 18 * 4))}（时间戳 8B + 每通道 4B）。50Hz 下 30000 点 ≈ 10 分钟。
+              约 {bytesToHuman(settings.ringPoints * (8 + 18 * 4))}（时间戳 8B + 每通道 4B）。
+              {fmt(hzEff, 0)}Hz 下 {fmtInt(settings.ringPoints)} 点 ≈ {fmt(settings.ringPoints / hzEff / 60, 1)} 分钟。
             </div>
             <div className="flex items-center justify-between">
               <span className="text-[13px] text-slate-300">波形窗口</span>

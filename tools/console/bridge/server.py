@@ -52,7 +52,7 @@ def group_sse(evs: list[dict], batch_max: int = 64) -> list[tuple[str, object]]:
 class Bridge:
     """一条链路 + 一个 Console + 一个 HTTP 服务（`--serial` 可以在运行时换）。"""
 
-    def __init__(self, mode: str = "sim", port: str = "", baud: int = 230400,
+    def __init__(self, mode: str = "sim", port: str = "", baud: int = 921600,
                  web_root: str = "", log_dir: str = "",
                  preset_dir: str = "", console_dir: str = "",
                  sse_batch_ms: int = SSE_BATCH_MS_DEFAULT):

@@ -53,8 +53,8 @@ def parse_args(argv=None):
     ap.add_argument("--port", type=int, default=8770, help="HTTP 端口，默认 8770")
     ap.add_argument("--sim", action="store_true", help="内置仿真车（无车也能跑，契约要求）")
     ap.add_argument("--serial", metavar="COMX", help="串口设备名，例如 COM26")
-    ap.add_argument("--baud", type=int, default=230400,
-                    help="波特率，默认 230400（和板上固件的 DL_BAUD 一致；要 921600 得换普通 USB-TTL 接 U12）")
+    ap.add_argument("--baud", type=int, default=921600,
+                    help="波特率，默认 921600（和板上固件的 DL_BAUD 一致；车上第二颗探针的 VCOM 实测能到 3 Mbaud）")
     ap.add_argument("--web", metavar="DIR", help="前端 dist 目录（默认 tools/console/web/dist）")
     ap.add_argument("--no-browser", action="store_true", help="不自动打开浏览器")
     ap.add_argument("--list-ports", action="store_true", help="列出串口后退出")
@@ -64,7 +64,8 @@ def parse_args(argv=None):
                     help=f"SSE 按 N 毫秒攒批，连续遥测合成一条 telem_batch（默认 "
                          f"{SSE_BATCH_MS_DEFAULT}；0 = 不合并，一事件一报文）")
     ap.add_argument("--force-baud", action="store_true", dest="force_baud",
-                    help="不拦 J-Link CDC 口上 >230400 的波特率（会让探针崩进 bootloader 态，慎用）")
+                    help="不拦超过该探针实测上限的波特率（旧探针 PID_0105 上限 230400，"
+                         "超了会崩进 bootloader 态、只能物理拔插恢复；慎用）")
     return ap.parse_args(argv)
 
 

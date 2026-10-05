@@ -6,7 +6,7 @@
 三种接法（前两种本工具自己起桥、量完就关；第三种量已经在跑的桥）：
 
     python -m bridge.bench --attach 8770              # 量正在跑的真车桥（最常用）
-    python -m bridge.bench --serial COM26 --baud 230400
+    python -m bridge.bench --serial COM27 --baud 921600
     python -m bridge.bench --sim                      # 仿真车：量"发指令 → 遥测里看见"
 
 说明白它能说明什么、不能说明什么：
@@ -16,8 +16,10 @@
 - 唯一会让**所有**数字都动的是 Windows 计时器精度：不提高（系统默认 ~15.6ms）时
   `LinkRunner` 的 5ms 轮询实际只有 ~64 次/s，100Hz 遥测会被攒成串。桥默认会提高，
   本工具的子进程也默认提高；对照组加 `--low-res-timer`。
-- `--serial` 开的是 J-Link 的 CDC VCOM 时，>230400 会被**拦住**（实测那颗探针试 460800/921600
-  会把 USB 栈打进 bootloader 态，只能物理拔插）。确实要试加 `--force-baud`。
+- `--serial` 开的是 J-Link 的 CDC VCOM 时，超过**那颗探针**实测上限的档会被**拦住**
+  （旧 V9 / PID_0105 的上限是 230400，试 460800/921600 会把 USB 栈打进 bootloader 态、
+  只能物理拔插；车上现在这颗 OB-RA4M2-Full / PID_1024 实测到 3 Mbaud 都好）。确实要试加
+  `--force-baud`；按 PID 分的上限表在 `bridge/serial_safety.py`。
 
 判定/汇总逻辑（`parse_sse` / `pct` / `summarize` / `format_report` / `serial_verdict`）都是纯函数，
 由 `tools/console/tests/test_bench.py` 钉住；这里只有 socket / 子进程 / Windows API 是 I/O。
@@ -440,10 +442,10 @@ def main(argv=None) -> int:
     g.add_argument("--attach", type=int, metavar="PORT", help="量已经在跑的桥（不启不停）")
     g.add_argument("--serial", metavar="COM", help="自己起桥连串口（真车）")
     g.add_argument("--sim", action="store_true", help="自己起桥跑仿真车：量指令往返")
-    ap.add_argument("--baud", type=int, default=230400,
+    ap.add_argument("--baud", type=int, default=921600,
                     help="--serial 用的波特率（默认跟板上固件的 DL_BAUD 一致）")
     ap.add_argument("--force-baud", action="store_true", dest="force_baud",
-                    help="不拦 J-Link CDC 口上 >230400 的波特率（会让探针崩进 bootloader 态，慎用）")
+                    help="不拦超过探针实测上限的波特率（旧探针 PID_0105 上限 230400，超了会崩进 bootloader 态，慎用）")
     ap.add_argument("--seconds", type=float, default=6.0, help="每档量多久，默认 6s")
     ap.add_argument("--low-res-timer", action="store_true",
                     help="起桥时不提高 Windows 计时器精度（对照：轮询掉到 ~64 次/s）")

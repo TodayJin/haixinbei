@@ -209,7 +209,10 @@ const FW_CAPS: { bit: number; name: string }[] = [
 
 /** 温度/状态（如果有）：固件节拍与模式 */
 function StatusCard() {
-  const telemHz = useHotSelect((s) => s.link?.telem_hz ?? null)
+  // 遥测帧率显示**实测**（桥按 1s 窗口数出来的）；stats 事件还没来就显示 '--'，
+  // 别拿 link.telem_hz（那是车上报的设定值）冒充实测。
+  const telemHz = useHotSelect((s) => s.stats?.telem_hz ?? null)
+  const telemHzSet = useHotSelect((s) => s.link?.telem_hz ?? null)
   const loopUs = useHotSelect((s) => s.telem?.loop_us ?? null)
   const mode = useHotSelect((s) => s.telem?.mode ?? null)
   const taskId = useHotSelect((s) => s.telem?.task_id ?? null)
@@ -218,7 +221,7 @@ function StatusCard() {
   return (
     <Card title="温度/状态（如果有）">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="遥测帧率" value={fmt(telemHz, 1)} unit="Hz" />
+        <Stat label="遥测帧率" value={fmt(telemHz, 1)} unit="Hz" hint={`设定 ${telemHzSet ?? '--'} Hz`} />
         <Stat label="主循环" value={fmt(loopUs, 0)} unit="µs" />
         <Stat label="整车模式" value={`${mode ?? '--'}`} hint={`当前任务 ${taskText(taskId ?? undefined)}`} />
         <Stat label="动作号" value={`${action ?? '--'}`} />

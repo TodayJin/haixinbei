@@ -7,10 +7,17 @@
  * mock 没起来就整体 skip（不让 CI 因为"没开服务"变红）。这层检查的价值：
  *  §3.x 的字段名/单位、§4 的 SSE 事件名、错误体 `{ok:false,error,code}` 的形状 —— 
  *  只要桥实现和 API.md 有一点对不上，这里就会失败。
+ *
+ * **必须显式给 `CONSOLE_BASE` 才跑**（2026-10-05 修）：默认那个 127.0.0.1:8770 上很可能
+ * 正连着真车，而本文件会发**写操作**（连串口、烧任务、运行任务）—— 那天就差点在真车上
+ * 把任务跑起来（任务被车以 status=3 拒了才没跑）。要跑：
+ *   `PORT=8790 node mock/server.mjs` + `CONSOLE_BASE=http://127.0.0.1:8790 npx vitest run src/lib/contract.test.ts`
  */
 import { beforeAll, describe, expect, it } from 'vitest'
 
 const BASE = process.env.CONSOLE_BASE || 'http://127.0.0.1:8770'
+/** 只有显式指定 mock 的地址才真的跑；没给就 skip，绝不去碰 8770 上的真车桥 */
+const OPT_IN = !!process.env.CONSOLE_BASE
 let live = false
 
 async function getJson(path: string, init?: RequestInit) {
@@ -28,7 +35,7 @@ beforeAll(async () => {
   if (!live) console.warn(`[contract] ${BASE} 没起来，跳过契约自检（先跑 node mock/server.mjs）`)
 })
 
-describe('契约自检（需要 mock 或桥在 127.0.0.1:8770）', () => {
+describe.skipIf(!OPT_IN)('契约自检（需要 mock 桥：设 CONSOLE_BASE）', () => {
   it('health/link 字段形状', async () => {
     if (!live) return
     const h = await getJson('/api/health')

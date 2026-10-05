@@ -100,7 +100,7 @@ const link = {
   ok: true,
   mode: 'sim',
   port: null,
-  baud: 230400,
+  baud: 921600,
   connected: true,
   stats: { rx: 0, tx: 0, crc: 0, resync: 0, drops: 0 },
   telem_hz: 50,
@@ -374,7 +374,7 @@ const server = http.createServer(async (req, res) => {
       if (!['sim', 'serial'].includes(body.mode)) return fail(res, 400, 'mode 必须是 sim/serial', 'bad_param')
       link.mode = body.mode
       link.port = body.port ?? null
-      link.baud = body.baud ?? 230400
+      link.baud = body.baud ?? 921600
       link.connected = true
       link.note = ''
       log('info', `已连接：${link.mode}${link.mode === 'serial' && link.port ? ' ' + link.port : ''}`)

@@ -32,6 +32,8 @@ import { ControlPage } from '../pages/Control'
 import { SettingsPage } from '../pages/Settings'
 
 const BASE = process.env.CONSOLE_BASE || 'http://127.0.0.1:8770'
+/** 只有显式指定 mock 的地址才跑：8770 默认那个很可能连着真车桥，别拿它当 mock 用 */
+const OPT_IN = !!process.env.CONSOLE_BASE
 /** 本文件在 <仓库根>/tools/console/web/src/lib ⇒ 上溯 5 级就是仓库根 */
 const HERE = dirname(fileURLToPath(import.meta.url))
 const OUT_DIR = resolve(HERE, '..', '..', '..', '..', '..', 'out', 'console', 'ssr')
@@ -86,7 +88,7 @@ async function readCss(): Promise<string> {
   return readFile(join(assets, css), 'utf8')
 }
 
-describe('SSR 预览生成（需要 mock 在 127.0.0.1:8770）', () => {
+describe.skipIf(!OPT_IN)('SSR 预览生成（需要 mock 桥：设 CONSOLE_BASE）', () => {
   it('把 10 个页面渲染成 out/console/ssr/*.html', async () => {
     let live = false
     try {

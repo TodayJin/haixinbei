@@ -2,11 +2,11 @@
 
 > 前端（`tools/console/web/`）与 Python 桥（`tools/console/bridge/`）之间**唯一的约定**。
 > 双方都不得单方面改动；要改先改本文件并在提交信息里写明。
-> 数据方向：小车 ──(LPUART1 230400, 帧协议)──> 桥 ──(HTTP + SSE, localhost)──> 浏览器。
+> 数据方向：小车 ──(LPUART1 921600, 帧协议)──> 桥 ──(HTTP + SSE, localhost)──> 浏览器。
 
 ## 0. 运行形态
 
-- 一键启动（双击，不用手敲命令）：`tools/console/启动上位机.bat`（真车：自动找串口，230400）、
+- 一键启动（双击，不用手敲命令）：`tools/console/启动上位机.bat`（真车：自动找串口，921600）、
   `启动上位机-仿真.bat`（内置仿真车，无车也能开）、`启动上位机-列串口.bat`（只看车在哪个 COM）；
   逻辑都在 `tools/console/launch.ps1`（手工用：`pwsh -File tools\console\launch.ps1 -Sim -NoBrowser`）。
 - 桥只依赖 **Python 3.11+ 标准库 + pyserial**；手工跑：`cd tools/console && python -m bridge.main --serial COM26`
@@ -62,7 +62,7 @@
 {
   "ok": true,
   "mode": "sim",                  // sim | serial
-  "port": "COM26", "baud": 230400,    // 代码默认 230400 = 板上固件 board.c 的 DL_BAUD（车上 J-Link VCOM 的上限也是它）
+  "port": "COM27", "baud": 921600,    // 代码默认 921600 = 板上固件 board.c 的 DL_BAUD（2026-10-05 定档）
   "connected": true,
   "stats": {"rx": 0, "tx": 0, "crc": 0, "resync": 0, "drops": 0},
   "telem_hz": 100,
@@ -142,9 +142,9 @@
 | event | 频率 | data |
 |---|---|---|
 | `state` | 连接时 1 次 | `{"link":…,"params":…,"actions":…,"presets":[…],"cal":…}` |
-| `telem` | ≤ 小车遥测频率（默认 50Hz） | 见下 |
+| `telem` | 小车遥测频率（**车上固件默认 200Hz**：`firmware/App/Svc/host_link.c:1087`；`--sim` 仿真车默认 50Hz） | 见下 |
 | `telem_batch` | 同 `telem`，但连续帧按 `--sse-batch-ms` 攒成一条 | `[<telem>, <telem>, …]`（2 帧起） |
-| `stats` | 1 Hz | `{"stats":…,"telem_hz":50,"last_rx_ms":3,"busy_pct":12.3}` |
+| `stats` | 1 Hz | `{"stats":…,"telem_hz":42,"telem_hz_set":137,"telem_tx_hz":7,"loop_us":834,"last_rx_ms":3,"busy_pct":12.3}`。<br>**`telem_hz` 是实测**（1s 窗口数出来的帧率）、`telem_hz_set` 才是车上报的设定值 —— 界面显示帧率一律用实测那个（2026-10-05 修：原来两个都回设定值，"设 200Hz 还显示 100Hz"）。`loop_us`/`busy_pct` 是车上**主循环里界面刷新**的耗时与占 5ms 控制拍的比例，**不是**控制中断占用（控制中断实测 ~9µs） |
 | `log` | 事件驱动 | `{"ts_ms":…,"level":"rx"\|"tx"\|"info"\|"warn"\|"error","text":"…"}` |
 | `ack` | 事件驱动 | `{"seq":12,"req":"params.set","status":0,"ok":true,"text":"…"}` |
 | `actions` | 改动/读回时 | `{"items":[…同 §3.3…]}` |
