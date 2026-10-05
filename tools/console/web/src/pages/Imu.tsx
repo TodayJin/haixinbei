@@ -66,15 +66,21 @@ function WaveCard({ channel }: { channel: string }) {
 /** 车姿态（3D）+ 三个读数 */
 function AttitudeCard() {
   const yaw = useHotSelect((s) => s.telem?.yaw ?? null)
-  const pitch = useHotSelect((s) => s.telem?.pitch ?? null)
-  const roll = useHotSelect((s) => s.telem?.roll ?? null)
+  // 遥测帧里的同名字段：**pitch 是车身横滚源、roll 是车身俯仰源**（车上那颗 JY61P 装成
+  // 横的，见 `lib/channels.ts` 的注释与 `lib/attitude3d.ts` 文件头 M3 那套映射）。
+  // 3D 模型收**原始字段**、自己按固件 gyro_view_angles() 的旋转摆；卡片读数按**车体轴**
+  // 显示 —— 跟波形页同名通道、跟模型同一个口径。
+  const rawPitch = useHotSelect((s) => s.telem?.pitch ?? null)
+  const rawRoll = useHotSelect((s) => s.telem?.roll ?? null)
+  const bodyPitch = rawRoll
+  const bodyRoll = rawPitch
   const gyroOk = useHotSelect((s) => s.telem?.flags.gyro_ok ?? false)
   return (
     <Card
       title="车姿态（3D）"
       right={<Badge tone={gyroOk ? 'mint' : 'rose'}>{gyroOk ? '陀螺在线' : '陀螺离线'}</Badge>}
     >
-      <Car3D yaw={yaw ?? undefined} pitch={pitch ?? undefined} roll={roll ?? undefined} />
+      <Car3D yaw={yaw ?? undefined} pitch={rawPitch ?? undefined} roll={rawRoll ?? undefined} />
       <div className="mt-3 grid grid-cols-3 gap-3">
         <Stat
           label="偏航"
@@ -83,18 +89,22 @@ function AttitudeCard() {
           tone="cyan"
           hint={`罗盘 ${compassText(yaw ?? undefined, 0)}`}
         />
-        <Stat label="俯仰" value={fmt(pitch, 1)} unit="°" tone="violet" hint="模型：+ = 向左倾" />
-        <Stat label="横滚" value={fmt(roll, 1)} unit="°" tone="mint" hint="模型：+ = 低头" />
+        <Stat label="俯仰" value={fmt(bodyPitch, 1)} unit="°" tone="violet" hint="模型：+ = 低头" />
+        <Stat label="横滚" value={fmt(bodyRoll, 1)} unit="°" tone="mint" hint="模型：+ = 向左倾" />
       </div>
       <div className="mt-2 text-[11px] leading-relaxed text-slate-500">
         3D 模型跟固件 OLED 上那个方框同口径（<span className="text-slate-400">app_ui.c 的 gyro_view_angles()，默认档 M3</span>）：
         固件把遥测的 <span className="text-slate-400">pitch 当横滚源（取反）、roll 当俯仰源</span>，
         所以模型是 <span className="text-slate-400">rotateZ(+pitch) rotateX(−roll)</span>
-        —— 俯仰读数变大车向左倾、横滚读数变大车低头。
+        —— 遥测 pitch 变大车向左倾、遥测 roll 变大车低头。
       </div>
       <div className="mt-1 text-[11px] leading-relaxed text-slate-500">
-        两个读数的取值没动，仍是遥测原始帧的 pitch/roll（跟波形页同一把尺子）；
-        固件屏上右侧那三行数字走的是另一套取反习惯，默认档下跟方框的符号并不一致。
+        上面两个读数、波形页同名通道都是<span className="text-slate-400">车体轴</span>（用户 m30822：
+        原来直接取了同名字段，两路是反的）：<span className="text-slate-400">俯仰 ← 遥测 roll、横滚 ← 遥测 pitch</span>，
+        符号不动（+横滚 = 车向左倾、+俯仰 = 低头），跟模型一句口诀。
+      </div>
+      <div className="mt-1 text-[11px] leading-relaxed text-slate-500">
+        别跟车上屏右侧那三行数字比符号：固件屏走的是另一套取反习惯，默认档下俯仰的符号与方框相反。
       </div>
     </Card>
   )

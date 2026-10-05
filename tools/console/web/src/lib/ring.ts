@@ -37,9 +37,9 @@ export interface FieldView {
   v: Float32Array
   /** 抽稀后的点数 */
   count: number
-  /** `v[0]` 在环形缓冲里的**绝对下标**（0 = 当前最旧的一条） */
+  /** `v[0]` 的**绝对样本号**（从构造/`clear()` 起第几条，单调递增；恒有 `start % step === 0`） */
   start: number
-  /** 抽稀步长（绝对下标 % step === 0 的样本才会被留下） */
+  /** 抽稀步长（绝对样本号 % step === 0 的样本才会被留下） */
   step: number
   /** 窗口内的原始点数（未抽稀） */
   windowCount: number
@@ -49,6 +49,8 @@ export interface FieldView {
   max: number
   /** 窗口内最新一个值；窗口为空时 NaN */
   last: number
+  /** 窗口右端时间（毫秒）= 最后一帧时间戳（给了 `nowMs` 就是它）；窗口空时 NaN */
+  endT: number
 }
 
 const EMPTY_VIEW: FieldView = {
@@ -61,6 +63,7 @@ const EMPTY_VIEW: FieldView = {
   min: Number.NaN,
   max: Number.NaN,
   last: Number.NaN,
+  endT: Number.NaN,
 }
 
 /**
@@ -86,6 +89,12 @@ export class SeriesRing {
   private ch: Float32Array[]
   private head = 0 // 下一个写入位置
   private len = 0
+  /**
+   * 累计写入条数（从构造/`clear()` 起单调递增，不受环绕影响）。
+   *
+   * 抽稀网格的相位必须锚在**这个**数上 —— 见 `view()`。
+   */
+  private seq = 0
 
   constructor(capacity: number, fields: number) {
     if (capacity < 1) throw new Error('容量必须 ≥ 1')
@@ -111,6 +120,7 @@ export class SeriesRing {
   clear(): void {
     this.head = 0
     this.len = 0
+    this.seq = 0
   }
 
   /** 改容量：保留最近的数据 */
@@ -141,6 +151,7 @@ export class SeriesRing {
     }
     this.head = (this.head + 1) % this.cap
     if (this.len < this.cap) this.len++
+    this.seq++
   }
 
   /** 第 k 个"逻辑下标"（0 = 最旧）对应的物理下标 */
@@ -148,9 +159,12 @@ export class SeriesRing {
     return (this.head - this.len + k + this.cap * 2) % this.cap
   }
 
-  /** 取最近 windowMs 毫秒的**起止下标**（二分定位，snapshot/snapshotField 共用） */
-  private range(windowMs: number, nowMs?: number): { lo: number; count: number } {
-    if (this.len === 0) return { lo: 0, count: 0 }
+  /**
+   * 取最近 windowMs 毫秒的**起止下标** + 窗口右端时间（二分定位，snapshot/snapshotField/view 共用）。
+   * `end` 透给波形当 x 轴右端点（`view().endT`）。
+   */
+  private range(windowMs: number, nowMs?: number): { lo: number; count: number; end: number } {
+    if (this.len === 0) return { lo: 0, count: 0, end: Number.NaN }
     const lastIdx = this.phys(this.len - 1)
     const end = nowMs === undefined ? this.t[lastIdx] : nowMs
     const from = end - Math.max(0, windowMs)
@@ -163,7 +177,7 @@ export class SeriesRing {
       if (this.t[this.phys(mid)] < from) lo = mid + 1
       else hi = mid
     }
-    return { lo, count: this.len - lo }
+    return { lo, count: this.len - lo, end }
   }
 
   /** 取最近 windowMs 毫秒（相对最后一帧时间戳），按时间升序 */
@@ -203,14 +217,23 @@ export class SeriesRing {
   /**
    * 显示窗口 = **稳定相位**抽稀 + 整窗极值/末值，一次扫描。
    *
-   * 相位锚在**绝对下标**上（只留 `absIdx % step === 0` 的样本），不是锚在窗口数组的
-   * `i=0` 上：窗口每滑一格，`snapshotField()[0]` 就换一个样本，从 `i=0` 起步的抽稀网格
-   * 会让**每个**采样点都换样本 ⇒ 折线整条抖（用户 m22973「波形一直在闪来闪去」的根因之一）。
-   * 锚绝对下标后，两次窗口重叠部分的采样点一个不动，只有两端进出。
+   * 相位锚在**绝对样本号**上（`seq - len + k`，只留 `abs % step === 0` 的样本），
+   * 不是锚在窗口数组的 `i=0` 上：窗口每滑一格，`snapshotField()[0]` 就换一个样本，
+   * 从 `i=0` 起步的抽稀网格会让**每个**采样点都换样本 ⇒ 折线整条抖
+   * （用户 m22973「波形一直在闪来闪去」的根因之一）。
+   *
+   * 这里踩过的坑（用户 m30822「已经走过的那段会乱跳」）：锚的那个数必须是**绝对样本号**。
+   * 第一版锚的是 `lo`（环内逻辑下标，0 = 环里最旧一条）—— 环没满时它恰好等于绝对号，
+   * 所以看着没问题；**一旦环绕回（`len === cap`）**，`phys(k)` 随 push 整体滑动，
+   * 条件就退化成「物理下标 ≡ push 次数 (mod step)」⇒ 每帧整条线换一批样本
+   * （20s 窗口抽到 800 点时 step≈5，每 5 帧换一批）⇒ 已画过的段一直在动。
+   *
+   * 锚绝对样本号后，两次窗口重叠部分的采样点一个不动，只有两端进出；`start` 是 `v[0]`
+   * 的绝对样本号（因此恒有 `start % step === 0`），`endT` 是窗口右端时间。
    */
   view(windowMs: number, fieldIndex: number, maxPoints: number, stepHint = 1, nowMs?: number): FieldView {
     const f = Math.max(0, Math.min(this.fields - 1, Math.floor(fieldIndex)))
-    const { lo, count } = this.range(windowMs, nowMs)
+    const { lo, count, end } = this.range(windowMs, nowMs)
     if (count === 0) return EMPTY_VIEW
     const src = this.ch[f]
 
@@ -225,8 +248,9 @@ export class SeriesRing {
     const last = src[this.phys(lo + count - 1)]
 
     const step = decimationStep(count, maxPoints, stepHint)
-    // 第一个落在绝对网格上的偏移：使 (lo + off) % step === 0
-    const off = (step - (lo % step)) % step
+    // 相位网格锚在**绝对样本号**上：`abs0` = 窗口第一条的绝对样本号（`seq - len` = 环里最旧那条的绝对号）
+    const abs0 = this.seq - this.len + lo
+    const off = (step - (abs0 % step)) % step
     const n = off >= count ? 0 : Math.floor((count - 1 - off) / step) + 1
     const t = new Float64Array(n)
     const v = new Float32Array(n)
@@ -235,7 +259,7 @@ export class SeriesRing {
       t[k] = this.t[p]
       v[k] = src[p]
     }
-    return { t, v, count: n, start: lo + off, step, windowCount: count, min, max, last }
+    return { t, v, count: n, start: abs0 + off, step, windowCount: count, min, max, last, endT: end }
   }
 
   /**

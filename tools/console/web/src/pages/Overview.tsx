@@ -100,7 +100,13 @@ export function OverviewPage() {
       <Card title="关键量" className="xl:col-span-2" right={<span className="num text-[12px] text-slate-500">{fmtClock(t?.t_host)}</span>}>
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Stat label="偏航" value={fmt(t?.yaw, 1)} unit="°" tone="cyan" size="lg" />
-          <Stat label="俯仰 / 横滚" value={`${fmt(t?.pitch, 1)} / ${fmt(t?.roll, 1)}`} unit="°" />
+          {/* 车体轴（已对调，见 lib/channels.ts）：俯仰 ← 遥测 roll、横滚 ← 遥测 pitch */}
+          <Stat
+            label="俯仰 / 横滚"
+            value={`${fmt(t?.roll, 1)} / ${fmt(t?.pitch, 1)}`}
+            unit="°"
+            title="车体轴：+俯仰 = 低头、+横滚 = 车向左倾（跟 IMU 页 3D 模型同口径）"
+          />
           <Stat label="左 / 右轮速" value={`${fmt(t?.vl, 0)} / ${fmt(t?.vr, 0)}`} unit="mm/s" />
           <Stat
             label="电池 / 电流"

@@ -11,6 +11,7 @@ import React from 'react'
 import uPlot from 'uplot'
 import 'uplot/dist/uPlot.min.css'
 import { CHANNEL_BY_KEY, CHANNELS } from '../lib/channels'
+import { nextRange, type ValueRange } from '../lib/sparkline'
 import { store, useHotSelect, useHotVersion, useMeta } from '../lib/store'
 
 /** channel key -> 环形缓冲里的字段下标（与 CHANNELS 顺序一致） */
@@ -45,6 +46,12 @@ function ScopeLane({ channelKey, windowMs, paused, height = 96, onHover }: LaneP
   const version = useHotVersion()
   const ringFill = useHotSelect((s) => s.ringFill)
   const stepRef = React.useRef(1)
+  // 纵轴量程的滞回包络（`lib/sparkline.ts` 的 `nextRange`）：幅度真的变大才立刻往外扩，
+  // 往里收很慢。不管的话 uPlot 每 tick 按当前窗口极值重算 —— 极值差一点点整条线就
+  // 上下重标，看起来就是"已经走过的那段在跳"（用户 m30822）。
+  const rangeRef = React.useRef<ValueRange | null>(null)
+  // x 轴右端固定成窗口长度（窗口选择变了由推数据 effect 更新）
+  const winRef = React.useRef(windowMs)
 
   // 建图（只建一次）
   React.useEffect(() => {
@@ -60,8 +67,19 @@ function ScopeLane({ channelKey, windowMs, paused, height = 96, onHover }: LaneP
         drag: { x: false, y: false },
       },
       scales: {
-        x: { time: false },
-        y: { auto: true },
+        // x 钉在 [0, 窗口长度]：数据的时间零点取"窗口右端 - windowMs"（见推数据 effect），
+        // 右端固定、曲线平滑左滑。交给 uPlot 自己 auto 的话，每 tick 都会按数据极值
+        // 微调横轴（数据首点随抽稀相位变），看着也在抖。
+        x: { time: false, auto: true, range: () => [0, winRef.current / 1000] },
+        // 纵轴量程走 `rangeRef` 的滞回包络；`auto: true` 是为了让 uPlot 把 dataMin/dataMax
+        // 交给下面的 range 回调（`auto: false` 时它根本不调 range，量程永远空）。
+        y: {
+          auto: true,
+          range: (_u, dataMin, dataMax) => {
+            const r = rangeRef.current
+            return r ? [r.lo, r.hi] : [dataMin, dataMax]
+          },
+        },
       },
       axes: [
         {
@@ -131,9 +149,16 @@ function ScopeLane({ channelKey, windowMs, paused, height = 96, onHover }: LaneP
     const view = store.ring.view(windowMs, idx, LANE_MAX_POINTS, stepRef.current)
     stepRef.current = view.step
     if (view.count < 2) return
-    const t0 = view.t[0]
+    winRef.current = windowMs
+    // x 的时间零点取**窗口右端 - 窗口长度**，不是第一个抽稀点的时间：右端固定、曲线整体
+    // 平滑左滑。用 `view.t[0]` 的话，每换一档抽稀相位整条线就横移一格（边界上跳一下）。
+    const t0 = (Number.isFinite(view.endT) ? view.endT : view.t[view.count - 1]) - windowMs
     const xs = new Float64Array(view.count)
     for (let i = 0; i < view.count; i++) xs[i] = (view.t[i] - t0) / 1000
+    // 纵轴目标量程用**整窗**极值：`view.min/max` 是未抽稀那一趟扫出来的，抽稀数组算会漏尖峰。
+    // 全平（max == min）时给点余量，免得量程塌成一条线。
+    const pad = view.max > view.min ? 0 : Math.max(1, Math.abs(view.max) * 0.1)
+    rangeRef.current = nextRange(rangeRef.current, { lo: view.min - pad, hi: view.max + pad })
     const data: uPlot.AlignedData = [xs, view.v]
     dataRef.current = data
     // resetScales 必须是 true：建图时是空数据，量程还是 [null, null]，
