@@ -392,8 +392,12 @@ int main(void)
         CHECK(hi == 20000.0f);
         CHECK_EQ_I(host_param_bounds(HP_GYRO_RATE_KP, &def, &lo, &hi), 1);
         /* 2026-10-05 真车循迹定稿 250 → 80（3~4Hz 横向极限环的根因），
-         * 同夜原地转圈整定再 80 → 160（配 ang_kp 7 / rate_kd 0、cap 3000） */
-        CHECK(def == 160.0f && lo == 10.0f && hi == 2000.0f);
+         * 同夜原地转圈整定再 80 → 160（配 ang_kp 7 / rate_kd 0、cap 3000）；
+         * 2026-10-06 原地转圈残余晃动定稿 160 → 40（内环 P 的 stick-slip：顶夹 27~88% → 8~11%） */
+        CHECK(def == 40.0f && lo == 10.0f && hi == 2000.0f);
+        CHECK_EQ_I(host_param_bounds(HP_GYRO_SETTLE_DEG, &def, &lo, &hi), 1);
+        /* 2026-10-06 2.0 → 1.0：起转助推在 |err| < settle_deg 时不武装，收到 1.0 才补得上最后 1° */
+        CHECK(def == 1.0f && lo == 0.2f && hi == 10.0f);
         CHECK_EQ_I(host_param_bounds(0x7777u, NULL, NULL, NULL), 0);
         CHECK_EQ_I(host_param_id_at(n), 0u);         /* 越界返回 0，不崩 */
         CHECK(host_param_table_crc() != 0u);

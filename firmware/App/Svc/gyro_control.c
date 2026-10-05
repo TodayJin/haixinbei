@@ -116,17 +116,22 @@ volatile float s_corr_spin   = 3600.0f;/* s_law=1 加速档：> 起转阈值(≈
 volatile float s_corr_hold   = 1300.0f;/* s_law=2 摩擦前馈；s_law=1 维持档 */
 volatile float s_corr_brake  = 2200.0f;/* s_law=1 反刹档 */
 volatile float s_err_stop    = 2.0f;   /* |err| < 它 ⇒ corr = 0（松手） */
-volatile float s_rate_kp     = 160.0f; /* s_law=2/3 速率环比例：PWM刻度/(°/s)。
+volatile float s_rate_kp     = 40.0f;  /* s_law=2/3 速率环比例：PWM刻度/(°/s)。
                                         * 2026-10-02 台架定 250（原 80）；2026-10-05 真车循迹降到 80
-                                        * （速率环 P 是 3~4Hz 横向极限环的根因）；同夜**原地转圈**整定再定
-                                        * 160：`corr = Kp × (rref − v)`，80 时要打到 3000 才撑得住 82°/s，
-                                        * 160 能撑到 101°/s ⇒ 配上 ang_kp 7 / rate_kd 0、cap 3000，
-                                        * 30° 阶跃上升 0.281s、无纹波。兜底初值，每拍由参数表覆盖。 */
+                                        * （速率环 P 是 3~4Hz 横向极限环的根因）；同夜**原地转圈**整定改
+                                        * 160（30° 阶跃上升 0.281s）；**2026-10-06 又 160 → 40**：
+                                        * 160 时小误差处 corr = 160×7×err 正好落在静摩擦起转阈值
+                                        * （≈3450）附近 ⇒ 到位后 corr 反复打满 ±3000 来回踢
+                                        * （"顶夹"占 27~88%、摆动 p-p 中位 6.2°）；40 之后顶夹 8~11%、
+                                        * p-p 2.6~3.1°、换向 0~1，代价只是到位慢 0.17s。
+                                        * 兜底初值，每拍由参数表覆盖。 */
 volatile float s_ff_rate     = 3.0f;   /* s_law=2 摩擦前馈的方向判定阈值 °/s */
 volatile float s_stuck_rate  = 2.0f;   /* s_law=2 "真的停住了"的角速度阈值 °/s */
 volatile float s_boost_rate  = 60000.0f;/* s_law=2 起转助推的爬升斜率 PWM/s（60000 ⇒ 60ms 到 3600） */
 volatile float s_rate_lpf    = 0.35f;  /* s_law=1/2 角速度反馈的一阶低通系数（每 5ms 一拍，0.35 ⇒ τ≈12ms） */
-volatile float s_settle_deg  = 2.0f;   /* s_law=3 停车带宽（= 原版 s_err_stop 的 2°）+ 锁存判据 */
+volatile float s_settle_deg  = 1.0f;   /* s_law=3 停车带宽（原版 s_err_stop 的 2°）+ 锁存判据。
+                                        * 2026-10-06 由 2.0 收到 1.0：起转助推在 |err| < 它时不武装
+                                        * （见 :673），rate_kp=40 时最后 1~2° 没人推 ⇒ 系统性少转 1.4°。 */
 volatile float s_settle_rate = 30.0f;  /* s_law=3 带内"真停住了"的角速度阈值 °/s（2026-10-02 加）：
                                         * ①带内且 |v| < 它 ⇒ corr = 0 直接松手滑行，不再用 ±limit
                                         *   的满权限刹车来回抽（原来只在 |v| < s_ff_rate(3°/s)
@@ -187,6 +192,10 @@ static uint16_t s_settle_cnt   = 0;
  * 不参与任何控制判断，只是把本拍内部量暴露出去。 */
 static float s_dbg_rate_ref = 0.0f;
 static float s_dbg_corr     = 0.0f;
+/* 循迹串级给进来的"期望偏航角速度"前馈（°/s）。消费式：GyroControl_Task() 每拍读走并清零，
+ * 详见 GyroControl_SetTraceRate() 的注释。单独一个变量而不是塞进参数表：它是**每拍**变的
+ * 控制中间量，不是配置。名字带 trace 以区别于 s_ff_rate（那是 s_law=2 的摩擦前馈阈值）。 */
+static volatile float s_trace_ff = 0.0f;
 
 /**
  * @brief 陀螺读数消毒：NaN / ±Inf / 离谱值一律当 0
@@ -350,6 +359,7 @@ void GyroControl_Stop(void)
     s_settle_cnt = 0;
     s_v_prev = 0.0f;
     s_a_f = 0.0f;
+    s_trace_ff = 0.0f;             /* 循迹前馈也别留着（虽然 Task 每拍都消费，这里干净退出） */
     // 不再主动停止电机，让主控制逻辑接管
 }
 
@@ -398,6 +408,38 @@ float GyroControl_DebugCorr(void)
 void GyroControl_AimRelative(float delta_deg)
 {
     target_angle = NormalizeAngle(target_angle + delta_deg);
+}
+
+/**
+ * @brief 循迹串级专用：把外环算出的**期望偏航角速度**直接前馈进速率环（°/s，正 = 向左）
+ *
+ * 为什么必须有这条路（2026-10-05 加，用户 m33254「我是故意摆得斜的来检验你这个能力」逼出来的）：
+ *   只靠"推目标航向 + 航向误差 P(s_ang_kp=3.5)"来跟线时，从"外环要的转率"到"车真的转"之间
+ *   是一个 τ ≈ 1/s_ang_kp ≈ 285ms 的一阶滞后（rate_ref = s_ang_kp·err）。而外环自己的
+ *   ω_n = √(v·per_unit) ≈ √(33 格/s × 1.047 rad/s/格) ≈ 5.9 rad/s（周期 ≈1.07s，与实测
+ *   那个 1s 大摆完全吻合）⇒ **内环的滞后正好落在 ω_n 附近，外环几乎没有相位裕度**，表现为
+ *   等幅大摆。此时加外环微分项也救不了：闭环特征方程 τs³ + s² + v·K_d·s + v·K_p = 0 的
+ *   Routh 条件是 K_d > τ·K_p（=285ms×60 ≈ 17），过了门槛 ω_n 被推得更高、共轭对的阻尼比
+ *   反而趋于 0.01（见 out\_poles.py）——实测 line_kd 0/13/25 三档 |e| 0.97/0.78/0.47 也就是
+ *   "有一点但很不明显"。
+ *   直接前馈之后，"期望转率→实际转率"变成低滞后通道，外环退化成干净的二阶：
+ *   ë = −v(per_unit·e + line_kd·ė) ⇒ ζ = (line_kd/2)·√(v/per_unit)，line_kd=13 时 ζ≈0.7。
+ *
+ * 语义：**消费式** —— GyroControl_Task() 每拍取走这个值并清零，所以只会影响"设置它的那一拍"，
+ * 别的模式（转弯任务/台架/上位机）永远不会吃到陈旧的前馈值。
+ */
+void GyroControl_SetTraceRate(float rate_deg_s)
+{
+    if (rate_deg_s == rate_deg_s && rate_deg_s >= -1000.0f && rate_deg_s <= 1000.0f) {
+        s_trace_ff = rate_deg_s;
+    } else {
+        s_trace_ff = 0.0f;                 /* NaN/越界一律当没给 */
+    }
+}
+
+float GyroControl_GetTraceRate(void)
+{
+    return s_trace_ff;
 }
 
 /**
@@ -482,6 +524,7 @@ void GyroControl_Task(void)
     float actual_angle, correction, damp;
     float corr_lim;                       /* 本拍生效的差速上限（见 GyroControl_CorrLimit） */
     int left_speed, right_speed;
+    float ff_rate;                        /* 本拍来自循迹串级的转率前馈，消费式（见 SetTraceRate） */
 
     if (!gyro_control_enabled) return;
 
@@ -521,6 +564,12 @@ void GyroControl_Task(void)
     corr_lim = GyroControl_CorrLimit();
 
     s_dbg_rate_ref = 0.0f;
+
+    /* 取走循迹串级这一拍给的转率前馈（读走即清 ⇒ 别的模式永远看不到陈旧值）。
+     * 有它时"到位锁存"和停车带松手都要让路：车是被线推着连续走的，不是"转到位就停"。 */
+    ff_rate = s_trace_ff;
+    s_trace_ff = 0.0f;
+    if (!(ff_rate >= -1000.0f && ff_rate <= 1000.0f)) ff_rate = 0.0f;
 
     actual_angle = NormalizeAngle(Yaw);
 
@@ -701,9 +750,10 @@ void GyroControl_Task(void)
             correction = 0.0f;                     /* 已锁存：彻底松手，直到换目标 */
         } else {
             /* 允许速度：s_ang_kp·err（= 唯一实测能收敛的形状），顶到 ±s_rate_max；
-             * 停车带里 rate_ref 直接给 0（只刹车、不再给方向）。 */
-            float rate_ref = s_ang_kp * err;
-            if (fabsf(err) < s_settle_deg) {
+             * 停车带里 rate_ref 直接给 0（只刹车、不再给方向）——**有前馈时不能这么做**：
+             * 循迹时车要一直按外环的转率转，停车带清掉 rate_ref 就等于把前馈吃了。 */
+            float rate_ref = s_ang_kp * err + ff_rate;
+            if (fabsf(err) < s_settle_deg && ff_rate == 0.0f) {
                 rate_ref = 0.0f;
             } else {
                 if (rate_ref >  s_rate_max) rate_ref =  s_rate_max;
@@ -730,7 +780,7 @@ void GyroControl_Task(void)
                 correction -= s_rate_kd * s_a_f;
             }
             s_v_prev = v;
-            if (fabsf(err) < s_settle_deg && fabsf(v) < s_settle_rate) {
+            if (fabsf(err) < s_settle_deg && fabsf(v) < s_settle_rate && ff_rate == 0.0f) {
                 correction = 0.0f;   /* 带内 + 已经转得很慢 ⇒ 松手滑行（见 s_settle_rate 注释）。
                                       * 试过"朝目标滑行就不刹"（err*v > 0 也松手，指望摩擦把最后
                                       * 1~2° 补上）：收尾误差没变小，反而多出 4.7° 的冲过头 ⇒ 否。 */
@@ -738,9 +788,11 @@ void GyroControl_Task(void)
         }
 
         /* 起转助推：停车带外、车真的停住了、而比例量又推不动（起转要 ≈3450）时
-         * 按斜率补一脚；一动就撤、撤了进冷却（见 s_boost_gap 注释）。 */
+         * 按斜率补一脚；一动就撤、撤了进冷却（见 s_boost_gap 注释）。
+         * 有循迹前馈时不补：前馈本身就能给出远超起转阈值的量（s_rate_kp×ff），
+         * 而且外环的转率指令可能和"朝目标角"的方向相反，补这一脚就是打架。 */
         if (s_boost_cool > 0.0f) s_boost_cool -= GYRO_DT * 1000.0f;
-        if (!s_settled && fabsf(err) > s_settle_deg &&
+        if (!s_settled && ff_rate == 0.0f && fabsf(err) > s_settle_deg &&
             fabsf(v) < s_stuck_rate && s_boost_cool <= 0.0f) {
             s_boost_mag += s_boost_rate * GYRO_DT;
             if (s_boost_mag > s_corr_spin) s_boost_mag = s_corr_spin;
@@ -788,8 +840,17 @@ void GyroControl_Task(void)
      * 这是"到点直接停死、不再小幅晃"的关键：没有它，死区门会在边界上抖动，
      * 电机被反复点着（实测尾部 CCR 仍出现几百甚至 2760 的脉冲，车不转但听得见）。
      * 两级判据：带内(s_settle_deg)只要 s_settle_ms；**带外一点点(s_settle_deg×2)放宽 6 倍**，
-     * 否则车正好停在 2.0~2.4°（差一点没进带）时会一直抽着找那零点几度（实测 Ki≠0 就是这样）。 */
-    if (s_law != 4U) {
+     * 否则车正好停在 2.0~2.4°（差一点没进带）时会一直抽着找那零点几度（实测 Ki≠0 就是这样）。
+     *
+     * 循迹前馈期间必须让路：车是被线连续推着走的，角误差/角速度在转弯中途或过中线那一瞬
+     * 很容易短暂落进停车带，一锁存就把前馈连同 correction 一起吃掉（车会"跟丢了不动"）。
+     * 所以有前馈时每拍强制解锁，并跳过整个锁存块。 */
+    if (ff_rate != 0.0f) {
+        s_settled    = 0;
+        s_settle_cnt = 0U;
+    }
+
+    if (s_law != 4U && ff_rate == 0.0f) {
         float err_l = CalculateAngleError(target_angle, actual_angle);
 
         if (fabsf(err_l) < s_settle_deg * 2.0f && fabsf(s_rate_f) < s_settle_rate) {
