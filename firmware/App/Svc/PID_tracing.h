@@ -31,6 +31,7 @@ float PID_Tracing_PidOutput(void);
 /* 路口检测（说明书第七章：N 路灯同时压线 + 消抖） */
 uint8_t tracing_cross(void);
 void    tracing_cross_clear(void);
+uint8_t tracing_lost(void);
 
 /* 边缘外推 + 位置中值滤波的可见状态（只给台架/真车看，不参与控制）
  *   trace_bar_w        跟踪到的黑带宽度，单位"格"（一个传感器间距）= 线宽

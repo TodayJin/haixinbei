@@ -41,6 +41,7 @@ uint8_t  stub_nvram_state;
  * 所以既有测试（t_hostext 等）的行为一个字节都没变；t_task.c 直接给它们赋值来造场景。 */
 float    stub_trace_pos = 4.25f;
 uint8_t  stub_cross     = 1u;
+uint8_t  stub_lost      = 0u;
 uint8_t  stub_gray[8]   = { 5u, 15u, 25u, 35u, 45u, 55u, 65u, 75u };
 float    stub_gyro_err  = 1.25f;
 uint8_t  stub_motion_fault;
@@ -189,6 +190,7 @@ float   PID_Tracing_TracePos(void) { return stub_trace_pos; }
 float   PID_Tracing_PidOutput(void) { return -123.0f; }
 uint8_t tracing_cross(void) { return stub_cross; }
 void    tracing_cross_clear(void) { stub_cross_clears++; }
+uint8_t tracing_lost(void) { return stub_lost; }
 
 /* ---- 任务解释器还要读轮速（里程积分用） ---- */
 int SpeedControl_SpeedMmps(int wheel)

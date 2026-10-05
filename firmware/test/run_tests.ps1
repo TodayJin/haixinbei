@@ -35,6 +35,10 @@ $deps = @{
   't_jy61p'    = @('App/Svc/jy61p.c')
   't_pid'      = @('App/Svc/pid.c')
   't_tracing'  = @('App/Svc/tracing.c')
+  # 循迹串级（用户 m30082：用模拟的传感器值跑循迹 PID）。PID_tracing.c 此前没有任何
+  # 主机测试：t_tracing 只链 tracing.c，t_motion 里 motor_tracing_cascade() 整个被替身
+  # 顶掉。三轮真车事故（不循迹 / 直着走 / 7200 不动）全落在它里面。
+  't_cascade'  = @('App/Svc/PID_tracing.c')
   # host_link.c 只调 HostExt_*（真业务在 host_ext.c），所以协议层测试用 host_extstub.c 顶替；
   # 任务帧（T_TASK_*）调的 TaskStore_*/TaskRun_* 由 host_taskstub.c 的 RAM 替身提供
   #（真 Flash/解释器语义分别由 t_taskstore.c、t_task.c 用真源码测）

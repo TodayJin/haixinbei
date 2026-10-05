@@ -15,6 +15,8 @@
 #include "trace_cal.h"
 
 int      stubx_drive_set_calls;
+int      stubx_trace_lost;          /* HostExt_TraceLost() 的返回值 */
+int      stubx_cal_held;            /* trace_cal_held() 的返回值 */
 uint8_t  stubx_last_mode;
 int      stubx_last_a, stubx_last_b;
 int      stubx_drive_set_rc;        /* 让测试模拟"任务在跑"→ -2 */
@@ -136,6 +138,8 @@ float HostExt_AngleErr(void) { return 1.25f; }
 float HostExt_AngleRateRef(void) { return 2.5f; }
 float HostExt_AngleCorr(void) { return -3.75f; }
 int   HostExt_TraceCross(void) { return 1; }
+int   HostExt_TraceLost(void)  { return stubx_trace_lost; }
+uint8_t trace_cal_held(void)   { return stubx_cal_held; }
 
 /* 遥测 v_l/v_r 现在上报真实轮速（host_link.c 的 put_telemetry_base），
    协议层测试不需要真的速度环，给一对可注入的固定值（默认 0 = 静止）。

@@ -6,7 +6,7 @@
  *
  * 行为：stdin 每收到一个字节就
  *   host_dl_feed(1 字节) → 反复 host_link_poll(0)（其间推进 5ms 假时钟，让
- *   telem_hz 默认 50 的遥测照常发）→ 把 host_dl_tx() 的全部字节写 stdout →
+ *   telem_hz 默认 200 的遥测照常发）→ 把 host_dl_tx() 的全部字节写 stdout →
  *   host_dl_reset()（rx 已抽干、tx 已送出，把环形缓冲归零，避免 4096 上限丢字节）
  * EOF 退出。stdout 只出协议字节（二进制、无缓冲），诊断一律走 stderr。
  *

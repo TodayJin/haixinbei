@@ -14,6 +14,7 @@
  *   7. 标定 -> 柱高/阈值/极性的映射（含没压线/压线两侧）
  *   8. 两套标定 export/import/select_set 的搬运语义（换套不许丢数据）
  *   9. 标定向导：没有模拟量 -> FAILED；再按一下 -> 回 IDLE
+ *  14. 读不通就把模块"输出=全部"重播一遍（模块自己复位后不会自己恢复，用户 m29611）
  *
  * 不覆盖（需要上板）：真 IIC 时序、真串口波特率、标定时手压黑白的物理过程。
  */
@@ -405,6 +406,58 @@ int main(void)
         CHECK_EQ_I(trace_cal_disp_bit(0), 0);
         CHECK_EQ_I(trace_cal_level(0), 0);          /* 判定：真丢线 */
         CHECK_EQ_I(trace_cal_channel(0), 0);
+    }
+
+    /* ---------- 14. 读不通就把模块的"输出=全部"重播一遍（用户 m29611） ---------- */
+    {
+        /* 现象：模块自己的灯亮着、数据也对，主机却一帧都读不到，**复位一下 MCU 就好**。
+         * 原因：模块自己上电/复位后回到默认的"数字量"输出，只有再收到一次
+         * 0x4C 00 01 03 才给带模拟量的"全部"帧；固件以前只在 trace_cal_init()（开机）
+         * 和标定开始时播那一次，模块中途重启就再也读不到。 */
+        host_i2c_fail_set(0);
+        tick_to(20000U);
+        trace_cal_set_mode(TRACE_MODE_UART);      /* 固定串口：读请求只走 UART */
+        host_uart4_reply_set(NULL, 0);            /* 模块不应答 */
+        host_uart4_reset();
+
+        poll_in(20U);                             /* 第 1 帧失败 -> 立刻重播 */
+        CHECK_EQ_I(trace_cal_analog_ok, 0);
+        CHECK_EQ_I(host_uart4_tx_len(), 6);       /* 2 字节读请求 + 4 字节广播 */
+        CHECK_EQ_I(host_uart4_tx()[0], 0x57);
+        CHECK_EQ_I(host_uart4_tx()[2], 0x4C);
+        CHECK_EQ_I(host_uart4_tx()[3], 0x00);
+        CHECK_EQ_I(host_uart4_tx()[4], TRACE_REG_OUTPUT);
+        CHECK_EQ_I(host_uart4_tx()[5], TRACE_OUT_ALL);
+
+        poll_in(20U);                             /* 节流窗口内：只发读请求 */
+        CHECK_EQ_I(host_uart4_tx_len(), 8);
+        poll_in(400U);                            /* 累计 420ms < 500ms：还是不播 */
+        CHECK_EQ_I(host_uart4_tx_len(), 10);
+        poll_in(200U);                            /* 累计 620ms >= 500ms：重播 */
+        CHECK_EQ_I(host_uart4_tx_len(), 16);
+        CHECK_EQ_I(host_uart4_tx()[12], 0x4C);
+        CHECK_EQ_I(host_uart4_tx()[15], TRACE_OUT_ALL);
+
+        /* 模块回来（比如它重启完了）：下一帧就读得到，而且不再乱播 */
+        make_uart_frame(500U, 40U);
+        host_uart4_reply_set(s_frame, sizeof(s_frame));
+        host_uart4_reset();
+        poll_in(20U);
+        CHECK_EQ_I(trace_cal_analog_ok, 1);
+        CHECK_EQ_I(host_uart4_tx_len(), 2);       /* 只有读请求 */
+
+        /* 走 IIC 读也一样要播：官方就说 IIC 想读模拟量必须先串口广播开"全部" */
+        tick_to(30000U);
+        host_i2c_fail_set(1);
+        trace_cal_set_mode(TRACE_MODE_I2C);
+        host_uart4_reset();
+        poll_in(20U);
+        CHECK_EQ_I(host_uart4_tx_len(), 4);       /* IIC 模式不发读请求，只有广播 */
+        CHECK_EQ_I(host_uart4_tx()[0], 0x4C);
+        CHECK_EQ_I(host_uart4_tx()[3], TRACE_OUT_ALL);
+
+        host_i2c_fail_set(0);
+        trace_cal_set_mode(TRACE_MODE_AUTO);
     }
 
     return T_SUMMARY();

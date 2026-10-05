@@ -98,6 +98,7 @@ float HostExt_AngleErr(void);             /* 角度环误差 ° */
 float HostExt_AngleRateRef(void);         /* 角度环本拍期望角速度 °/s */
 float HostExt_AngleCorr(void);            /* 角度环本拍最终修正量（PWM 刻度） */
 int   HostExt_TraceCross(void);           /* 1 = 检测到路口/横线 */
+int   HostExt_TraceLost(void);            /* 1 = 循迹算法判丢线（含灰度链路给不出真值）*/
 
 #ifdef __cplusplus
 }

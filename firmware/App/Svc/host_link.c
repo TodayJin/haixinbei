@@ -424,7 +424,11 @@ static void put_telemetry_base(uint8_t *p, uint32_t loop_us)
   }
   if ((uint32_t)(now - gyro_ok_ms) < 500u) flags |= FL_GYRO_OK;
 
-  if (lm == 0u)                       flags |= FL_LOST;
+  /* 丢线标志（用户 m29852）：以前看 lm —— 那是 PA0~PA7 裸脚，模拟量模式下模块不驱动
+     它们、上拉恒为高 ⇒ lm 恒 0xFF，传感器死了也永远不报丢线，车"以为线在正中"直着走。
+     现在看循迹算法自己判的丢线 + 灰度链路此刻给不出真值（trace_cal_held，含界面按住）。
+     p[26] 的 line 则是"数字口原始电平"，只有「灰度接口 = 数字量」时才有意义。 */
+  if (HostExt_TraceLost() != 0 || trace_cal_held() != 0u) flags |= FL_LOST;
   if (Pitch > 8.0f || Pitch < -8.0f)  flags |= FL_SLOPE;
   if (HostExt_DriveEnabled())         flags |= FL_HOST_DRIVE;
   if (HostExt_MotorEnabled())         flags |= FL_MOTOR;
@@ -1077,10 +1081,12 @@ void host_link_init(void)
   uint16_t i;
   for (i = 0; i < NSPEC; i++) s_param[i] = SPECS[i].def;
   memset(&s_stats, 0, sizeof(s_stats));
-  /* 遥测默认 100Hz（10ms 一格）：控制环是 200Hz，取 100 既能看清又有余量；
-   * 上位机可以用 CMD_SET_TELEM_HZ 随时改（网页「控制 → 遥测频率」的滑块，
-   * 范围 1..200Hz，链路提速到 921600 后往上调才有余量）。 */
-  s_stats.telem_hz = 100u;
+  /* 遥测默认 200Hz（5ms 一格，与控制环同拍）：链路 2026-10-05 提到 921600 之后
+   * 200Hz 只占约 15% 带宽（100Hz 时约 8%），用户 m30228 的预期也是 200Hz。
+   * 上位机可以用 CMD_SET_TELEM_HZ 随时改（网页「控制 → 遥测频率」的滑块，范围 1..200Hz）；
+   * 注意这个值**只存在 RAM**，每次复位/烧录都回到这里写的默认值（以前是 100，所以
+   * 「设过 200、烧完变成 100」是正常的，不是没生效）。 */
+  s_stats.telem_hz = 200u;
   s_telem_mode = 1u;          /* 默认发 64 字节 T_TELEM2（新上位机要扩展量） */
   HostExt_Init();
 

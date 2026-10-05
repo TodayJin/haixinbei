@@ -11,6 +11,11 @@
  *      模块只插在 H2/U15 串口座时走这条；它完全不占 I2C，OLED 独享总线。
  *   ③ 两条都不通：回落 PA0–PA7 数字口（bsp_trace_bit，只有 0/1）。
  *
+ * ★ 模块的输出模式会"丢"：它自己上电/复位后回到默认的"数字量"，必须再收到一次
+ *   0x4C 00 01 03 才给带模拟量的"全部"。开机那一次广播可能撞在模块启动过程上、
+ *   跑动中模块也可能被颠掉电重启 —— 所以只要读不成帧就按 TRACE_MODE_REQ_MS 节流
+ *   重播一次（maybe_request_analog_mode），不必等 MCU 复位（用户 m29611）。
+ *
  * 标定：每个点连采 TRACE_CAL_SAMPLE_N(=32) 帧，**去掉最高/最低各 TRACE_CAL_TRIM(=4)
  * 帧再求平均**（抗单帧毛刺 / 抗手抖），然后每路自己算阈值 + 极性：
  *   阈值 = (黑 + 白)/2，极性 = 黑的原值比白大还是小（自动学，不用管模块正相/反相）
@@ -34,6 +39,7 @@
 #define TRACE_READ_PERIOD_MS   20U    /* 采集周期：16 字节 @400kHz ≈ 0.45ms */
 #define TRACE_FAIL_LIMIT        5U    /* 连续失败这么多帧就换通道 / 判"没有模拟量" */
 #define TRACE_OFF_RETRY_MS   2000U    /* 两条都不通：多久后再从头试一遍 */
+#define TRACE_MODE_REQ_MS     500U    /* 读不通时重播"输出=全部"的最小间隔（用户 m29611） */
 #define TRACE_MIN_SPAN         32U    /* 黑白原值差小于这个 = 这一路没数据 */
 #define TRACE_UART_BYTE_MS      2U    /* 每字节超时：115200 下一字节 87us，2ms 很宽裕 */
 
@@ -157,6 +163,8 @@ static uint32_t s_last_ms;
 static uint32_t s_off_until_ms;
 static uint32_t s_done_ms;
 static uint32_t s_retry_ms;               /* 上一次"整点被抖动判掉"的时刻（0 = 没有） */
+static uint32_t s_req_ms;                 /* 上一次重播"输出=全部"的时刻 */
+static uint8_t  s_req_sent;               /* 1 = 播过至少一次（配合 TRACE_MODE_REQ_MS 节流） */
 static trace_cal_state_t s_state;
 
 /* ---------------------------------------------------------------- 工具 */
@@ -168,6 +176,25 @@ void trace_cal_request_analog_mode(void)
      * 例程注释里 `Set_Data1(0x01,0x01,0x03)` 就是把输出模式设成"全部"。 */
     static const uint8_t cmd[4] = { TRACE_CMD_SOF, 0x00U, TRACE_REG_OUTPUT, TRACE_OUT_ALL };
     board_uart4_write(cmd, 4U);
+}
+
+/* 读不通时把"输出=全部"再播一遍（按 TRACE_MODE_REQ_MS 节流）。
+ *
+ * 为什么必须重播（用户 m29611 报"卡住了，复位一下就好"，2026-10-05）：
+ * 模块**自己上电/复位后会回到默认的"数字量"输出**（见文件头引的官方《IIC通信注意事项》），
+ * 只有收到一次 0x4C 00 01 03 才改成带模拟量的"全部"。而本文件以前只在
+ * trace_cal_init()（=MCU 复位）和标定开始时播这一次 —— 于是：
+ *   ① 车一上电 MCU 先起来、模块还在启动，那一次广播丢掉，就再也读不到模拟量；
+ *   ② 跑动中模块被颠得掉电重启（同一根线/同一个插头），同样只认 MCU 复位。
+ * 两种现象都是"模块自己的灯还亮着、数据也对，就是主机读不到"。
+ * 现在只要读不成帧（IIC 或串口都算，模拟量输出本来就是靠这条串口广播开的），
+ * 就隔 500ms 再播一次，最坏 TRACE_OFF_RETRY_MS 一个周期内自己恢复，不用复位。 */
+static void maybe_request_analog_mode(uint32_t now)
+{
+    if (s_req_sent && (uint32_t)(now - s_req_ms) < TRACE_MODE_REQ_MS) return;
+    s_req_sent = 1U;
+    s_req_ms   = now;
+    trace_cal_request_analog_mode();
 }
 
 static uint8_t other_source(uint8_t s)
@@ -480,6 +507,9 @@ void trace_cal_poll(void)
 
     if (!source_read(b16)) {
         if (s_fail < 255U) s_fail++;
+        /* 一帧都读不成，先把模块的"输出=全部"再播一遍（节流）：模块自己复位过、
+         * 或开机那一次广播撞在它启动过程上时，只有重播才能把模拟量要回来（用户 m29611）。 */
+        maybe_request_analog_mode(now);
         if (s_fail >= TRACE_FAIL_LIMIT) {
             s_fail = 0U;
             if (trace_cal_mode == TRACE_MODE_AUTO && !s_tried) {

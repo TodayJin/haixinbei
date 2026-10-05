@@ -340,3 +340,4 @@ float HostExt_AngleErr(void)      { return GyroControl_HeadingError(); }
 float HostExt_AngleRateRef(void)  { return GyroControl_DebugRateRef(); }
 float HostExt_AngleCorr(void)     { return GyroControl_DebugCorr(); }
 int   HostExt_TraceCross(void)    { return (tracing_cross() != 0U) ? 1 : 0; }
+int   HostExt_TraceLost(void)     { return (tracing_lost() != 0U) ? 1 : 0; }

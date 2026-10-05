@@ -570,15 +570,16 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 }
 /* ---- LPUART1：无线下载器（PC0=RX / PC1=TX，AF8）
  * 上位机链路走这条：8N1，收 = DMA1_Ch2 循环搬运、发 = DMA1_Ch3 槽位队列。
- * 波特率必须和上位机桥一致（`python -m bridge.main --serial COM26 --baud 230400`），
- * 上位机那边的串口参数是 COM26 这条 CDC 串口自己的事，跟 SWD 无关。
+ * 波特率必须和上位机桥一致（`python -m bridge.main --serial COM27 --baud 921600`），
+ * 上位机那边的串口参数是这条 CDC 串口自己的事，跟 SWD 无关。
  * 复用编号 AF8 是查数据手册 Table 13（DS12288 Rev6，第 75 页）确认的，不是猜的。
- * 2026-10-03 23:50 定档 **230400**：手上这颗 J-Link 的 CDC VCOM 上限实测就是 230400
- * （115200/230400 能开能读；460800 在 SET_LINE_CODING 上超时 = ERROR_SEM_TIMEOUT 121，
- * 921600 直接 ERROR_GEN_FAILURE 31，而且试 ≥460800 会把探针打进 bootloader 态、只能物理
- * 拔插 USB 才能恢复）。所以真机实测先跑 230400（原 115200 的 2×）；换普通 USB-TTL 接 U12
- * 脚6/5/4 保 921600 时，改这一行 + 桥跟上 `--baud` 就行。 */
-#define DL_BAUD  230400u
+ * 2026-10-05 定档 **921600**（用户 m30484「都说了换921600」）：车上的探针已换成第二颗
+ * （J-Link OB-RA4M2-Full，`USB\VID_1366&PID_1024`，CDC = COM27），它的 VCOM 逐档实测
+ * 230400/460800/921600/1500000/2000000/3000000 全部打开成功且数据合法 ⇒ 旧那颗 V9
+ * （PID_0105）「上限 230400、试 ≥460800 会进 bootloader」的结论**只对旧探针成立**，
+ * 按 PID 分的上限表在 `tools/console/bridge/serial_safety.py`。改这一行必须连桥/网页的
+ * 默认 `--baud` 一起改（`bridge/link.py`、`main.py`、网页 `api.ts`/`Settings.tsx`）。 */
+#define DL_BAUD  921600u
 
 HAL_StatusTypeDef board_dl_init(void)
 {

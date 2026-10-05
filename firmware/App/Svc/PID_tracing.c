@@ -44,6 +44,28 @@
 #define TRACE_LOST_MS        300U    /* 丢线超过这么久就减速找线 */
 #define TRACE_LOST_DECAY_MS  500U    /* 丢线超时后，再把"保持的满舵"线性收到 0 的时间 */
 
+/* 重记"基准航向"的窗口：重心偏离设定点多少格以内算"车真的压在中线上"。
+ *
+ * 为什么只在这么窄的窗口里重记：重记的那一刻 s_base_yaw := 当前航向，而目标航向 =
+ * s_base_yaw + aim。如果 aim 还挂着（车只是"接近"中线、并不是真在线上），目标航向就永远
+ * 比车当前航向偏 aim ⇒ 角度环把它当成"一直在转"的指令（rate_ref 恒非 0）⇒ 车原地画圈。
+ * 2026-10-05 真车实测（旧窗口 0.6f）：base=2500 时 2.25s 偏航 -23.9°、angle.err 钉在
+ * -5.0、rate_ref 钉在 -17.5、corr 140/212 拍贴在 ±2000 上来回翻；窗口给 0.6 还会把车
+ * 斜着走的姿态锁住（车会一直漂到窗口边缘才纠，实测平均偏离中线 0.35 格）。
+ * 窗口收到 0.15 之后：带外 aim 一直是活的（按 10°/格 做比例修正，第 16 节的整定值），
+ * 带内才重记基准 + aim 归零 ⇒ 真在线上时按住当前航向、消陀螺漂移。 */
+#define TRACE_BASE_BAND      0.15f
+
+/* 「这帧到底有没有线」的对比度门（用户 m29852）。
+ * 单帧自适应把本帧最黑那一路归一化到满量程，所以一片均匀表面（车被支起来、探头底下
+ * 没线、地面反光或本来就是黑地面）也会变成"8 路都挺黑"，加权重心正好落在 4.5 = 正中
+ * ⇒ err ≈ 0、lost = 0，车就"以为线在正中"直着走。2026-10-05 真车+RAM 实测：探头底下
+ * 无线（车支起来）时 8 路读数 200~251、重心 4.68、RAM 里 state 仍是 TRACE_FRAME_OK、
+ * whiteish = 0 ⇒ 就是这个 bug。判据：最亮那一路也得有最黑那一路的 TRACE_UNIFORM_MIN
+ * 倍以上，才算"有明暗结构 = 有线"；真线必然至少一侧明显比黑带亮。 */
+#define TRACE_UNIFORM_MIN    0.75f
+#define TRACE_LOST_STOP_MS   1000U   /* 连续丢线超过这么久：停车，不再闷头直冲（用户 m29239/m29852）*/
+
 #define TRACE_EDGE_SAT       0.9f    /* 最外一路黑度 ≥ 0.9×最黑 = 黑带被阵边界切掉（外推的唯一入口）*/
 #define TRACE_BARW_INIT      3.0f    /* 黑带宽度初值（格=传感器间距），前面几帧就会自己收敛 */
 #define TRACE_BARW_TAU       0.02f   /* 宽度跟踪系数（50Hz -> 约 1s 时间常数）*/
@@ -53,6 +75,7 @@ static float   s_setpoint = TRACE_SETPOINT;
 static float   data       = TRACE_SETPOINT;   /* 当前重心 */
 static float   last_data  = TRACE_SETPOINT;
 static uint8_t all_sensors_lost = 0;
+static uint8_t s_lost_stop       = 0;   /* 丢线停车已经执行过（每次丢线只执行一次）*/
 static float   last_pid_output  = 0.0f;
 
 /* 边缘外推（用户 m07972 第 1 条）*/
@@ -119,7 +142,7 @@ void read_tracing_data_pid(void)
 {
     float   w[TRACE_CAL_CH];
     trace_frame_t fr = trace_cal_frame(w);
-    float   num = 0.0f, sum = 0.0f, wmax = 0.0f;
+    float   num = 0.0f, sum = 0.0f, wmax = 0.0f, wmin = 0.0f;
     uint8_t raw = 0;
     int     i, on;
     uint32_t now = HAL_GetTick();
@@ -129,6 +152,7 @@ void read_tracing_data_pid(void)
         /* ---- ① 连续加权重心（L1..L4 = 1..4，R1..R4 = 5..8） ---- */
         for (i = 0; i < 8; i++) {
             if (w[i] > wmax) wmax = w[i];
+            if (i == 0 || w[i] < wmin) wmin = w[i];
         }
         on  = 0;
         num = 0.0f;
@@ -139,7 +163,14 @@ void read_tracing_data_pid(void)
             num += w[i];
             sum += w[i] * (float)(i + 1);
         }
-        if (num > 0.0f) {
+        /* ---- ⓪ 先判"这帧到底有没有线"（用户 m29852）----
+         * 一片均匀表面被自适应归一化放大后，8 路全过本帧半高、重心正好 4.5 = 正中 ⇒
+         * 车"以为线在正中"直着走。最亮那一路也得暗不到最黑那一路的 TRACE_UNIFORM_MIN
+         * 倍以上，才算有明暗结构 = 有线；否则（探头底下没线/车被拿走）判丢线。 */
+        if (wmax <= 0.0f || wmin > TRACE_UNIFORM_MIN * wmax) {
+            lost = 1U;
+            on   = 0;   /* 均匀帧以前 on = 8，还会顺手误报"路口" */
+        } else if (num > 0.0f) {
             float pos   = sum / num;   /* 加权重心：1..8 */
             float cover = 0.0f;
             float m;
@@ -206,14 +237,18 @@ void read_tracing_data_pid(void)
 
             data      = m;
             last_data = data;
+            lost      = 0U;
+        } else {
+            /* 8 路权重全是 0：本帧一个位置信息都没有，别再假装"线在正中" */
+            lost = 1U;
         }
-        lost = 0U;
     } else if (fr == TRACE_FRAME_WEAK) {
         /* 模拟量在，但这帧对比度不够（没信息）：当丢线，data 保持上一帧 */
         on   = 0;
         lost = 1U;
-    } else {
-        /* ---- ② 老的固定阈值 + 消抖 ---- */
+    } else if (trace_cal_mode == TRACE_MODE_DIGITAL) {
+        /* ---- ② 老的固定阈值 + 消抖（只有用户显式把「灰度接口」设成数字量时才拿
+         *      裸 PA0~PA7 当真值，见 trace_cal.h:130-138 的设计）---- */
         for (i = 0; i < 8; i++) {
             if (trace_read_channel((uint8_t)i)) raw |= (uint8_t)(1U << i);
         }
@@ -248,6 +283,13 @@ void read_tracing_data_pid(void)
             last_data = data;
         }
         lost = (on == 0) ? 1U : 0U;
+    } else {
+        /* ---- ③ 没有模拟量、又不是用户显式选的数字口：判丢线 ----
+         * 裸 PA0~PA7 在这台车上恒为高（模拟量模式下模块根本不驱动它们），当掩码读只会
+         * 得到 0xFF ⇒ 重心 4.5 + lost = 0 = "以为线在正中"直着走 —— 用户 m29852 现场
+         * 那 236 个样本全是这个状态。data 保持上一帧，丢过头由串级停车。 */
+        on   = 0;
+        lost = 1U;
     }
     /* 丢线时 data 保持不变（= 上一次的重心），方向就不会突然反打 */
     all_sensors_lost = lost;
@@ -278,6 +320,12 @@ void read_tracing_data_pid(void)
 uint8_t tracing_cross(void)
 {
     return s_cross;
+}
+
+/* 给遥测用：算法自己判的丢线（不是 PA0~PA7 裸脚那个永远失真的"丢线"）。 */
+uint8_t tracing_lost(void)
+{
+    return all_sensors_lost;
 }
 
 void tracing_cross_clear(void)
@@ -404,15 +452,29 @@ void motor_tracing_cascade(int base_speed)
     if (!s_base_valid) {
         s_base_yaw   = now_yaw;              /* 进串级那一刻的航向 = 基准 */
         s_base_valid = 1U;
-    } else if (fabsf(err) < 0.6f) {
-        s_base_yaw = now_yaw;                /* 车在线中间时重记基准，消掉陀螺仪漂移 */
+    } else if (fabsf(err) < TRACE_BASE_BAND) {
+        s_base_yaw = now_yaw;                /* 车压在中线上时重记基准，消掉陀螺仪漂移 */
+        aim        = 0.0f;                   /* ★带内 aim 必须归零，否则就是"绕圈"（见 TRACE_BASE_BAND） */
     }
 
-    if (all_sensors_lost &&
-        s_lost_since != 0U &&
-        (uint32_t)(HAL_GetTick() - s_lost_since) > TRACE_LOST_MS) {
-        base_speed = base_speed / 2;         /* 丢线太久：减速找线 */
+    if (all_sensors_lost && s_lost_since != 0U) {
+        uint32_t lost_ms = (uint32_t)(HAL_GetTick() - s_lost_since);
+
+        if (lost_ms > TRACE_LOST_STOP_MS) {
+            /* 丢线丢到这个份上（传感器死了/车被拿走/真的完全没线）：停车，别再闷头直冲
+             * （用户 m29239/m29852）。重新压线时 read_tracing_data_pid() 会 PID_Reset()，
+             * 下一拍 s_lost_stop 清掉就接着跑。 */
+            if (!s_lost_stop) {
+                s_lost_stop = 1U;
+                GyroControl_Stop();
+                SpeedControl_Stop();
+                Load(0.0f, 0.0f);
+            }
+            return;
+        }
+        if (lost_ms > TRACE_LOST_MS) base_speed = base_speed / 2;   /* 丢线太久：减速找线 */
     }
+    s_lost_stop = 0U;
 
     /* 外两层：目标航向 -> 角度环 -> 左右轮目标速度 */
     GyroControl_SetTargetAngle(NormalizeAngle(s_base_yaw + aim));
@@ -425,6 +487,7 @@ void motor_tracing_reset_cascade(void)
     s_base_valid    = 0U;
     last_pid_output = 0.0f;
     s_lost_since    = 0U;
+    s_lost_stop     = 0U;
     data            = TRACE_SETPOINT;
     last_data       = TRACE_SETPOINT;
     all_sensors_lost = 0U;
