@@ -115,6 +115,13 @@ static void scene(void)
     Yaw = 0.0f; g_pu = 10.0f; g_amax = 35.0f;
 }
 
+/* ★2026-10-06：基准速度现在过一道一阶斜坡（PID_tracing.c 的 TRACE_BASE_TAU_S，τ=0.1s、
+ * 一拍只走 4.8%）⇒ 要断言"交给角度环的基准"就得先让它收敛。120 拍 = 0.6s，足够吸附。 */
+static void settle_base(int base)
+{
+    for (int i = 0; i < 120; i++) motor_tracing_cascade(base);
+}
+
 static void w_line(int ch, float amp)          /* 线压在 ch(1..8) 下 */
 {
     for (int i = 0; i < (int)TRACE_CAL_CH; i++) g_w[i] = 0.0f;
@@ -281,7 +288,7 @@ int main(void)
     CHECK_EQ_I(tracing_lost(), 1);
     CHECK_EQ_I(g_gyro_l, 1200);                               /* 刚丢线：先照常走 */
     host_tick_add(350u);                                      /* 超 TRACE_SEARCH_DELAY_MS(120) ⇒ 开始找线 */
-    motor_tracing_cascade(1200);
+    settle_base(1200);                                        /* 让基准斜坡收敛（τ=0.1s） */
     CHECK_EQ_I(tracing_lost(), 1);
     CHECK_EQ_I(g_gyro_l, 0);                                  /* ★2026-10-06 改：基准清零 = 原地对转（pivot 工况） */
     host_tick_add(2600u);                                     /* 超 TRACE_LOST_STOP_MS(2500) */
@@ -316,6 +323,7 @@ int main(void)
     for (int i = 0; i < 8; i++) g_dig[i] = 1;                /* 裸脚全 1 = 上拉 */
     motor_tracing_cascade(1200);
     CHECK_EQ_I(tracing_lost(), 1);
+    settle_base(1200);
     CHECK_EQ_I(g_gyro_l, 1200);
     host_tick_add(2600u);
     motor_tracing_cascade(1200);
@@ -344,6 +352,7 @@ int main(void)
     motor_tracing_cascade(1200);
     CHECK_EQ_I(tracing_lost(), 0);
     CHECK(g_pid_resets >= 1);                                /* 内环积分清零 */
+    settle_base(1200);                                       /* 基准斜坡收敛后再断言 */
     CHECK_EQ_I(g_gyro_l, 1200);                              /* 速度回来 */
     CHECK_EQ_I(g_gyro_r, 1200);
 

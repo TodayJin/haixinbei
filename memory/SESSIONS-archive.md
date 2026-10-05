@@ -1,3 +1,10 @@
+## 2026-09-29
+完成：在真板上把 INA226 的全部寄存器读出来核对（两次复位完全一致）：ID=5449/2260（真芯片在线）、reg00=4127、reg01=0x7FFF（分流满量程钳位、每个采样都恰好 0x7FFF）、reg02 换算 12.023V、reg04/03 换算 16.384A/197W、reg06 CVRF=1 OVF=0。用 CVRF 计数反推转换周期，实测确认配置位序：bit15 RST / bit14:12 只读保留(写任何值都读回 100) / bit11:9 AVG / bit8:6 VBUSCT / bit5:3 VSHCT / bit2:0 MODE，写 0x0000 掉电停转换。0x4127 = 1 次平均 + 1.1ms + 1.1ms + 连续，2.26ms 一次更新；CAL=0x0400=1024 = 0.00512/(1mA*5mΩ) 正确。电池网表 pcb/Netlist_Schematic1_2026-09-29.tel 核对：R2.2+U5.10=IN+ 在源侧、R2.1+U5.8(VBUS)+U5.9(IN-) 在负载侧，与设计一致（不是接线错）。结论：配置与读码换算都对，是分流模拟输入顶到满量程。据此改代码：board.c ina226_init 的错注释"16 次平均"换成实测位序，电流检测页在满量程时给电流/功率加 '!' 前缀（out/oled_power.png 实拍：!16.38A / 12.02V / !197.03W），TEMP 探针（board.c ina226_temp_probe/probe2/cvrf + main_app.c 调用）全部删除；make text 81288/data 220/bss 14264、flash.ps1 回读 firstDiff=none、RTT err=0 busy=0 st=0、表盘 dump 正常。
+未完成：分流输入为何顶格仍未定：可能是 R2 焊点/实际阻值远大于 5mΩ（0.2A 下要 0.41Ω 才钳满）、或 U5 分流输入级被此前的 5V 灌 3V3 事故打坏、或 sense 走线开路把 IN+ 拉到近地。需用户在通电跑动时用万用表直流档量 R2 两个焊盘（0.2A 时约 1mV）并对照电源自身电流表。
+下一步：用户给出 R2 两端电压后判定是 R2/焊点还是 U5，再决定换件或改字模（超量程 的中文需重生成 kk_font_body）
+
+> 更早的会话条目已归档到 255 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
 ## 2026-09-29 · KK_UI 界面
 完成：用户 m04708：翻页时表盘那圈圆角框必须自己当合缝（原来 32px 视差 + 合缝取进来那页左边缘，出去的表盘框右半边被裁掉、看着像被黑线切开）。改成 kk_ui_nav.c 的 KK_UI_DrawScene 里两页都整屏滑 127px、合缝 = 进来那页的左边缘，且进来那页的 x = (127 - slide)，保证 boundary-1 恰好是表盘框右边缘列（1+off+125 = off+126）。用 TEMP 冻结过渡在 35%（duration=60000 + progress=Q12*35/100）在真板上分别抓正向 home→menu（out/oled_tr_fwd.png：框右边缘竖线在第 82 列完整可见、右边紧贴菜单）与反向 menu→home（out/oled_tr_rev.png：表盘框从左边完整滑入，右边缘第 43 列）；TEMP 全部还原、root_page 回 PAGE_SPLASH、make -j4 text 81108/data 220/bss 14264、tools/flash.ps1 回读一致 81336 字节 firstDiff=none、RTT out/rtt_bezel3.log 启动 10 行齐 + FRAME avg=690us max=3410us tx_done=16 err=0 busy=0 st=0。顺手修掉 app_ui.c draw_splash_page 里指向已删除的 kk_ui_draw_card() 的过期注释。
 未完成：kk_ui_draw_card() 已整段删除，KK_UI_PAGE_PARALLAX 宏变成没人用（留着没删）；用户还没回答四个电源灯闪烁的排查问题

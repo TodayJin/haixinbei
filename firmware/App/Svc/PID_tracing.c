@@ -184,6 +184,14 @@
  * 的范围里）；**找线时仍走 TRACE_SEARCH_RATE(170)** —— 找线本来就是一次粗扫，那里"粗"是需要的。 */
 #define TRACE_RATE_MAX_VISIBLE 120.0f
 
+/* ★2026-10-06 基准速度的斜坡。三个工况（看见线 7000 / 路口 3500 / 找线 0）之间原来是**硬切**，
+ * 而循迹模式下轮速环的斜坡被特意放成 100000 PWM/s（motion.c:121 —— 为了让角度环的修正能
+ * 立刻反向，那里不能动）⇒ **基准一跳，左右轮目标就跟着跳**，出弯那一刻等于给车一个加速度
+ * 阶跃，实测就是用户 m 说的「拐回来之后在直线上轻微摆」。
+ * 这里只给**基准**加一道一阶跟随（修正量那条路一点不动，仍然瞬时反向）。
+ * 副作用是发车也变成软启动（基准从 0 爬上去），与速度环自带的软启动叠加，符合预期。 */
+#define TRACE_BASE_TAU_S   0.10f   /* 基准一阶时间常数（s）：7000→0 约 0.3s 走到 95% */
+
 #define TRACE_EDGE_SAT       0.9f    /* 最外一路黑度 ≥ 0.9×最黑 = 黑带被阵边界切掉（外推的唯一入口）*/
 #define TRACE_BARW_INIT      3.0f    /* 黑带宽度初值（格=传感器间距），前面几帧就会自己收敛 */
 #define TRACE_BARW_TAU       0.02f   /* 宽度跟踪系数（50Hz -> 约 1s 时间常数）*/
@@ -196,6 +204,7 @@ static uint8_t all_sensors_lost = 0;
 static uint8_t s_lost_stop       = 0;   /* 丢线停车已经执行过（每次丢线只执行一次）*/
 static int8_t  s_search_dir      = 0;   /* 最后一次看到线时它偏在哪一侧：+1 右 / -1 左（丢线找线用）*/
 static float   s_err_dir         = 0.0f;/* err 的短 EMA（τ≈80ms@50Hz）：丢线找线判方向用，见 TRACE_SEARCH_DIR_LPF */
+static float   s_base_f          = 0.0f;/* 基准速度的一阶平滑值（PWM 刻度），见 TRACE_BASE_TAU_S */
 static float   last_pid_output  = 0.0f;
 
 /* 外环微分项（阻尼）的状态：重心变化率 ė（格/s），只在新的灰度帧上更新 */
@@ -716,7 +725,18 @@ void motor_tracing_cascade(int base_speed)
         if (lead < -aim_max) GyroControl_SetTargetAngle(NormalizeAngle(Yaw - aim_max));
     }
 
-    /* 外两层：目标航向 -> 角度环 -> 左右轮目标速度 */
+    /* 外两层：目标航向 -> 角度环 -> 左右轮目标速度。
+     * ★基准先过一道一阶斜坡（见 TRACE_BASE_TAU_S）：三个工况之间不再硬切，避免给车一个
+     *   加速度阶跃；**修正量那条路（corr）不过这道斜坡**，角度环该立刻反向还是立刻反向。 */
+    if (s_base_f < 0.0f) {
+        s_base_f = (float)base_speed;   /* 本趟第一拍：直接吸附（**不做软启动**，保持既有起步行为） */
+    } else {
+        s_base_f += ((float)base_speed - s_base_f) * (TRACE_CASCADE_DT_S / (TRACE_BASE_TAU_S + TRACE_CASCADE_DT_S));
+        if (fabsf((float)base_speed - s_base_f) < 20.0f) s_base_f = (float)base_speed;  /* 贴住就吸附，别留指数长尾 */
+    }
+    if (s_base_f < 0.0f) s_base_f = 0.0f;
+    if (s_base_f > (float)MOTOR_PWM_MAX) s_base_f = (float)MOTOR_PWM_MAX;
+    base_speed = (int)(s_base_f + 0.5f);
     GyroControl_SetBaseSpeed(base_speed, base_speed);
     GyroControl_Task();
 }
@@ -726,6 +746,7 @@ void motor_tracing_reset_cascade(void)
     s_base_valid    = 0U;
     s_search_dir    = 0;
     s_err_dir       = 0.0f;
+    s_base_f        = -1.0f;  /* 哨兵：本趟第一拍直接吸附到目标基准（不做软启动） */
     last_pid_output = 0.0f;
     s_lost_since    = 0U;
     s_lost_stop     = 0U;
