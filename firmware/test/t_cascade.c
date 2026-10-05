@@ -280,10 +280,10 @@ int main(void)
     motor_tracing_cascade(1200);
     CHECK_EQ_I(tracing_lost(), 1);
     CHECK_EQ_I(g_gyro_l, 1200);                               /* 刚丢线：先照常走 */
-    host_tick_add(350u);                                      /* 超 TRACE_LOST_MS(300) */
+    host_tick_add(350u);                                      /* 超 TRACE_SEARCH_DELAY_MS(120) ⇒ 开始找线 */
     motor_tracing_cascade(1200);
     CHECK_EQ_I(tracing_lost(), 1);
-    CHECK_EQ_I(g_gyro_l, 600);                                /* 慢速找线 */
+    CHECK_EQ_I(g_gyro_l, 0);                                  /* ★2026-10-06 改：基准清零 = 原地对转（pivot 工况） */
     host_tick_add(2600u);                                     /* 超 TRACE_LOST_STOP_MS(2500) */
     motor_tracing_cascade(1200);
     CHECK_EQ_I(g_gyro_stops, 1);                              /* 角度环松手 */

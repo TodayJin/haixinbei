@@ -173,6 +173,17 @@
 #define TRACE_SEARCH_DIR_LPF   0.25f  /* err 的短 EMA 系数（每个有效灰度帧一次） */
 #define TRACE_SEARCH_DIR_DEAD  0.30f  /* 死区（格）—— 0.05 太小，会被重心噪声翻向 */
 
+/* ★2026-10-06 看见线时的转率上限（与"找线转率"必须分开）。
+ * 为什么：直角修好之后用户 m 报「拐回来之后，它一直震荡在直线上」。查 out/_drv_7000_fix3.txt：
+ * 拐过弯那段 corr 在两个方向之间打到 **±14000**、车速跟着在 20~250mm/s 抽、pos 以 ~750ms 周期
+ * 在 1.9↔6.8 之间扫 —— **继电器极限环**，正是 memory 里「cap 越大『最小一次补力矩』越粗」
+ * 那条（第 21 轮 cap>7200 的代价）。
+ * 机理：`rate_ref` 被 s_trace_rate_max(300) 夹住 + rate_kp=40 ⇒ corr 最大能到 12000，
+ * 而 `corr = rate_kp×(rate_ref − v)`：v 只要反向一点，corr 就跳到全尺度 ⇒ bang-bang。
+ * ⇒ 看见线时把**需求**夹在 120（corr ≤ 40×120 = 4800，落在实测"cap 3000~7000 不起振"
+ * 的范围里）；**找线时仍走 TRACE_SEARCH_RATE(170)** —— 找线本来就是一次粗扫，那里"粗"是需要的。 */
+#define TRACE_RATE_MAX_VISIBLE 120.0f
+
 #define TRACE_EDGE_SAT       0.9f    /* 最外一路黑度 ≥ 0.9×最黑 = 黑带被阵边界切掉（外推的唯一入口）*/
 #define TRACE_BARW_INIT      3.0f    /* 黑带宽度初值（格=传感器间距），前面几帧就会自己收敛 */
 #define TRACE_BARW_TAU       0.02f   /* 宽度跟踪系数（50Hz -> 约 1s 时间常数）*/
@@ -611,8 +622,13 @@ void motor_tracing_cascade(int base_speed)
 
         /* 正负号与 P 项一致：ė > 0 = 线在往车的右边跑 = 车偏左 = 要往右转 = rate_cmd < 0 */
         rate_cmd = -(per_unit * err + pos_kd * s_pos_rate);   /* °/s，>0 = 向左 */
-        if (rate_cmd >  rate_max) rate_cmd =  rate_max;
-        if (rate_cmd < -rate_max) rate_cmd = -rate_max;
+        /* 看见线时**用自己的（小）上限**，别用找线那个 300：见 TRACE_RATE_MAX_VISIBLE 注释。 */
+        {
+            float vlim = TRACE_RATE_MAX_VISIBLE;
+            if (vlim > rate_max) vlim = rate_max;             /* 不越过参数表给的上限 */
+            if (rate_cmd >  vlim) rate_cmd =  vlim;
+            if (rate_cmd < -vlim) rate_cmd = -vlim;
+        }
 
         /* 两条路一起给（2026-10-05 第 6 轮起）：
          *   ① 期望转率直接前馈进内环速率环 —— "跟得上线"的主渠道，低滞后；
@@ -654,11 +670,17 @@ void motor_tracing_cascade(int base_speed)
             }
             return;
         }
-        /* ★2026-10-06 直角要减速：0.33 m/s 下 120ms 的找线延迟里车已经走过 40mm，而探头杆
-         * 总共才 ~60mm ⇒ 不减速就是"冲过弯口、看不到拐过去的那条腿"。检测到路口
-         * （≥4 路同时压线 = s_cross）直接把基准速度压一半。 */
-        if (s_cross != 0U) base_speed = base_speed / 2;
-        if (lost_ms > TRACE_LOST_MS) base_speed = base_speed / 2;   /* 丢线太久：减速找线 */
+        /* ★2026-10-06 直角/丢线的速度策略（改过三版，这里是第三版，前两版都被真车否掉）：
+         *   ① 只写 `base/2` → 内侧轮起始只到 0，靠 170°/s 的转率硬拖；
+         *   ② 再把 corr cap 抬到 14000 去"硬顶出反转"→ **直线上被环变成继电器**：
+         *      用户 m 报「拐回来之后一直震荡在直线上」，日志里 corr 两个方向打到 ±14000、
+         *      车速 20~250mm/s 抽、pos 以 ~750ms 周期在 1.9↔6.8 扫。找线也会反复介入。
+         *   ③ ★现在：真正开始找线时**把基准打成 0** ⇒ `left = −corr, right = +corr`
+         *      = **原地对转**，正好是已经调好的 pivot 工况（base=0 ⇒ cap = corr_limit = 3000、
+         *      差速 6000、实测 ~121°/s）。既拿到了"内侧轮变负"，又不用放着大 cap 去污染
+         *      看见线时的环路；`corr_ref` 也就可以退回 3000。 */
+        if (s_cross != 0U) base_speed = base_speed / 2;   /* 刚进路口：先减速，给探头看到拐后的腿 */
+        if (lost_ms > TRACE_SEARCH_DELAY_MS) base_speed = 0;  /* 开始找线 ⇒ 原地对转（pivot 工况） */
 
         /* 找线：还在丢就朝"线最后偏在哪一侧"持续转（见 TRACE_SEARCH_DELAY_MS 注释）。
          * 直角弯就靠这一下拐过去 —— 目标航向冻住的话车会直着冲出赛道。
