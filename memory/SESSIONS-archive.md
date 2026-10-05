@@ -1,3 +1,17 @@
+## 2026-09-30
+完成：实测两件事：① 技能的 rtt 子命令跑完会在 DEMCR(0xE000EDFC) 留下 VC_CORERESET=0x01000000（清 0 → 跑一次 → 读回 0x01000000），所以观测完要补一次 J-Link 写 0 并 g；② NVM 页 0x0801F800 全 0xFF、SR=0xA0 是复位后的本来状态（firmware/App/Svc/nvram.c:173-177 的注释已记：PGAERR|PGSERR=0xA0 会让 HAL 直接返回错误，所以代码先 __HAL_FLASH_CLEAR_FLAG 再擦）。
+未完成：make flash 与 tools/flash.ps1 两处便捷烧录路径未修；用户已明确要求把缺的依赖装上（STM32CubeProgrammer CLI）。
+下一步：装 STM32CubeProgrammer/STM32CubeCLT 让 tools/flash.ps1 能跑，并修 Makefile 的 flash.jlink 生成（去引号 + DEVICE 改 STM32G474RE）
+
+> 更早的会话条目已归档到 257 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-30
+完成：本机把 stm32-dev 链路跑通：Cube G4 补包（HAL + CMSIS 两个 submodule）+ SVD（STM32G4xx/Include/STM32G474.svd）+ plain make 就地重建 build-app（text 81384/data 220/bss 14264、bin 81612 B）+ -device STM32G474RE 烧 81920 字节并 savebin 回读（只差已知 8 字节空洞）+ stm32-dev rtt 抓到启动横幅与实时 FRAME/MOTION/HOST 行（BUILD Sep 30 2026 11:12:37、nvram loaded=0、enc l=0 r=0 yaw=-4）。中途「烧不进去」的真相是我生成的 .jlink 把 loadfile 行拆成了两行，板子与探针无损，已清 DEMCR 并放程序跑。
+未完成：make flash 在本机会挂死（flash.jlink 每行带引号 + DEVICE=RB 静默假成功）；tools/flash.ps1 依赖的 STM32CubeProgrammer CLI 本机没装。两处都没改，等用户定。
+下一步：把 Makefile 生成 flash.jlink 的行去掉引号、DEVICE 改 STM32G474RE（或让 make flash 直接调 stm32-dev flash）
+
+> 更早的会话条目已归档到 256 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
 ## 2026-09-29
 完成：在真板上把 INA226 的全部寄存器读出来核对（两次复位完全一致）：ID=5449/2260（真芯片在线）、reg00=4127、reg01=0x7FFF（分流满量程钳位、每个采样都恰好 0x7FFF）、reg02 换算 12.023V、reg04/03 换算 16.384A/197W、reg06 CVRF=1 OVF=0。用 CVRF 计数反推转换周期，实测确认配置位序：bit15 RST / bit14:12 只读保留(写任何值都读回 100) / bit11:9 AVG / bit8:6 VBUSCT / bit5:3 VSHCT / bit2:0 MODE，写 0x0000 掉电停转换。0x4127 = 1 次平均 + 1.1ms + 1.1ms + 连续，2.26ms 一次更新；CAL=0x0400=1024 = 0.00512/(1mA*5mΩ) 正确。电池网表 pcb/Netlist_Schematic1_2026-09-29.tel 核对：R2.2+U5.10=IN+ 在源侧、R2.1+U5.8(VBUS)+U5.9(IN-) 在负载侧，与设计一致（不是接线错）。结论：配置与读码换算都对，是分流模拟输入顶到满量程。据此改代码：board.c ina226_init 的错注释"16 次平均"换成实测位序，电流检测页在满量程时给电流/功率加 '!' 前缀（out/oled_power.png 实拍：!16.38A / 12.02V / !197.03W），TEMP 探针（board.c ina226_temp_probe/probe2/cvrf + main_app.c 调用）全部删除；make text 81288/data 220/bss 14264、flash.ps1 回读 firstDiff=none、RTT err=0 busy=0 st=0、表盘 dump 正常。
 未完成：分流输入为何顶格仍未定：可能是 R2 焊点/实际阻值远大于 5mΩ（0.2A 下要 0.41Ω 才钳满）、或 U5 分流输入级被此前的 5V 灌 3V3 事故打坏、或 sense 走线开路把 IN+ 拉到近地。需用户在通电跑动时用万用表直流档量 R2 两个焊盘（0.2A 时约 1mV）并对照电源自身电流表。
