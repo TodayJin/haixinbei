@@ -1,4 +1,11 @@
 ## 2026-09-30
+完成：本机烧录便捷路径全部修好并实测：Makefile 的 flash 目标改为调用 tools/flash.ps1（单一实现），新增 tools/verify_readback.ps1 逐字节回读比对（容忍 0x080001D8..0x080001DF），以回读为唯一结论、失败自动重试一次；DEVICE 改 STM32G474RE；clean 改 rmdir；mkdir 不再建 "-p"；cmd 的 echo 引号坑用 (echo a&echo b) 分组解决。实测：erase→flash 全量 81920 字节 + 回读一致退出码 0；内容已一致时 J-Link 报假错（Programming failed @ 0x08010534）但回读一致、仍退 0；make clean + make -j4 全量重编译通过（bin 81612 B）；烧完 RTT 抓到启动横幅证明板子在跑，DEMCR 已清。
+未完成：STM32CubeProgrammer CLI 仍未安装（ST 官网下载要走下载/登录流程，抓不到直链；C: 只剩 3.40 GB）。
+下一步：等用户决定是否装 CubeProgrammer；不装就维持现有 J-Link + 回读链路（flash.ps1 已留好分支）。
+
+> 更早的会话条目已归档到 258 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-30
 完成：实测两件事：① 技能的 rtt 子命令跑完会在 DEMCR(0xE000EDFC) 留下 VC_CORERESET=0x01000000（清 0 → 跑一次 → 读回 0x01000000），所以观测完要补一次 J-Link 写 0 并 g；② NVM 页 0x0801F800 全 0xFF、SR=0xA0 是复位后的本来状态（firmware/App/Svc/nvram.c:173-177 的注释已记：PGAERR|PGSERR=0xA0 会让 HAL 直接返回错误，所以代码先 __HAL_FLASH_CLEAR_FLAG 再擦）。
 未完成：make flash 与 tools/flash.ps1 两处便捷烧录路径未修；用户已明确要求把缺的依赖装上（STM32CubeProgrammer CLI）。
 下一步：装 STM32CubeProgrammer/STM32CubeCLT 让 tools/flash.ps1 能跑，并修 Makefile 的 flash.jlink 生成（去引号 + DEVICE 改 STM32G474RE）
