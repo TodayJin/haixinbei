@@ -146,7 +146,10 @@
  * whiteish = 0 ⇒ 就是这个 bug。判据：最亮那一路也得有最黑那一路的 TRACE_UNIFORM_MIN
  * 倍以上，才算"有明暗结构 = 有线"；真线必然至少一侧明显比黑带亮。 */
 #define TRACE_UNIFORM_MIN    0.75f
-#define TRACE_LOST_STOP_MS   1000U   /* 连续丢线超过这么久：停车，不再闷头直冲（用户 m29239/m29852）*/
+#define TRACE_LOST_STOP_MS   2500U   /* 连续丢线超过这么久：停车，不再闷头直冲（用户 m29239/m29852）
+                                      * ★2026-10-06：1000 → 2500。直角扫回来本来就要时间，
+                                      * 1s 太紧 —— 真车实测 c2/c5 就是"扫到一半被自己停掉"
+                                      * （末帧 pwm≈0、车趴在弯口）。*/
 
 /* 丢线找线（用户 m33109：直角弯"拐不过去"）。
  * 老行为：线一丢，目标航向就冻住 -> 车按丢线那一刻的航向**直着冲**，弯越急冲出去越快；
@@ -156,7 +159,19 @@
  * **最后看到线的方向**持续转（TRACE_SEARCH_RATE ≈ 内环能跟的满转率），一路扫到
  * TRACE_LOST_STOP_MS 还没找到才停车。方向取最后一次有效帧的 err 符号。*/
 #define TRACE_SEARCH_DELAY_MS 120U    /* 丢线先保持航向这么久（ms）*/
-#define TRACE_SEARCH_RATE     110.0f  /* 找线时的转率（°/s），会被期望角速度上限夹住 */
+#define TRACE_SEARCH_RATE     170.0f  /* 找线时的转率（°/s），会被期望角速度上限夹住。
+                                       * ★2026-10-06：110 → 170。直角实测扫不回来（转速不够，
+                                       * 90° 里只转进去 40~60°），而内环现在给得起
+                                       * （trace_rate_max=300、corr_ref=1500 ⇒ corr cap 14000）。*/
+/* ★2026-10-06 找线方向的鲁棒化。原来那句是
+ *     if (err > 0.05f) s_search_dir = ±1;
+ * 用的是**最后一帧的符号**，死区只有 0.05 格 = 灰度重心的噪声量级 ⇒ 车在轻微摆动时丢线，
+ * 方向基本是随机的。真车证据（第 32 轮 c1 vs c6：同一套参数、摆位几乎一样、Δyaw 0° vs 9.2°）：
+ *     yaw 整趟变化 +60.6° vs −58.3° —— **朝相反方向拐**，参数不可能让同一配置变号。
+ * 现在先过一道短 EMA（τ≈80ms@50Hz）再带 0.3 格死区取符号：反映"最近约百毫秒线持续偏在哪
+ * 一侧"，单帧噪声翻不动它；丢线期间不更新（这个块只在真的看到线时执行）⇒ 方向被冻住。 */
+#define TRACE_SEARCH_DIR_LPF   0.25f  /* err 的短 EMA 系数（每个有效灰度帧一次） */
+#define TRACE_SEARCH_DIR_DEAD  0.30f  /* 死区（格）—— 0.05 太小，会被重心噪声翻向 */
 
 #define TRACE_EDGE_SAT       0.9f    /* 最外一路黑度 ≥ 0.9×最黑 = 黑带被阵边界切掉（外推的唯一入口）*/
 #define TRACE_BARW_INIT      3.0f    /* 黑带宽度初值（格=传感器间距），前面几帧就会自己收敛 */
@@ -169,6 +184,7 @@ static float   last_data  = TRACE_SETPOINT;
 static uint8_t all_sensors_lost = 0;
 static uint8_t s_lost_stop       = 0;   /* 丢线停车已经执行过（每次丢线只执行一次）*/
 static int8_t  s_search_dir      = 0;   /* 最后一次看到线时它偏在哪一侧：+1 右 / -1 左（丢线找线用）*/
+static float   s_err_dir         = 0.0f;/* err 的短 EMA（τ≈80ms@50Hz）：丢线找线判方向用，见 TRACE_SEARCH_DIR_LPF */
 static float   last_pid_output  = 0.0f;
 
 /* 外环微分项（阻尼）的状态：重心变化率 ė（格/s），只在新的灰度帧上更新 */
@@ -616,9 +632,11 @@ void motor_tracing_cascade(int base_speed)
         d = rate_cmd * TRACE_CASCADE_DT_S;
         GyroControl_AimRelative(d);
 
-        /* 记住线偏在哪一侧（带死区，不记噪声），丢线找线要用 */
-        if (err >  0.05f) s_search_dir =  1;
-        if (err < -0.05f) s_search_dir = -1;
+        /* 记住"线持续偏在哪一侧"，丢线找线要用（见 TRACE_SEARCH_DIR_LPF 的注释：
+         * 原来直接取最后一帧符号、死区 0.05 格，方向会被重心噪声随机翻向）。 */
+        s_err_dir += (err - s_err_dir) * TRACE_SEARCH_DIR_LPF;
+        if (s_err_dir >  TRACE_SEARCH_DIR_DEAD) s_search_dir =  1;
+        if (s_err_dir < -TRACE_SEARCH_DIR_DEAD) s_search_dir = -1;
     }
 
     if (all_sensors_lost && s_lost_since != 0U) {
@@ -636,21 +654,32 @@ void motor_tracing_cascade(int base_speed)
             }
             return;
         }
+        /* ★2026-10-06 直角要减速：0.33 m/s 下 120ms 的找线延迟里车已经走过 40mm，而探头杆
+         * 总共才 ~60mm ⇒ 不减速就是"冲过弯口、看不到拐过去的那条腿"。检测到路口
+         * （≥4 路同时压线 = s_cross）直接把基准速度压一半。 */
+        if (s_cross != 0U) base_speed = base_speed / 2;
         if (lost_ms > TRACE_LOST_MS) base_speed = base_speed / 2;   /* 丢线太久：减速找线 */
 
-        /* 找线：还在丢就朝最后看到线的方向持续转（见 TRACE_SEARCH_DELAY_MS 注释）。
-         * 直角弯就靠这一下拐过去 —— 目标航向冻住的话车会直着冲出赛道。*/
-        if (lost_ms > TRACE_SEARCH_DELAY_MS && s_search_dir != 0) {
-            float rate  = TRACE_SEARCH_RATE;
-            float rate_max = ((s_trace_rate_max > 0.0f) ? s_trace_rate_max : TRACE_RATE_MAX_DEFAULT);
-            float rate_cmd = -(float)s_search_dir * rate;  /* >0 = 向左 */
+        /* 找线：还在丢就朝"线最后偏在哪一侧"持续转（见 TRACE_SEARCH_DELAY_MS 注释）。
+         * 直角弯就靠这一下拐过去 —— 目标航向冻住的话车会直着冲出赛道。
+         * ★方向不再只靠 s_search_dir：它可能整趟都没被置过（车一直很正）⇒ 退化成按
+         * err 短 EMA 的符号挑一边，总比"不动等着被停车"强。 */
+        {
+            int8_t dir = s_search_dir;
+            if (dir == 0) dir = (s_err_dir >= 0.0f) ? 1 : -1;
 
-            if (rate_cmd >  rate_max) rate_cmd =  rate_max;
-            if (rate_cmd < -rate_max) rate_cmd = -rate_max;
-            /* 找线也走"前馈 + 目标航向"两条路：前馈让车当下就按这个转率转起来
-             * （丢线时航向误差可能还很小，光推目标的话要等误差长出来才动）。 */
-            GyroControl_SetTraceRate(rate_cmd);
-            GyroControl_AimRelative(rate_cmd * TRACE_CASCADE_DT_S);
+            if (lost_ms > TRACE_SEARCH_DELAY_MS) {
+                float rate  = TRACE_SEARCH_RATE;
+                float rate_max = ((s_trace_rate_max > 0.0f) ? s_trace_rate_max : TRACE_RATE_MAX_DEFAULT);
+                float rate_cmd = -(float)dir * rate;  /* >0 = 向左 */
+
+                if (rate_cmd >  rate_max) rate_cmd =  rate_max;
+                if (rate_cmd < -rate_max) rate_cmd = -rate_max;
+                /* 找线也走"前馈 + 目标航向"两条路：前馈让车当下就按这个转率转起来
+                 * （丢线时航向误差可能还很小，光推目标的话要等误差长出来才动）。 */
+                GyroControl_SetTraceRate(rate_cmd);
+                GyroControl_AimRelative(rate_cmd * TRACE_CASCADE_DT_S);
+            }
         }
     }
     s_lost_stop = 0U;
@@ -674,6 +703,7 @@ void motor_tracing_reset_cascade(void)
 {
     s_base_valid    = 0U;
     s_search_dir    = 0;
+    s_err_dir       = 0.0f;
     last_pid_output = 0.0f;
     s_lost_since    = 0U;
     s_lost_stop     = 0U;

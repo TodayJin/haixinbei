@@ -254,6 +254,26 @@ int main(void)
     motor_tracing_cascade(1200);
     CHECK(g_ff_rate < -0.1f);                                /* 朝最后看到线的方向（右）持续转 */
 
+    /* §4g ★找线方向抗噪（2026-10-06 真车 bug）：原来判方向用的是**最后一帧的符号**、
+     *     死区只有 0.05 格（=灰度重心噪声量级）⇒ 车在轻微摆动时丢线，方向基本随机。
+     *     真车证据：同一套参数、摆位几乎一样的两趟 c1/c6，yaw 整趟变化 +60.6° vs −58.3°，
+     *     **朝相反方向拐**。现在先过短 EMA（α=0.25）再带 0.3 格死区 ⇒ 小幅交替噪声翻不动它。
+     *     本用例故意让噪声**结束在左侧**（最后一帧 err = −0.5）：旧实现会被翻成"往左找"，
+     *     新实现必须还是"往右找"。 */
+    scene();
+    g_pu = 60.0f;
+    w_line(5, 200.0f);                                       /* err ≈ +0.5 格 */
+    for (int i = 0; i < 8; i++) motor_tracing_cascade(1200); /* EMA 收上去 ⇒ 方向 = 右 */
+    for (int i = 0; i < 4; i++) {                            /* 交替小幅噪声：±0.5 格，末帧在左 */
+        w_line((i & 1) ? 4 : 5, 200.0f);
+        motor_tracing_cascade(1200);
+    }
+    for (int i = 0; i < 8; i++) g_w[i] = 200.0f;             /* 丢线 */
+    for (int i = 0; i < 4; i++) motor_tracing_cascade(1200);
+    host_tick_add(200u);
+    motor_tracing_cascade(1200);
+    CHECK(g_ff_rate < -0.1f);                                /* 仍然朝右 ⇒ 没被最后一帧翻向 */
+
     /* §5 ★幻影中线（用户 m29852）：探头底下没线，自适应帧 8 路全白 ⇒ 必须判丢线 */
     scene();
     for (int i = 0; i < 8; i++) g_w[i] = 200.0f;              /* 均匀一片 = 无线 */
@@ -264,7 +284,7 @@ int main(void)
     motor_tracing_cascade(1200);
     CHECK_EQ_I(tracing_lost(), 1);
     CHECK_EQ_I(g_gyro_l, 600);                                /* 慢速找线 */
-    host_tick_add(1000u);                                     /* 超 TRACE_LOST_STOP_MS(1000) */
+    host_tick_add(2600u);                                     /* 超 TRACE_LOST_STOP_MS(2500) */
     motor_tracing_cascade(1200);
     CHECK_EQ_I(g_gyro_stops, 1);                              /* 角度环松手 */
     CHECK_EQ_I(g_sc_stops, 1);                                /* 速度环停 */
@@ -297,7 +317,7 @@ int main(void)
     motor_tracing_cascade(1200);
     CHECK_EQ_I(tracing_lost(), 1);
     CHECK_EQ_I(g_gyro_l, 1200);
-    host_tick_add(1100u);
+    host_tick_add(2600u);
     motor_tracing_cascade(1200);
     CHECK_EQ_I(host_load_left(), 0);
     CHECK_EQ_I(host_load_right(), 0);
@@ -316,7 +336,7 @@ int main(void)
     scene();
     for (int i = 0; i < 8; i++) g_w[i] = 200.0f;
     motor_tracing_cascade(1200);
-    host_tick_add(1500u);
+    host_tick_add(2600u);
     motor_tracing_cascade(1200);
     CHECK_EQ_I(g_sc_stops, 1);
     g_w[3] = 200.0f; g_w[4] = 200.0f;                        /* 重新压到线 */

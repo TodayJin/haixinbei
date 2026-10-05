@@ -1,4 +1,25 @@
 ## 2026-09-29 · KK_UI 界面
+完成：用户 m04708：翻页时表盘那圈圆角框必须自己当合缝（原来 32px 视差 + 合缝取进来那页左边缘，出去的表盘框右半边被裁掉、看着像被黑线切开）。改成 kk_ui_nav.c 的 KK_UI_DrawScene 里两页都整屏滑 127px、合缝 = 进来那页的左边缘，且进来那页的 x = (127 - slide)，保证 boundary-1 恰好是表盘框右边缘列（1+off+125 = off+126）。用 TEMP 冻结过渡在 35%（duration=60000 + progress=Q12*35/100）在真板上分别抓正向 home→menu（out/oled_tr_fwd.png：框右边缘竖线在第 82 列完整可见、右边紧贴菜单）与反向 menu→home（out/oled_tr_rev.png：表盘框从左边完整滑入，右边缘第 43 列）；TEMP 全部还原、root_page 回 PAGE_SPLASH、make -j4 text 81108/data 220/bss 14264、tools/flash.ps1 回读一致 81336 字节 firstDiff=none、RTT out/rtt_bezel3.log 启动 10 行齐 + FRAME avg=690us max=3410us tx_done=16 err=0 busy=0 st=0。顺手修掉 app_ui.c draw_splash_page 里指向已删除的 kk_ui_draw_card() 的过期注释。
+未完成：kk_ui_draw_card() 已整段删除，KK_UI_PAGE_PARALLAX 宏变成没人用（留着没删）；用户还没回答四个电源灯闪烁的排查问题
+下一步：等用户看实屏反馈：若过渡速度/观感要调，改 KK_UI_PAGE_MS 或过渡时长；若要菜单页也带框，就是另一套需求
+
+> 更早的会话条目已归档到 254 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-29 · KK_UI 界面
+完成：按用户 m04657 的澄清重做外框：外框归'页'所有，翻页时每页各自的圆角框跟着自己滑，菜单页静止时不带框。(1) kk_ui_nav.c 新增 static void kk_ui_draw_card(int16_t x_offset, int16_t clip_x, uint16_t clip_width)：按该页裁剪窗口画 OLED_DrawRFrame(1+x_offset, 1, 126U, 62U, KK_UI_BEZEL_RADIUS)，KK_UI_DrawScene 的正向/反向过渡分支里在两个 KK_UI_DrawPage 之后各调一次；原来那段'贴屏边常驻外框'（OLED_DrawRFrame(0,0,128,64,6)，不带 s_dx）已删除。(2) app_ui.c 的 draw_splash_page() 恢复自画外框 OLED_DrawRFrame((1+s_dx),1,126U,62U,6U)，与 kk_ui_draw_card 完全同几何（所以表盘页不会双重描边）。效果：表盘静止有框、菜单静止无框、主页->任务过渡时合缝处是进来那页的带圆角竖线（不再是黑边直切）。真板实拍（TEMP 把过渡冻结在 35%：start_transition 里 duration=60000、DrawScene 里 progress 强制 35%、app_ui_init 末尾 NavigateTo(PAGE_HOME)）：out/oled_tr_real.png + out/oled_tr_real.bin；菜单静止 out/oled_menu_noframe.png；表盘静止 out/oled_splash_now.png。生产固件 text 81168/data 220/bss 14264、bin 81488 字节，tools/flash.ps1 回读一致 firstDiff=none，RTT err=0 busy=0 st=0。
+未完成：过渡结束那一帧进来那页的框会消失（静止不带框的必然结果）；用户若只要'一条带圆角的竖线'、不要上下两条横边线，把进来那页的 clip 收窄到 8px 即可（还没做）。
+下一步：等用户看 out/oled_tr_real.png 确认合缝样式；若要窄边线版本按上面的做法改 kk_ui_draw_card 的裁剪宽度。
+
+> 更早的会话条目已归档到 253 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-29 · KK_UI 界面
+完成：把屏幕外框改成 KK_UI 常驻圆角白框：firmware/Middlewares/kk_ui/src/kk_ui_nav.c 的 KK_UI_DrawScene 在画完两页（含过渡位移）之后、对话框/Toast 之前，无条件 OLED_DrawRFrame(0,0,KK_UI_SCREEN_WIDTH,KK_UI_SCREEN_HEIGHT,KK_UI_BEZEL_RADIUS=6U)，常量加在 firmware/Middlewares/kk_ui/src/kk_ui_internal.h:33；同时删掉 firmware/App/Src/app_ui.c draw_splash_page() 里原来那句 OLED_DrawRFrame((int16_t)(1+s_dx),1,126U,62U,6U)（它带 s_dx，翻页时会跟着内容滑走、屏沿露出黑边，用户 m04517 就是看到这个）。构建 text 81132/data 220/bss 14264，tools/flash.ps1 回读 firstDiff=none，RTT 启动 10 行齐、FRAME avg=677us max=3425us tx_done=16 err=0 busy=0 st=0。实屏取证：J-Link savebin 0x20001230 2048 后 node out/render_oled.mjs 渲染成 PNG —— out/oled_final.png（表盘+贴边白框）、out/oled_menu2.png（图标菜单+同一个框）、out/sim_tr_035.png（用 KK_UI 过渡公式把两页真实缓冲合成的翻页中途帧，框定住不动）。
+未完成：翻页中途只有合成图、没有真板实拍（没法注入按键）；外框现在所有页面都有，用户若只想让表盘有需回退。
+下一步：等用户看板确认外框观感；若嫌图标菜单底部标签贴到框上可把 KK_UI_BEZEL_RADIUS 或 home 标签 y 微调。
+
+> 更早的会话条目已归档到 252 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-29 · KK_UI 界面
 完成：用户 m01348 四项全部落地并上板：①主页=上电表盘(PAGE_SPLASH 根页)，没有房子图标，左右滑进出 7 项图标菜单(PAGE_HOME)，菜单两端缝隙再滑回表盘；②模块测试标题'偏一下'真因是 draw_text() 内部已加 s_dx、调用处又加了一次(双重位移)，已改成传 (128-w)/2；③模块测试返回行画的左尖角与原生菜单 kk_ui_draw_enter_arrow(back=true) 逐像素一致；④四个只读 agent 全量审计(菜单绑定/绘制几何/输入退出/字模与 API)，修掉:循迹页 0/1 数字双重 s_dx、模块测试页缺滚动条、fmt_milli 截断改四舍五入、任务页 '左键返回' 画在 y=64 屏外(改 y=52)、item_count 改用 APP_UI_ITEM_COUNT、循迹速度写回 HP_BASE_SPEED、5 个导航 API 从内部头提到 kk_ui.h、端点夹住不回绕、进模块测试复位 s_test_sel、存盘期电机被挡、'正在保存'每拍重试且只有提示真的上屏才锁键、OLED 忙等待加 2.1s 上限。验证:make text 81120/data 220/bss 14264 → bin 81348 → flash 回读 firstDiff=none → RTT 启动 10 行齐全、FRAME err=0 busy=0 st=0、HOST 50Hz。
 下一步：把三套标题版式/各页返回提示口径不一致、过渡期快速连点丢键、两张死图标(256B)报给用户拍板；灰度模块 SDK 到位后做循迹页标定。
 

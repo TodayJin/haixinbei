@@ -53,7 +53,7 @@ app_settings_t g_cfg = {
      * D 项是 12 的 30 倍（1 格/s 的重心变化就要求 360°/s，远超 rate_max=120 ⇒
      * 对灰度噪声 bang-bang）。实测证据：上位机 /api/params/reload 读回 line_kd=360.0，
      * 而 SPECS/params.py 都是 12.0。 */
-    .line_kd_x100 = 1200,    /* HP_LINE_KD        12.0（串级外环 D 项，见上） */
+    .line_kd_x100 = 3600,    /* HP_LINE_KD        36.0（串级外环 D 项；2026-10-06 真车整定 12→36，见下） */
     .line_ilim    = 50,      /* HP_LINE_ILIMIT   50（误差单位，不换算） */
     /* 角度环增益（HP_GYRO_*）：**不能**沿用「旧值 ×7.2」。2026-10-01 原地台架实测
      * （out/_angletest.ps1，只改 RAM 不烧录）：
@@ -495,7 +495,7 @@ static void pull_pid_params(void)
      * 实测选定值 150/15（旧刻度 ×7.2 的 720/72 在本板自激，见 g_cfg 默认值注释）。 */
     g_cfg.line_kp_x100 = param_to_x100(HP_LINE_KP,    2700.0f);
     g_cfg.line_ki_x100 = param_to_x100(HP_LINE_KI,      10.8f);
-    g_cfg.line_kd_x100 = param_to_x100(HP_LINE_KD,      12.0f);
+    g_cfg.line_kd_x100 = param_to_x100(HP_LINE_KD,      36.0f);
     g_cfg.line_ilim    = (int32_t)host_param_get(HP_LINE_ILIMIT, 50.0f);
     g_cfg.gyro_kp_x100 = param_to_x100(HP_GYRO_KP,     150.0f);
     g_cfg.gyro_ki_x100 = param_to_x100(HP_GYRO_KI,       0.0f);
@@ -2849,6 +2849,9 @@ void app_ui_set_gyro_axis_mode(uint8_t mode)
  * 与上面角度环同理：只在"存档里还是那个旧默认值"时迁移，用户自己调过的不动；
  * 迁移后 nvram_poll() 会发现 s_live != s_saved 并自动回写存档。 */
 #define CFG_LINE_KD_OLD_X100 36000
+/* 2026-10-05 那一版默认值 12.00（= 1200）—— 2026-10-06 真车在 0.5m 正常线上整定成 36.00（= 3600）后作废。
+ * 它同样要迁移：这块板的 NVRAM 上一轮刚被迁到 1200。 */
+#define CFG_LINE_KD_12_X100   1200
 
 /* nvram 把存档盖回 g_cfg 之后调用：把新值推到运行时（灰度通道选择 + PID
  * 参数表），并让界面重画一遍。顺序很重要——app_ui_init() 里的
@@ -2862,9 +2865,12 @@ void app_ui_settings_loaded(void)
         g_cfg.gyro_kp_x100 = 15000;
         g_cfg.gyro_kd_x100 =  1500;
     }
-    /* 循迹外环 D 项迁移：旧默认 360.0 → 12.0（2026-10-06，见 CFG_LINE_KD_OLD_X100 注释） */
+    /* 循迹外环 D 项迁移：旧默认 360.0 → 12.0 → **36.0**（2026-10-05 改 12、2026-10-06 真车整定到 36） */
     if (g_cfg.line_kd_x100 == CFG_LINE_KD_OLD_X100) {
-        g_cfg.line_kd_x100 = 1200;
+        g_cfg.line_kd_x100 = 3600;
+    }
+    if (g_cfg.line_kd_x100 == CFG_LINE_KD_12_X100) {
+        g_cfg.line_kd_x100 = 3600;
     }
     /* 角度 Ki 迁移：10.8 是旧默认（补静摩擦死区），现在默认 0 ——
      * 积分会被死区喂成常驻推力，车停在停车带外（实测 2.1~2.4°）一直抽。 */

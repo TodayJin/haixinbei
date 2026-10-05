@@ -14,6 +14,21 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-06 · 循迹调参
+完成：直角弯基线 + 第 32 轮 6 趟（4s/趟，车先跑一段直线再拐直角）：corr_ref 1500 确实让内侧轮反转（corr ±14000、vl −288），但**直角本身仍不成**；六趟 yaw 整趟变化 +60.6/−58.3/+46.1/+49.4/−66.4/+45.1°，丢线 14~39%。结论：卡在找线逻辑（方向随机 + 1s 停车门槛）。
+未完成：① 一个存疑读数：c6（基线 cr3000，cap 应为 7000）却读到 `corr = −14000`，而 c1 同配置只有 ±7000 —— 要么 `_capdrive.py` 的列位串了，要么 `angle.corr` 不是钳后的量（待查；但内侧轮反转有编码器独立证据）；② `kd=36`、`trace_rate_max=300`、`corr_ref=1500` 都**还在车上 RAM，未入固件**（SPECS/params.py 里分别还是 12/无/3000）⇒ 必须烧录 + 加 NVRAM 迁移（`line_kd` 是存档项）；③ 直角相的 `corr_ref`/`trace_angle_max` 定稿后要回验 pivot。
+下一步：改 `PID_tracing.c` 的丢线找线：① 方向不再按最后一帧误差随机选，用丢线前一段窗口的持续符号（或结合 `tracing_cross()` 的路口检测）；② `TRACE_LOST_STOP_MS` 1000 → 2500（给扫回线的时间）；然后烧录实测直角。
+
+## 2026-10-06 · 循迹调参
+完成：正常短线段（0.5m、微弯）外环 P/D 重调完成（第 29~31 轮共 19 趟，每趟 1.4s、base 7000、丢线全 0）：`line_kd` 12 → **36** 下车（重启桥真读 12 项一致）；`pu` 锁定 30、`trace_rate_max` 锁定 300。同时把扫描器的两处工具坑修了：① 摆位接受窗口 `CentLo/CentHi` 2.0~6.5 → **0.5~8.5**（用户摆到 cent 6.62 被挡住、脚本不发车也不说人话）；② `Test-Placed` 的等待信息改成说人话（“车还在动 / 线没在探头底下 / 重心超出窗口”）。新建 `out/_wtbl.py`（每趟一行的紧凑汇总表）。
+未完成：① **没烧进固件**：`line_kd=36` 现在只在车上 RAM（SPECS/params.py 里还是 12），要跟直角相若定完后一起烧；② `line_kd` 是 g_cfg 管理的存档项 ⇒ 烧录只是改出厂默认，**这块板的 NVRAM 里还是 12**（迁移只做了 36000→1200 那一步）——要持久化得再加一条 1200→3600 的迁移或做一次 `/api/params/save`；③ 直角相的 `trace_angle_max` 还没调（第 26 轮 s4=am60 那一趟丢线 55.5%，现在回想可能就是用户说的“直角那一轮”，所以不是“越宽越好”，得单独扫）。
+下一步：用户把车摆到直角弯，我按新工况重调（先看 `trace_angle_max` 35/50/70 与 `pu` 在 90° 初值下的表现），然后定稿一起烧固件 + 提交。
+
+## 2026-10-06 · 循迹调参
+完成：循迹环收口并入库（提交 `f4439ed`，26 文件 +1480/−908）：① 新增 `HP_TRACE_RATE_MAX`(0x020A, 默认 300) —— 只在循迹时生效的期望角速度上限（`ff_rate == 0` 的 pivot 路逐位不变，`_signtest 60` 复验 Δ+60.00° / 到 90% 864ms）；② `GyroControl_CorrLimit()` 硬夹子放宽到 `MOTOR_PWM_MAX+|base|`；③ `HP_TASK_SPEED` 6480→7000；④ `app_ui.c` 的 `line_kd` 三处同步 + NVRAM 迁移 + 新增三处一致断言。验证：固件 15/15、上位机 176 passed、烧录回读 firstDiff=none（118016 B）、重启桥后 `/api/params/reload` 逐项核对 13 项全一致（`param_crc 29653`）。
+未完成：① 任务路径（`task_run.c` 按 `HP_TASK_SPEED=7000` 起速跑串级）还没在赛道上跑过一整条任务 —— 车上存的那条「常态循迹」可以直接测；② `tools/console/web/src/pages/Imu.tsx` 那个「朝向控制」滑块的方向直觉问题按用户 m 暂不处理（往右拖 = 正 = 左转，标签是对的、直觉是反的）；③ `.tmp/` 未跟踪（旧会话的提交信息草稿与 `gyro_hunks.patch`），未加 .gitignore。
+下一步：请用户摆好车、从任务页或上位机跑一次「常态循迹」，验证 7000 速度 + 新速率天花板在整条任务上的表现；OK 则本次调整收官。
+
+## 2026-10-06 · 循迹调参
 完成：真车 A/B（第25/26轮，随机摆位）发现：`corr` 恒 7200 顶死、航向误差稳定在 16.8°（= 180/ang_kp）、`rate_ref` 要 271 °/s 而执行器只能给 ~110~150 ⇒ 车绕着线转圈（用户原话「贴着线走」）。逐帧证据 `out/_drv_7000_s2_cr1200rm300.txt`。机理：`rate_ref` 被 `s_rate_max` 夹住 ⇒ `corr ≤ rate_kp × rate_max = 40×120 = 4800 < base 7000` ⇒ 内侧轮永远到不了 0。
 未完成：第27轮（降 `pu`/`kd`/收 `am`）被用户当场否掉：那些参数把大转弯的需求也砍了，直角完全跟不上 —— **用户的原话就是判据**。降需求这条路对本车的症状是反的。
 下一步：第28轮正在跑：只改 `trace_rate_max`（120 旧行为 / 200 / 300），pivot 系数与角度环全部锁死，主要看直角工况能不能救回来。
@@ -908,19 +923,4 @@
 未完成：分流输入为何顶格仍未定：可能是 R2 焊点/实际阻值远大于 5mΩ（0.2A 下要 0.41Ω 才钳满）、或 U5 分流输入级被此前的 5V 灌 3V3 事故打坏、或 sense 走线开路把 IN+ 拉到近地。需用户在通电跑动时用万用表直流档量 R2 两个焊盘（0.2A 时约 1mV）并对照电源自身电流表。
 下一步：用户给出 R2 两端电压后判定是 R2/焊点还是 U5，再决定换件或改字模（超量程 的中文需重生成 kk_font_body）
 
-## 2026-09-29 · KK_UI 界面
-完成：用户 m04708：翻页时表盘那圈圆角框必须自己当合缝（原来 32px 视差 + 合缝取进来那页左边缘，出去的表盘框右半边被裁掉、看着像被黑线切开）。改成 kk_ui_nav.c 的 KK_UI_DrawScene 里两页都整屏滑 127px、合缝 = 进来那页的左边缘，且进来那页的 x = (127 - slide)，保证 boundary-1 恰好是表盘框右边缘列（1+off+125 = off+126）。用 TEMP 冻结过渡在 35%（duration=60000 + progress=Q12*35/100）在真板上分别抓正向 home→menu（out/oled_tr_fwd.png：框右边缘竖线在第 82 列完整可见、右边紧贴菜单）与反向 menu→home（out/oled_tr_rev.png：表盘框从左边完整滑入，右边缘第 43 列）；TEMP 全部还原、root_page 回 PAGE_SPLASH、make -j4 text 81108/data 220/bss 14264、tools/flash.ps1 回读一致 81336 字节 firstDiff=none、RTT out/rtt_bezel3.log 启动 10 行齐 + FRAME avg=690us max=3410us tx_done=16 err=0 busy=0 st=0。顺手修掉 app_ui.c draw_splash_page 里指向已删除的 kk_ui_draw_card() 的过期注释。
-未完成：kk_ui_draw_card() 已整段删除，KK_UI_PAGE_PARALLAX 宏变成没人用（留着没删）；用户还没回答四个电源灯闪烁的排查问题
-下一步：等用户看实屏反馈：若过渡速度/观感要调，改 KK_UI_PAGE_MS 或过渡时长；若要菜单页也带框，就是另一套需求
-
-## 2026-09-29 · KK_UI 界面
-完成：按用户 m04657 的澄清重做外框：外框归'页'所有，翻页时每页各自的圆角框跟着自己滑，菜单页静止时不带框。(1) kk_ui_nav.c 新增 static void kk_ui_draw_card(int16_t x_offset, int16_t clip_x, uint16_t clip_width)：按该页裁剪窗口画 OLED_DrawRFrame(1+x_offset, 1, 126U, 62U, KK_UI_BEZEL_RADIUS)，KK_UI_DrawScene 的正向/反向过渡分支里在两个 KK_UI_DrawPage 之后各调一次；原来那段'贴屏边常驻外框'（OLED_DrawRFrame(0,0,128,64,6)，不带 s_dx）已删除。(2) app_ui.c 的 draw_splash_page() 恢复自画外框 OLED_DrawRFrame((1+s_dx),1,126U,62U,6U)，与 kk_ui_draw_card 完全同几何（所以表盘页不会双重描边）。效果：表盘静止有框、菜单静止无框、主页->任务过渡时合缝处是进来那页的带圆角竖线（不再是黑边直切）。真板实拍（TEMP 把过渡冻结在 35%：start_transition 里 duration=60000、DrawScene 里 progress 强制 35%、app_ui_init 末尾 NavigateTo(PAGE_HOME)）：out/oled_tr_real.png + out/oled_tr_real.bin；菜单静止 out/oled_menu_noframe.png；表盘静止 out/oled_splash_now.png。生产固件 text 81168/data 220/bss 14264、bin 81488 字节，tools/flash.ps1 回读一致 firstDiff=none，RTT err=0 busy=0 st=0。
-未完成：过渡结束那一帧进来那页的框会消失（静止不带框的必然结果）；用户若只要'一条带圆角的竖线'、不要上下两条横边线，把进来那页的 clip 收窄到 8px 即可（还没做）。
-下一步：等用户看 out/oled_tr_real.png 确认合缝样式；若要窄边线版本按上面的做法改 kk_ui_draw_card 的裁剪宽度。
-
-## 2026-09-29 · KK_UI 界面
-完成：把屏幕外框改成 KK_UI 常驻圆角白框：firmware/Middlewares/kk_ui/src/kk_ui_nav.c 的 KK_UI_DrawScene 在画完两页（含过渡位移）之后、对话框/Toast 之前，无条件 OLED_DrawRFrame(0,0,KK_UI_SCREEN_WIDTH,KK_UI_SCREEN_HEIGHT,KK_UI_BEZEL_RADIUS=6U)，常量加在 firmware/Middlewares/kk_ui/src/kk_ui_internal.h:33；同时删掉 firmware/App/Src/app_ui.c draw_splash_page() 里原来那句 OLED_DrawRFrame((int16_t)(1+s_dx),1,126U,62U,6U)（它带 s_dx，翻页时会跟着内容滑走、屏沿露出黑边，用户 m04517 就是看到这个）。构建 text 81132/data 220/bss 14264，tools/flash.ps1 回读 firstDiff=none，RTT 启动 10 行齐、FRAME avg=677us max=3425us tx_done=16 err=0 busy=0 st=0。实屏取证：J-Link savebin 0x20001230 2048 后 node out/render_oled.mjs 渲染成 PNG —— out/oled_final.png（表盘+贴边白框）、out/oled_menu2.png（图标菜单+同一个框）、out/sim_tr_035.png（用 KK_UI 过渡公式把两页真实缓冲合成的翻页中途帧，框定住不动）。
-未完成：翻页中途只有合成图、没有真板实拍（没法注入按键）；外框现在所有页面都有，用户若只想让表盘有需回退。
-下一步：等用户看板确认外框观感；若嫌图标菜单底部标签贴到框上可把 KK_UI_BEZEL_RADIUS 或 home 标签 y 微调。
-
-> 更早的会话条目已归档到 252 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 255 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
