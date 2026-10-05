@@ -105,10 +105,14 @@ volatile float s_corr_ref = 3000.0f;
  *   不然会在 7°/s 上滑过头）。
  * 全部量都能从台架 SWD 直改（不用重烧）：s_law=0 老 PID、1 三档开关、2 连续速率环、3（默认）同上+到位锁存。 */
 volatile uint8_t s_law       = 3;      /* 3 = 连续速率环 + 到位锁存（默认，2026-10-02 定）；0 = 老 位置 PID + 陀螺阻尼（对照用）；1 三档开关；2 连续速率环 */
-volatile float s_ang_kp      = 7.0f;   /* (°/s)/°：角度误差 → 期望角速度。
+volatile float s_ang_kp      = 10.0f;  /* (°/s)/°：角度误差 → 期望角速度。
                                         * 2026-10-02 台架定 3.5（原 4.0）；2026-10-05 深夜**原地转圈**
-                                        * 整定改 7（与 rate_kp 160 / rate_kd 0 配对：30° 阶跃上升
-                                        * 0.281s、静差 −0.40°、换向 1.2 次/s，比 3.5/80/4 快 2.6 倍）。
+                                        * 整定改 7（与 rate_kp 160 / rate_kd 0 配对）；**2026-10-06 定 10**：
+                                        * ang_kp 是唯一能压缩到位时间的旋钮，三轮交错 A/B（ak5/fin1/fin2
+                                        * 共 19 趟、两个转向各半）一致 ⇒ 10-90% 0.47s → 0.29s、
+                                        * 到 90% 0.67s → 0.50s；窗 p-p 与换向不变（~3° / 0~1 次），
+                                        * 峰值更收敛（需与 settle_deg 0.8 配对）。
+                                        * ⚠ 与循迹共用（PID_tracing 每拍改目标航向）⇒ 赛道需复验。
                                         * 注意这里只是兜底初值 —— 每拍都会被参数表 HP_GYRO_ANG_KP 覆盖。 */
 volatile float s_rate_max    = 120.0f; /* 期望角速度上限 °/s（2026-10-05 与参数表默认对齐；原地转圈扫 60~300 无差别） */
 volatile float s_rate_band   = 10.0f;  /* s_law=1 内环滞环带宽 °/s（防抖） */
@@ -129,9 +133,11 @@ volatile float s_ff_rate     = 3.0f;   /* s_law=2 摩擦前馈的方向判定阈
 volatile float s_stuck_rate  = 2.0f;   /* s_law=2 "真的停住了"的角速度阈值 °/s */
 volatile float s_boost_rate  = 60000.0f;/* s_law=2 起转助推的爬升斜率 PWM/s（60000 ⇒ 60ms 到 3600） */
 volatile float s_rate_lpf    = 0.35f;  /* s_law=1/2 角速度反馈的一阶低通系数（每 5ms 一拍，0.35 ⇒ τ≈12ms） */
-volatile float s_settle_deg  = 1.0f;   /* s_law=3 停车带宽（原版 s_err_stop 的 2°）+ 锁存判据。
-                                        * 2026-10-06 由 2.0 收到 1.0：起转助推在 |err| < 它时不武装
-                                        * （见 :673），rate_kp=40 时最后 1~2° 没人推 ⇒ 系统性少转 1.4°。 */
+volatile float s_settle_deg  = 0.8f;   /* s_law=3 停车带宽（原版 s_err_stop 的 2°）+ 锁存判据。
+                                        * 2026-10-06 由 2.0 → 1.0 → 0.8：起转助推在 |err| < 它时不武装
+                                        * （见 :673），rate_kp=40 时最后 1~2° 没人推 ⇒ 系统性少转 1.4°。
+                                        * 0.8 是 ak5 组唯一"五趟窗 p-p 全 ≤3.0°、yaw 换向 0 次"的候选，
+                                        * 也把 ang_kp=10 的偶发冲过从 +7.7% 收到 +5.0%；0.5 会放大 corr 抖动。 */
 volatile float s_settle_rate = 30.0f;  /* s_law=3 带内"真停住了"的角速度阈值 °/s（2026-10-02 加）：
                                         * ①带内且 |v| < 它 ⇒ corr = 0 直接松手滑行，不再用 ±limit
                                         *   的满权限刹车来回抽（原来只在 |v| < s_ff_rate(3°/s)

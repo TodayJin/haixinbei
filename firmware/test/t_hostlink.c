@@ -390,14 +390,19 @@ int main(void)
         CHECK(def == 900.0f);
         CHECK(lo == 0.0f);
         CHECK(hi == 20000.0f);
+        CHECK_EQ_I(host_param_bounds(HP_GYRO_ANG_KP, &def, &lo, &hi), 1);
+        /* 2026-10-06 原地转圈续调 7 → 10：ang_kp 是唯一能压缩到位时间的旋钮（三轮交错 A/B
+         * ak5/fin1/fin2 共 19 趟、两个转向各半一致：到 90% 0.67s → 0.50s），配 settle_deg 0.8 峰值更收敛 */
+        CHECK(def == 10.0f && lo == 1.0f && hi == 20.0f);
         CHECK_EQ_I(host_param_bounds(HP_GYRO_RATE_KP, &def, &lo, &hi), 1);
         /* 2026-10-05 真车循迹定稿 250 → 80（3~4Hz 横向极限环的根因），
          * 同夜原地转圈整定再 80 → 160（配 ang_kp 7 / rate_kd 0、cap 3000）；
          * 2026-10-06 原地转圈残余晃动定稿 160 → 40（内环 P 的 stick-slip：顶夹 27~88% → 8~11%） */
         CHECK(def == 40.0f && lo == 10.0f && hi == 2000.0f);
         CHECK_EQ_I(host_param_bounds(HP_GYRO_SETTLE_DEG, &def, &lo, &hi), 1);
-        /* 2026-10-06 2.0 → 1.0：起转助推在 |err| < settle_deg 时不武装，收到 1.0 才补得上最后 1° */
-        CHECK(def == 1.0f && lo == 0.2f && hi == 10.0f);
+        /* 2026-10-06 2.0 → 1.0 → 0.8：起转助推在 |err| < settle_deg 时不武装，收到 0.8 补最后 1°；
+         * 0.8 也是 ak5 组唯一"五趟窗 p-p 全 ≤3.0°、换向 0 次"的候选 */
+        CHECK(def == 0.8f && lo == 0.2f && hi == 10.0f);
         CHECK_EQ_I(host_param_bounds(0x7777u, NULL, NULL, NULL), 0);
         CHECK_EQ_I(host_param_id_at(n), 0u);         /* 越界返回 0，不崩 */
         CHECK(host_param_table_crc() != 0u);
