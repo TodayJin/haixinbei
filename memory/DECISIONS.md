@@ -12,6 +12,161 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-05 — 链路正式定档 **921600 8N1**，并把探针波特率上限做成**按 USB PID 分档**（`bridge/serial_safety.py` 的 `J_LINK_MAX_BAUD_BY_PID`：`1366:0105` 旧 V9 → 230400、`1366:1024` 车上这颗 OB-RA4M2-Full → 3000000，认不出型号按 230400 保守拦）
+选择：链路正式定档 **921600 8N1**，并把探针波特率上限做成**按 USB PID 分档**（`bridge/serial_safety.py` 的 `J_LINK_MAX_BAUD_BY_PID`：`1366:0105` 旧 V9 → 230400、`1366:1024` 车上这颗 OB-RA4M2-Full → 3000000，认不出型号按 230400 保守拦）
+放弃：沿用「J-Link CDC VCOM 上限 230400」的一刀切（对旧探针是对的，对新探针是错的、会白白拦住 921600）；也没有为省事直接把上限全放开（未知型号仍按 230400 保守拦，免得哪天真拿旧探针去撞墙）
+因为：用户 m30484 明确说换过调试器并测过速度；`memory/DECISIONS.md` 2026-10-04 有第二颗探针逐档 230400~3000000 全通的实测记录；2026-10-05 真车 921600 实测 200.6 帧/s、0 CRC、0 重同步，而 460800/230400 只收到乱码（板上只说 921600）
+
+## 2026-10-05 — 固件遥测默认频率 100 → **200Hz**（`firmware/App/Svc/host_link.c:1087` 一行，只存 RAM、复位/烧录回默认）
+选择：固件遥测默认频率 100 → **200Hz**（`firmware/App/Svc/host_link.c:1087` 一行，只存 RAM、复位/烧录回默认）
+放弃：保持 100Hz 默认让用户每次自己用滑块调（他 2026-10-03 就把滑块上限从 100 提到 200，且抱怨过「设了 200 又变回 100」——那个现象的真因是频率只存 RAM + 桥把设定值当实测值显示）
+因为：921600 下 200Hz × 64B ≈ 14.8 KB/s 只占约 15% 带宽（230400 时代要占 62%，当年压着不敢默认），且他原话的预期就是 200Hz；实测 200.6 帧/s、0 CRC、0 丢帧计数
+
+## 2026-10-05 — 遥测帧率拆成两个字段：`stats` 事件里 `telem_hz` = **实测**（桥按 1s 窗口数帧），新增 `telem_hz_set` = 车上固件报的**设定值**；`/api/link` 的 `telem_hz` 保持设定值语义不变
+选择：遥测帧率拆成两个字段：`stats` 事件里 `telem_hz` = **实测**（桥按 1s 窗口数帧），新增 `telem_hz_set` = 车上固件报的**设定值**；`/api/link` 的 `telem_hz` 保持设定值语义不变
+放弃：让 `/api/link` 也回实测值（会破坏“滑块初值/契约”语义，pytest 与多个页面都按设定值读它）；或继续只回设定值（就是这次被用户抓到的 bug）
+因为：用户 m30228 报“不是还换了200Hz吗?为什么还是100Hz”——桥 `state.py` 的 `_maybe_stats()` 把实测帧率算完就丢进局部变量，`stats_payload()` 回的是固件设定值 ⇒ 界面永远看不出链路真实吞吐（实测 99~100 帧/s 与设定 100 一致，但 200 设定下他看不到实测有没有跟上）
+
+## 2026-10-05 — `tools/console/web/src/lib/contract.test.ts` 与 `ssrPreview.test.tsx` 改成 `describe.skipIf(!process.env.CONSOLE_BASE)`：默认 `npm test` 跳过，要跑就显式给 `CONSOLE_BASE`
+选择：`tools/console/web/src/lib/contract.test.ts` 与 `ssrPreview.test.tsx` 改成 `describe.skipIf(!process.env.CONSOLE_BASE)`：默认 `npm test` 跳过，要跑就显式给 `CONSOLE_BASE`
+放弃：保留默认打 `http://127.0.0.1:8770`（那里跑着**真车桥** ⇒ 默认跑会真对车发写操作：连串口、烧任务、跑任务；本轮实测出现“提交任务被车拒绝：参数错（status=3）”与坏模式 connect 回 `ok=true`——真车被当 mock 用了）；也不选“删掉这两个文件”
+因为：测试不该动真硬件；把 mock 的启动方式写进提示里（`PORT=8790 node mock/server.mjs` + `CONSOLE_BASE=http://127.0.0.1:8790`），默认跑就是确定的绿，不再有“环境性红”掩盖真回归
+
+## 2026-10-05 — 界面把「车上控制占用」改名为「界面刷新占用」，并在旁标 `loop_us/5ms`
+选择：界面把「车上控制占用」改名为「界面刷新占用」，并在旁标 `loop_us/5ms`
+放弃：继续叫“车上控制占用”（`busy_pct = loop_us/5000`，而 `loop_us` 是 `main_app.c` 传进去的 `app_ui_tick()` 刷新耗时，控制中断实测只有 9µs）
+因为：用户截图里那格在 0.0% 与 82.6% 之间跳（刷新耗时 10µs ↔ 4129µs），按旧名字会被读成“控制中断被打满/没打满”，与事实相反
+
+## 2026-10-05 — HostExt_DriveStop() 里显式加 SpeedControl_Stop()，同时把 motion.c 的同模式分支做成双向对称（IDLE ⇒ 真停；非 IDLE ⇒ 确保速度环已使能）
+选择：HostExt_DriveStop() 里显式加 SpeedControl_Stop()，同时把 motion.c 的同模式分支做成双向对称（IDLE ⇒ 真停；非 IDLE ⇒ 确保速度环已使能）
+放弃：只改 motion.c 一处 —— 那样停车仍然依赖 Motion 状态机的语义，不直白；两处都做，单测各钉一处（t_motion 同模式 IDLE 必须真停、t_hostext drive stop 必须真停）
+因为：上位机「两轮直给」和车上「电机测试页」都是常驻 MOTION_IDLE + 自己使能速度环；motion.c 的同模式早退 `if (m == s_mode) return;` 让 HostExt_DriveStop() 成了空操作 ⇒ 真实故障是 stop/看门狗超时/拔电池全都停不下来，只能断电
+
+## 2026-10-05 — 母线低压保护（INA226 读数 <3000mV 连续 500ms ⇒ 停解释器 + DriveStop 回 IDLE，累计 disarm 次数；>=9000mV 只复位监测）放在 host_ext.c 的 HostExt_Task()，读数由 host_link.c 的 INA 读取路径喂进来（HostExt_NoteVbusMv）
+选择：母线低压保护（INA226 读数 <3000mV 连续 500ms ⇒ 停解释器 + DriveStop 回 IDLE，累计 disarm 次数；>=9000mV 只复位监测）放在 host_ext.c 的 HostExt_Task()，读数由 host_link.c 的 INA 读取路径喂进来（HostExt_NoteVbusMv）
+放弃：在 main_app.c 主循环里看 g_live.vbat_mv —— 那样没法写主机测试（main_app.c 不进测试构建）；放 host_ext 里能用现有 t_hostext 台架验证边界
+因为：MCU 走 USB/J-Link 独立供电，拔电机电池只切驱动电源而速度环使能跨断电存活 ⇒ 用户报的「一上电他就跑，得拔电池才停」；而且读数过期(HOST_VBUS_STALE_MS)或读到 0 必须不动手，一次 I2C 抖动不能掐正在跑的车
+
+## 2026-10-05 — 灰度丢线/模拟量断链时：界面按最后一帧好帧最多 TRACE_HOLD_MS=500ms 再显示空、并在旁边打「丢线」；判定口（trace_cal_level/channel）保持诚实，真丢线立刻报 0；只有用户显式把「灰度接口」选成数字模式才回落 PA0–PA7。
+选择：灰度丢线/模拟量断链时：界面按最后一帧好帧最多 TRACE_HOLD_MS=500ms 再显示空、并在旁边打「丢线」；判定口（trace_cal_level/channel）保持诚实，真丢线立刻报 0；只有用户显式把「灰度接口」选成数字模式才回落 PA0–PA7。
+放弃：无条件回落数字口（老行为，任务卡死）；断链直接显示全 0（看着像没数据/传感器坏）；判定口也按住（会改用户任务的时序）。
+因为：PA0–PA7 是上拉输入、这台车上没被驱动（裸口 line 恒全 1），一旦模拟量掉线就回落过去 ⇒ 8 路全 1：界面像卡死，且任务判据 TASK_C_LINE_LOST（「探头全白」）用同一个 trace_cal_level() ⇒ 全 255 时永不成立、任务卡在第一个块。
+
+## 2026-10-05 — g_live.gray/g_live.trace（纯显示用，只有 app_ui.c 的柱状图和 0/1 一行读）改吃新口 trace_cal_disp_level/trace_cal_disp_bit；控制逻辑继续走 trace_cal_channel/trace_cal_level。
+选择：g_live.gray/g_live.trace（纯显示用，只有 app_ui.c 的柱状图和 0/1 一行读）改吃新口 trace_cal_disp_level/trace_cal_disp_bit；控制逻辑继续走 trace_cal_channel/trace_cal_level。
+放弃：让显示口和判定口共用一套语义（要么界面闪、要么任务判据被按住污染）。
+因为：显示可以按住上一帧不闪，判定不能按住 —— 不能改用户任务块的时序。
+
+## 2026-10-05 — 总线恢复必须回到"本次实际配置的速率"（`board.c` 记下 `s_i2c_scl_hz` + `board_i2c_scl_hz()`，恢复走 `board_i2c_init_hz(s_i2c_scl_hz)`），而不是重新按 100kHz 初始化
+选择：总线恢复必须回到"本次实际配置的速率"（`board.c` 记下 `s_i2c_scl_hz` + `board_i2c_scl_hz()`，恢复走 `board_i2c_init_hz(s_i2c_scl_hz)`），而不是重新按 100kHz 初始化
+放弃：把 `board_i2c_init()` 的默认值直接改成 400kHz（会动到自检固件假定 100kHz 的保守前提）
+因为：`board_i2c_init()` 是自检固件（selftest/pa15test）的确定性入口，不能改它的语义；把速率存成状态再恢复，既不动自检，又修掉"恢复一次就永久降速 4×"这个隐蔽 bug
+
+## 2026-10-05 — 屏幕卡死（kk_ui latch）用 300ms 节拍自动 `KK_UI_RecoverDisplay()`、第 3 次重试（约 0.9s）仍不成再顺手做一次总线恢复；逻辑抽成不碰 HAL 的纯模块 `firmware/App/Svc/disp_heal.{h,c}` + 主机测试 `t_dispheal.c`
+选择：屏幕卡死（kk_ui latch）用 300ms 节拍自动 `KK_UI_RecoverDisplay()`、第 3 次重试（约 0.9s）仍不成再顺手做一次总线恢复；逻辑抽成不碰 HAL 的纯模块 `firmware/App/Svc/disp_heal.{h,c}` + 主机测试 `t_dispheal.c`
+放弃：只在 latch 时打日志、让用户断电重启；或把自愈逻辑塞进 kk_ui 中间件内部
+因为：用户体感的"卡"和"死"分不清，任何需要断电的一次故障都会变成现场事故；中间件要保持与业务无关，纯模块才能被主机单测钉住
+
+## 2026-10-05 — 诊断屏卡顿要同时看三处：RTT 的 `FRAME: update avg/max`（µs）、`oled tx_done`（真帧率）、以及线上字节里的 `loop_us`（遥测 p[28..29]）；`/api/state` 的 `telem.loop_us` 只在"本次干净重启的桥"上可信
+选择：诊断屏卡顿要同时看三处：RTT 的 `FRAME: update avg/max`（µs）、`oled tx_done`（真帧率）、以及线上字节里的 `loop_us`（遥测 p[28..29]）；`/api/state` 的 `telem.loop_us` 只在"本次干净重启的桥"上可信
+放弃：只看网页上的「车上控制占用」百分比
+因为：那个百分比来自桥的 `state.py` `busy_pct = loop_us/5000*100`，而老桥进程曾连续 60 次报 0——桥进程自身的旧状态会伪装成"固件不上报"，把我带偏过一轮
+
+## 2026-10-05 — 上位机可见文字里不许出现从固件注释搬来的内部编号/黑话（p0~p3、flags.bit0、0xFFFF、tracing_cross()、Motion_GetFault()、bitN），只有数据本身的十六进制（参数指纹 0xB157、任务校验和）可以留且必须有 title 解释；FieldSpec.hint 改成必填，下拉每个 option 都要带 title，字段下面常显一行说明
+选择：上位机可见文字里不许出现从固件注释搬来的内部编号/黑话（p0~p3、flags.bit0、0xFFFF、tracing_cross()、Motion_GetFault()、bitN），只有数据本身的十六进制（参数指纹 0xB157、任务校验和）可以留且必须有 title 解释；FieldSpec.hint 改成必填，下拉每个 option 都要带 title，字段下面常显一行说明
+放弃：把内部编号塞进 title 就算数 / 只在 doc 里解释一次 —— 都不够：原生下拉里选项的说明必须挂在 option 上才读得到，且必须常显一行而不是只靠悬停
+因为：用户 m25776 看不懂页面上照抄 firmware/App/Svc/task_prog.h 注释的文案（「从固件注释里原样搬出来的内部编号你把关于这些的全都找出来」），并要求「每个选项…鼠标放上去会有那种提示框」
+
+## 2026-10-05 — 任务的「丢线」条件在界面上叫「探头全白」；速度单位「PWM 刻度」叫「油门刻度」并标百分比
+选择：任务的「丢线」条件在界面上叫「探头全白」；速度单位「PWM 刻度」叫「油门刻度」并标百分比
+放弃：继续用「丢线」（用户看不懂）/ 用「没有黑线」（啰嗦）
+因为：旧代码 Haixin/Hardware/tracing.c:9-16 是 tracing_data[i]=!HAL_GPIO_ReadPin ⇒ 1 才是看见黑线，所以「全 0」的物理含义是八个探头一个都没看见黑线（掉出赛道/悬空/过坡），用户明确说「你现在说这个丢线,我就没看懂丢线是啥,你直接就说全白就行了之类」
+
+## 2026-10-05 — 把旧内置全程流程与新任务文件的对照讲解写成仓库文档 docs/旧全程任务对照讲解.md，而不是只在聊天里讲一遍
+选择：把旧内置全程流程与新任务文件的对照讲解写成仓库文档 docs/旧全程任务对照讲解.md，而不是只在聊天里讲一遍
+放弃：只在对话里讲（关掉窗口就没了）/ 写进 memory（memory 是给未来会话的短条目，装不下逐段对照）
+因为：用户 m25776 要求「跟我之前的代码对比着介绍给我」，而这份对照（旧 renwu.c 的 A() 27 段 ↔ renwu-lap.json 15 状态）后面每次改任务都要回看；文档还能挂上三处旧代码的坑（black_num 是段号、八路全白、TurnLeftFixed/TurnRightFixed 名字反了）
+
+## 2026-10-04 — 测 J-Link 写速必须用「先烧垃圾镜像、再烧真镜像」两点法
+选择：测 J-Link 写速必须用「先烧垃圾镜像、再烧真镜像」两点法
+放弃：单次 loadbin 计时（会把跳过当写入，得出假的写速）
+因为：J-Link 在 Flash 内容与待烧镜像逐字节一致时直接跳过编程（日志 `Skipped. Contents already match`）却仍报成功——实测探针 #2 上一次 0.484 s 的"空跑"被当成写入时间
+
+## 2026-10-04 — 两颗探针的读速对比统一用 1 MB/次 的 savebin
+选择：两颗探针的读速对比统一用 1 MB/次 的 savebin
+放弃：256 KB/次 或混用不同长度
+因为：单次 savebin 有约 154 ms 固定开销：256 KB/次最多只能测出 ~1.05 MB/s，1 MB/次才 ~2.0 MB/s，不同读长度之间不可比
+
+## 2026-10-04 — 抓 JLink.exe 的输出用 Start-Process -RedirectStandardOutput/-RedirectStandardError
+选择：抓 JLink.exe 的输出用 Start-Process -RedirectStandardOutput/-RedirectStandardError
+放弃：管道重定向
+因为：走 PowerShell 管道（| Out-String）会让低速档读到超时假数据并触发 `Insufficient memory`
+
+## 2026-10-04 — 暂不升级 SEGGER J-Link 软件（保持 V6.82c / V4.90，等用户拍板）
+选择：暂不升级 SEGGER J-Link 软件（保持 V6.82c / V4.90，等用户拍板）
+放弃：直接装最新版（winget 不可用、segger.com 抓取被 HTTP 202 拦）
+因为：探针上报 SAM-ICE 而真 SAM-ICE 是 Atmel 硬件（自制/克隆 OB，固件 `J-Link OB-RA4M2-Full`），升级有克隆检测使探针失效的风险；而实测速度上限 100000 kHz 已够用（110000+ 报 `Maximum JTAG speed exceeded`，无副作用）
+
+## 2026-10-04 — 上位机桥必须以 `--serial COM27` 显式指定端口常驻
+选择：上位机桥必须以 `--serial COM27` 显式指定端口常驻
+放弃：让桥自动挑端口 / 沿用旧口名
+因为：换探针会让 J-Link 的 CDC 口重新枚举并改名（COM26→COM27），抱着死句柄的桥表现为"车上没应答（0.6 s 超时）/遥测 rx 冻结"，极易被误判成 MCU 死机（MCU 其实活着）
+
+## 2026-10-04 — 任何写 Flash 的窗口内不做 SWD 复位（`r`）
+选择：任何写 Flash 的窗口内不做 SWD 复位（`r`）
+放弃：目录页 A/B 双缓冲（长期加固方向，尚未实施）
+因为：TaskStore 的目录块是"先擦后写"，写到一半被打断就留下整片 0xFF ⇒ 任务整个消失（2026-10-04 22:56–22:57 真实发生过，已用桥 API 从旧 dump 原样恢复任务 0）
+
+## 2026-10-04 — 判定 J-Link VCOM / 上位机链路是否正常，改成「抓一段原始字节 + bridge.protocol.FrameDecoder 解码」看 crc_errors 和帧数，不再看首字节或 A5 5A 帧头计数
+选择：判定 J-Link VCOM / 上位机链路是否正常，改成「抓一段原始字节 + bridge.protocol.FrameDecoder 解码」看 crc_errors 和帧数，不再看首字节或 A5 5A 帧头计数
+放弃：看 first bytes / hdr 计数的快速判据 —— 抓包起点落在 71 字节帧中间时必然误判（帧内本来就有成片 C0/FC/E0/00）
+因为：2026-10-04 我用『首 24 字节』和『A5 5A 计数』判读，把一条 405 帧/crc_errors=0/201.5fps 的健康链路误报成『链路变噪声、怀疑探针 VCOM 被打坏』
+
+## 2026-10-04 — 第二颗探针（上报 SAM-ICE、实为 J-Link OB-RA4M2-Full，S/N 24060505，CDC=COM27）的虚拟串口按 ≥460800 可用对待；旧探针 PID_0105『CDC VCOM 上限 230400、试 ≥460800 会进 bootloader 需物理拔插』的结论只对旧探针成立
+选择：第二颗探针（上报 SAM-ICE、实为 J-Link OB-RA4M2-Full，S/N 24060505，CDC=COM27）的虚拟串口按 ≥460800 可用对待；旧探针 PID_0105『CDC VCOM 上限 230400、试 ≥460800 会进 bootloader 需物理拔插』的结论只对旧探针成立
+放弃：沿用 board.c:553-559 与 tools/console/bridge/serial_safety.py:27 对旧探针 230400 的硬限制（对新探针是错的、会白白拦住桥）
+因为：逐档实测 230400/460800/921600/1500000/2000000/3000000 全部打开成功且数据合法（PID 全程 1024），且真起桥在 3000000 跑 200Hz 遥测得到 rx=201.3 帧/s、crc=0、resync=0、rtt=5.8ms
+
+## 2026-10-04 — J-Link 主机软件暂不升级（保留 V6.82c），调试时钟用 8000–15000 kHz，绝对上限 100000 kHz
+选择：J-Link 主机软件暂不升级（保留 V6.82c），调试时钟用 8000–15000 kHz，绝对上限 100000 kHz
+放弃：升级到最新版 J-Link 软件——被否（克隆检测风险 + 零收益）；若要试，先用 7-Zip 把安装包解到临时目录免安装试跑，保留 6.82c 可回退。
+因为：探针是自制 OB（固件 J-Link OB-RA4M2-Full，自报 SAM-ICE，真 SAM-ICE 是 Atmel 硬件）；新版 SEGGER 软件带克隆检测，有反被拒（defective/限功能）风险；当前组合已跑满 ~2 MB/s，升级只会把上限数字打印得更准，无带宽收益。
+
+## 2026-10-04 — 「超过支持上限」弹窗不需要修：它是 SEGGER DLL 自身的速度范围检查，不是故障
+选择：「超过支持上限」弹窗不需要修：它是 SEGGER DLL 自身的速度范围检查，不是故障
+放弃：换驱动/重装 SEGGER 软件来消除弹窗——被否，弹窗只在我故意请求 >100000 kHz 时出现，正常档位永不触发。
+因为：`JLinkARM.dll` 内原始字符串 `JLINKARM_SetSpeed(%dkHz): Maximum JTAG speed exceeded...`；探针上限 = 100000 kHz（100000 静默通过、110000 及以上弹模态框）；请求失败时脚本在 speed 那步即中止，不碰 Flash（param_crc 仍 45399）。
+
+## 2026-10-04 — J-Link 调试固定用车上这颗 SAM-ICE（上报名 SAM-ICE，S/N 24060505，固件 J-Link OB-RA4M2-Full，CDC=COM27）
+选择：J-Link 调试固定用车上这颗 SAM-ICE（上报名 SAM-ICE，S/N 24060505，固件 J-Link OB-RA4M2-Full，CDC=COM27）
+放弃：旧那颗 J-Link PLUS（S/N 602711039，FW J-Link V9 2021-05-07，CDC=COM26）已不在车上；它 12000 kHz 只能到 651 KB/s，20000 kHz 以上反而崩到 79 KB/s，烧写只有 16.8 KB/s
+因为：同档时钟下 SAM-ICE 读快 3~4 倍（1MB 读 8000kHz 2009 vs 483 KB/s）、可用时钟到 100000 kHz 仍 2056 KB/s、不停机读 514.6 vs 333.9 KB/s、烧写 39.6 vs 16.8 KB/s，读回数据两探针逐字节一致；对比报告在 out/probe_compare.md
+
+## 2026-10-04 — 低特效模式下侧栏与卡片**不给任何底色**（`background-color: transparent`，卡片连顶部高光与投影一起去掉，只留 `.glass` 自带的 1px ring 分组），顶栏改用 body 同一份 `background-image` + `background-attachment: fixed`（底色同为 #0b1020）伪装成页面背景
+选择：低特效模式下侧栏与卡片**不给任何底色**（`background-color: transparent`，卡片连顶部高光与投影一起去掉，只留 `.glass` 自带的 1px ring 分组），顶栏改用 body 同一份 `background-image` + `background-attachment: fixed`（底色同为 #0b1020）伪装成页面背景
+放弃：上一版（提交 4452987）的"三层不透明面 + 靠亮度分层"：侧栏 #0d1428 < 顶栏 #121a33 < 卡片 #141d3d；也不再走"再调一个更接近背景的蓝"这条路
+因为：用户 m25581：「跟背景还是融合不到一起啊。你为什么非要有这个文字背景呢？你就单纯一个文字不行吗？」页面背景不是纯色 = ink-800(#0b1020) + 三团 position:fixed 辉光，任何纯色面贴上去都是补丁（前一次 m24215 否掉的是纯黑版）
+
+## 2026-10-04 — 面板"融合没融合"用**把面藏起来再截同一块像素比通道差**来判：`out/looklite.cjs` 用 `visibility:hidden` 藏掉 header/aside、`out/png8.cjs` 极简解 PNG 后比最大通道差（阈值 ≤2/255）；实测 header 1/255、aside 0/255
+选择：面板"融合没融合"用**把面藏起来再截同一块像素比通道差**来判：`out/looklite.cjs` 用 `visibility:hidden` 藏掉 header/aside、`out/png8.cjs` 极简解 PNG 后比最大通道差（阈值 ≤2/255）；实测 header 1/255、aside 0/255
+放弃：只看 `getComputedStyle` 是否 `transparent`（只能证明"设了"，证明不了接缝不存在）；也不用截图字节相等（Chromium 重绘/光栅化会差 1 个色阶，不稳定）
+因为：顶栏 fixed 背景与 body 是否逐像素对齐是**渲染结果**，只能让浏览器自己回答；字节相等太严会偶发假失败，
+
+## 2026-10-04 — 车上任务页把 上/下 让给「选任务」，返回改用自己扫的原始位图 bit2（左键）；中键 = 跑选中的/正在跑就停；标题行右端是任务名，主体整块给循迹扫描状态
+选择：车上任务页把 上/下 让给「选任务」，返回改用自己扫的原始位图 bit2（左键）；中键 = 跑选中的/正在跑就停；标题行右端是任务名，主体整块给循迹扫描状态
+放弃：继续用框架的 KK_UI_KEY_UP 当返回、把选任务放到别处（框架把 上/左 都归一成 UP，而 UP 分支会关页面，上键一旦被「选任务」占用就再也回不去）
+因为：用户 m24999 要求「上下可以选择任务、中键执行、标题栏最右边显示名字、下面主要部分显示寻迹扫描状态」；框架三键分不出左/上，所以本页像电机页/循迹页那样自己扫五向键位图（20ms 消抖 + 只取新按下边沿），UP/DOWN 在 OnInput 里吞掉
+
+## 2026-10-04 — 「开机自启」功能整个删掉（固件 main_app.c 自启块 + TASK_STORE_FLAG_AUTO/TaskStore_AutoSlot、网页开关与徽章、桥与仿真器不再解释 bit0），flags 变成纯保留位原样往返（不掩码）
+选择：「开机自启」功能整个删掉（固件 main_app.c 自启块 + TASK_STORE_FLAG_AUTO/TaskStore_AutoSlot、网页开关与徽章、桥与仿真器不再解释 bit0），flags 变成纯保留位原样往返（不掩码）
+放弃：保留功能只把默认关掉；或只删网页入口、留着固件自启路径
+因为：用户 m24999：「给那个开机自启也删了吧，这个功能我都删了，我肯定不可能让他开机自启的，我肯定是调好了才会启动」⇒ 他要在车上离线启动（任务页中键）。留任何一条自启路径，上电就可能自己跑（他为此被吓过一次，而且跑着时删/改都被固件拒）
+
+## 2026-10-04 — 真车界面取证用 out/_lcd.ps1 -Page <N> 直接写 kk_ui.current.page 再读显存，不注入任何按键
+选择：真车界面取证用 out/_lcd.ps1 -Page <N> 直接写 kk_ui.current.page 再读显存，不注入任何按键
+放弃：用 _wiz.ps1 那类按键注入去「走」到任务页（中键误触就会把用户那条任务真跑起来 ⇒ 车会动）
+因为：任务页的启动键正是中键，而车上那条「常态循迹」一跑就真的开车；写页码只影响显示、不产生按键事件，所以能安全拿到任务页的真实版面（out/taskpage.png）
+
 ## 2026-10-04 — 差速（修正量）上限随基准速度放大：新参数 `gyro_corr_ref`(0x0112，默认 3000，0=关闭)，`cap = s_corr_limit × max(1, |base|/ref)` 再夹到 ±MOTOR_PWM_MAX；曲线单独拆成 `GyroControl_CorrLimit()` 供主机测试直接钉
 选择：差速（修正量）上限随基准速度放大：新参数 `gyro_corr_ref`(0x0112，默认 3000，0=关闭)，`cap = s_corr_limit × max(1, |base|/ref)` 再夹到 ±MOTOR_PWM_MAX；曲线单独拆成 `GyroControl_CorrLimit()` 供主机测试直接钉
 放弃：直接调大 `s_corr_limit`（绝对限幅）；或在 PC 侧（操控页/`heading.ts`）自己算左右轮差速发下去

@@ -13,6 +13,108 @@
 >
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
+## 2026-10-05
+完成：按用户 m30484 定档把上位机链路切到 **921600**（我上一轮「921600 做不到」的结论作废：那是旧探针 PID_0105 的结论，车上现在插的是第二颗 OB-RA4M2-Full、PID 1024、COM27）。改动：`firmware/Core/Src/board.c:581` `DL_BAUD 921600u`；`firmware/App/Svc/host_link.c:1087` 遥测默认 100→**200Hz**；桥/网页/启动器/文档默认值全切 921600（`bridge/link.py`/`main.py`/`server.py`/`state.py`/`bench.py`/`launch.ps1`/`web/src/lib/api.ts`/`Settings.tsx`/`Overview.tsx`/`mock/server.mjs`/`docs/API.md`/`启动上位机.bat`）；`bridge/serial_safety.py` 整文件重写成**按探针 PID 分档**（`J_LINK_MAX_BAUD_BY_PID` 0105→230400、1024→3000000，认不出按 230400 保守拦）。验证全绿：固件主机测试 15/15、`pytest` 173 passed、`vitest` 193 passed + 8 skipped、`npm run build` 干净、烧录回读一致 118380 字节。真车实测：`bridge.probe @921600` 2s = 410 帧 / 0 CRC / 0 重同步；`bridge.bench --attach 8770` = 实收 **200.6 帧/s**（链路喂 201.1、丢 4 帧）、SSE 35.5 事件/s / 140.3 KB/s、链路 0 CRC / 0 重同步 / 0 丢帧、rtt 5.4~5.8ms；460800/230400 只收到乱码（板上只说 921600，符合预期）。车全程没动（mode 0 / pwm 0,0 / lost true），烧录没碰 nvram（`/api/cal` 仍 quality 8）。桥已重启为 PID 45268（`--baud 921600`）。
+未完成：本轮（含前两轮）改动仍未提交；`docs/上位机通信协议.md` §8.2 已用今天实测数字改写；用户还没在 8770 刷新页面看新界面
+下一步：问用户要不要提交这三拨未提交改动（上位机修复 m30228 / 循迹丢线修复 m28949 / 本轮 921600+200Hz），以及遥测默认 200Hz 留不留
+
+## 2026-10-05
+完成：按用户 m30228「好好检查好好搞一搞」把上位机查了一遍并修完：①修掉“设了 200Hz 还显示 100Hz”的根因——`tools/console/bridge/state.py` 的 `stats_payload()` 现在回实测 `telem_hz`（`self.measured_hz`，`_maybe_stats()` 的 1s 窗口算出来存下来）+ `telem_hz_set`/`telem_tx_hz`/`loop_us`，`/api/link` 保持设定值；②网页 `types.ts`/`store.ts`（不再把实测写回 `link.telem_hz`）/`Control.tsx`（滑块初值 50→100、显示“实测 / 设定”）/`Overview.tsx`/`Imu.tsx`/`Settings.tsx`（新增实测-设定行、环形缓冲时长按实测算、波特率提示重写为“唯一真值是固件 DL_BAUD=230400，J-Link VCOM 上限也是 230400”）/`docs/API.md`；③「车上控制占用」→「界面刷新占用」；④新增 pytest `test_stats_hz_is_measured_not_setpoint`；⑤把两个会打真车桥的 web 测试改成 `CONSOLE_BASE` opt-in。验证：pytest 168 passed、tsc exit 0、vitest 默认 19 文件 193 passed + 8 skipped 0 失败、带 mock 桥那 2 个文件 8/8、`npm run build` 干净；重启 8770 的真车桥后抓 SSE：`telem_hz:99/100, telem_hz_set:100, loop_us:4129 与 10, busy_pct:82.6 与 0.2` —— 实测帧率真的看得见了。车全程没动（`mode=0 pwm=0,0 motor=False lost=True vbat=11718`）。另外查清他记忆里两件事都真做过：200Hz 是**滑块上限**（2026-10-03 100→200，固件默认仍 100 且只存 RAM）、波特率 2026-10-04 已**全线统一回 230400**（板上 DL_BAUD + 探针 VCOM 上限）。
+未完成：改动未提交；用户说的“波特率换了”具体想换成什么还没问到（他可能是想 921600，那要换普通 USB-TTL 接 U12）；网页要他在 8770 刷新页面才看到新界面。
+下一步：把这轮改动提交（固件循迹修复 + 上位机修复两批，或分开两次提交）；问用户要不要把固件默认遥测频率从 100 改成 200（一行 `host_link.c:1087`，需重烧）。
+
+## 2026-10-05
+完成：修掉用户 m28949/m29239 点名的四件事并提交 b965584：①任务块 SET_MODE 同模式会把速度环永久关死（跑循迹不动 / 7200 不动）②停车命令停不下来（drive/stop、tasks/stop、cmd stop 全无效，只能拔电池）③拔电池再上电自己跑（新增母线低压自动解除武装）④遥测 v_l/v_r 恒 0。验证：主机测试 14/14 全绿（t_hostext 131 项、t_motion 91 项，含两个新小节），变异检验证明两处修复都被用例钉住（去掉任一处都红），make -C firmware -j8 无新告警（bin 118136B）、check_warnings 待处理 0、check_static 0 error，已用 tools/flash.ps1 烧车（回读一致），真车实测 POST /api/drive {wheels,1200,1200} 后 POST /api/drive/stop ⇒ 连续 6 个采样 pwm 0/0、motor=False、vl/vr=0（修前是 pwm 3200~4110 一直跑）。文档 docs/自主优化记录.md §20。
+未完成：循迹 PID 实车整定没做完：一次 trace base=1200 的 1.5s 实测里 trace.pos 稳定在 4.22~4.76（在线上）、gray 居中，但角度修正周期性打到 ±2000 上限把左轮打成反转（pwm -2500/-4900），还不知道是正常抖动还是过激。
+下一步：让用户把车放回线上，用 40ms 快采样同时看 trace.pos / angle.err / angle.rate_ref / angle.corr / pwm_l·pwm_r，再决定降 trace_angle_per_unit(10°/格) 还是降串级 corr 上限
+
+## 2026-10-05
+完成：踩到并记录：本仓库所有文本文件都是 LF，用 PowerShell Get-Content/Set-Content 改文件会把整个文件写成 CRLF，git diff 于是显示整文件改动（docs/自主优化记录.md 出现 1822 行假改动，用 git diff --ignore-cr-at-eol --stat 才看出真实差异是 34 行插入）；改法改成 [System.IO.File]::WriteAllText + 把换行归一化成 LF 之后 diff 就干净了。另外 pwsh 没有 <<<，提交信息必须写文件走 git commit -F。
+
+## 2026-10-05
+完成：用户 m26176「凡提到状态一律带名字、别丢裸编号」已提交 db7cf9d（7 files, +65/−39）：taskedit.ts 的 stateLabel(i,names) 改 export，传了 names 但状态没名字时写「状态 3（没名字）」；Tasks.tsx 的主页提示/运行监视/状态标签 title/块库提示全改走它，状态卡片头部那个编号标 data-own-state 供审计脚本跳过；task.ts 四条校验文案（跳到不存在的状态/超时改道/两轮速度/主页越界）改带名字。验证：tsc --noEmit 干净；CONSOLE_BASE=http://127.0.0.1:8788 npx vitest run = 21 文件/201 条全过；npm run build 重建 dist（index-DSkQ9Ytr.js）；node out/staterefs.cjs = 裸编号 0 处 + console 错误 0（有裸编号就非零退出）；出图 out/staterefs-waitcond.png。坑：用户截图里那串「状态 0…14」是改动前的老 bundle（SPA 不会自己刷新、带名字的 stateLabel 是上一个提交 db06be7 进的）——他再报裸编号先让他硬刷新 / 看 dist 哈希。2026-10-05 他问「改完了吗」时重跑 staterefs.cjs 复查，仍是 0 处裸编号。
+下一步：任务页里「主页」是否改叫「起始」待用户定（要连带 task.ts 校验文案与 4 个测试）
+
+## 2026-10-05
+完成：第十三轮（用户 m26712 的 ②③）：修「跑任务时屏幕像暂停刷新、8 路数字都显示 1」与「灰度丢线后保持住之前的状态」+ 找回线。改动：trace_cal.c/h 加 s_hold_lvl[8]/s_hold_ms/s_hold_valid + hold_ready() + 三个新口 trace_cal_disp_level/disp_bit/held，trace_cal_channel/level 的 !analog_ok 分支不再回落（数字模式仍回落）；main_app.c 显示改吃 disp 口；app_ui.c 循迹页数据源槽与任务页标题行加「丢线」标记（任务页的量宽排挤用 OLED_GetUTF8Width，不能写死 x）。验证：firmware/test/t_tracecal.c 新增第 13 节（好帧/WEAK/断链+超时），`run_tests.ps1 -Only tracecal` 128 项 0 失败、全套 14/14；make 无新告警（bin 117820 字节）；check_static 0 error、check_warnings 待处理 0；字模检查 0 缺字；tools/flash.ps1 烧车 verified + J-Link 回读一致；烧后 /api/state gray=0,0,0,168,251,150,0,0 而 line 仍全 1（证明界面已不吃数字口），抓显存 out/_task.png 确认任务页「任务 2/2 测试」+8 柱 +0/0/0/1/1/1/0/0 排版没撞；RTT FRAME avg≈830us max≈4400us、ISR 9us over=0、i2c recover=0 disp_fix=0；桥未断（rx 153893）。提交 8d1ffa7（6 files, +223/-13），文档 docs/自主优化记录.md §19。
+未完成：真车「断链」场景（拔灰度模块的线、或把灰度接口选成不存在的源）下，「丢线」标记与柱按住的复现要用户配合——桥的 /api/params 里没有 gray_mode，无法远程切；①「寻迹 PID 停下无速度差」仍等用户说口径。
+下一步：让用户拔掉灰度模块线后看任务页：新版应先按住 0.5s 再清空柱并出「丢线」，旧版会 8 路全 1。
+
+## 2026-10-05
+完成：修掉用户 m26333「车上屏幕有时候特别卡」。两条根因：①`firmware/Core/Src/board.c` 的 `board_i2c_bus_recover()` 结尾调 `board_i2c_init()`（= 100kHz），而开机配的是 400kHz ⇒ 每次总线恢复都把 I2C1 降到 1/4 速、无人调回，屏从 ~20 帧/s 掉到 ~5 帧/s（只有发生过恢复的车才慢，断电重启才恢复）；②`kk_ui.c` 的 `kk_ui_latch_display()` latch 后 `KK_UI_Update()` 每拍直接 return（不画、不处理按键），恢复入口 `KK_UI_RecoverDisplay()` 全工程无调用者。改法：board 记速率并回落同一速率 + 新增 `App/Svc/disp_heal.{h,c}`（300ms 重试、第 3 次顺手复位总线）+ RTT `FRAME:` 行加 `i2c=%luHz disp_fix=%lu` + `t_dispheal.c`。验证：`make` text 116828/data 380/bss 34016、bin 117352B；`run_tests.ps1` 通过 14/失败 0（t_dispheal 200039 项检查）；`tools/flash.ps1` 回读一致 117352B firstDiff=none；RTT 实测 `FRAME: avg=823~840us max=4189~4413us | oled tx_done=20 err=0 busy=0 st=0 | i2c=400000Hz disp_fix=0`、`ISR avg=9us over=0 | i2c recover=0`、`HOST crc=0 resync=0 hz=100`；线上字节（`out/rawtelem.py`）证明 `app_ui_tick` 空转 ~10µs、真画帧 ~4.1-4.3ms。提交 bf154db，文档 `docs/自主优化记录.md` §18。
+未完成：「总线恢复」这条路径没有在真车上复现（只验了正常态 400kHz / recover=0 / disp_fix=0）；4.2ms/帧的 UI 绘制成本（约 20% CPU、屏 20 帧/s 的上限来源）没优化
+下一步：若用户再报屏慢，先让 RTT 的 `i2c=` / `st=` / `disp_fix=` 三个字段说话：i2c 不是 400000Hz 说明还有别处在降速，st≠0 或 disp_fix 增长说明是传输/latch 路线
+
+## 2026-10-05
+完成：上位机文案全面人话化并提交 db06be7（11 files, +867/-350）：tasks/edit 的 p0~p3、flags.bit0、0xFFFF、tracing_cross()、Motion_GetFault() 全部消失，字段下面常显一行说明、label 与下拉各 option 都有 title 探针说明、块库卡片列「可设置：…」；IMU「固件能力位 0xff(bit0…）」换成能力名列表；调参页固件键名/编号挪进悬停。验证：npx tsc --noEmit=0；CONSOLE_BASE=http://127.0.0.1:8788 npx vitest run = 21 文件/201 条全过（含新增文案护栏，正则禁 p0-3/flags./0x../bitN）；npm run build 重建 dist（index-CCF5y8Pa.css + index-qOQp3XtG.js）；out/taskdocs.cjs 扫 10 页 + 展开等条件块 = 内部名字 0 命中、只剩参数指纹 0xB157/校验和 0xA38C、errors=0；截图 out/tasks-waitcond.png
+未完成：任务页里「主页」这个叫法还没改成「起始」（改它要连带 task.ts 的校验文案与 4 个测试，已作为备选留给用户定）
+下一步：等用户读完 docs/旧全程任务对照讲解.md 后反馈看不懂的那句；他第一次上板时盯拐弯方向（旧代码 TurnLeftFixed/TurnRightFixed 名字与行为相反，转换按名字翻、未实车验证）
+
+## 2026-10-05
+完成：教训（写下来免得再犯）：改前端文案后只跑 tsc/vitest 不够——8770 的桥服务的是 tools/console/web/dist，必须先 npm run build，否则 out/taskdocs.cjs 抓到的还是旧文案（第一次跑就踩了，页面仍显示 p2/p3 与 0xFFFF）
+下一步：以后改前端可见文案：build → 再跑浏览器验收脚本
+
+## 2026-10-05
+完成：新增 docs/旧全程任务对照讲解.md（旧 Haixin/Hardware/renwu.c 的 void A() 27 段 ↔ tools/console/web/src/lib/tasks/renwu-lap.json 15 状态 190 块 2127B 逐段对照，含旧命令词典、black_num 真相、八路全白、Fixed 函数名字反了、死段 8/12/14/15/16/20/22、单任务上限 4096）；docs/任务编程.md §6 补界面文案约定与本文档链接
+下一步：用户若要真跑减速带，S3 现在是空壳（旧代码那段本来就没有任何动作）
+
+## 2026-10-04
+完成：两颗探针在 1 MB/次 停机读下的完整速率对比：探针 #1（J-Link PLUS，S/N 602711039）最佳 651.8 KB/s @12000 kHz（20000/30000 kHz 反而退化到 79.6）、写 116904 B 用 16.8 KB/s；探针 #2（上报 SAM-ICE，S/N 24060505，实为克隆 OB）@100000 kHz 达 2056~2072 KB/s、写 39.6 KB/s；USB Hub 直插对比差异 ≤2% ⇒ 天花板在探针自身（≈2.07 MB/s ≈ 24 MHz 等效 SWD 时钟）。物证 out/probe_compare.md、out/_bench_samice*、out/_bench_direct、out/_bench2.ps1
+下一步：用 TestRSpeed 交叉验证读速（用户 m00577/m00581 的遗留问题）
+
+## 2026-10-04
+完成：定性"车上任务 0（常态循迹）整条消失"：22:56:01 的 dump 里 122 B 任务还在，22:57:42 的 dump 里 0x1D000..0x1FFFF（目录块 29 + 程序块 30）全 0xFF ⇒ 一次 TaskStore 擦除完成后被打断、编程未开始；J-Link 自己的日志证明我的写测只覆盖 0x08000000..0x0801CFFF（块 0..28）且 `Skipped`，与我无关；task_store.c 里只有 host_link.c:988/1018 两条命令路径会擦块 29/30，TaskStore_Init() 不碰 Flash（已排除"上电格式化"）。已用桥 API（put×2 + commit）原样恢复任务 0，/api/tasks/get 回读 byte-diff=0，/api/tasks 显示 id 0 / len 122 / crc 61751 /「常态循迹」
+未完成：发起者未定：桥不记录 HTTP 任务命令，console_20261004.log 里只有遥测行
+下一步：问用户 22:56 前后有没有在网页上点「删除」或「烧写到车」
+
+## 2026-10-04
+完成：任务 0 字节码解码：state0「常态循迹」= SET_MODE(3) → SET_SPEED 6480 → WAIT_COND CROSS 3000 ms → GOTO 0；state1「路口转向」= WAIT_MS 200 → TURN_DEG(fl=1, 2000, -90°, 1.0°) → GOTO 1（自环，无回 state0 的路）。firmware/App/Svc/task_run.c:162-181 的 TURN_DEG 不读 flags、不改 s_base，motion.c:150-153 的 MOTION_GYRO 会沿用 state0 留下的 6480 ⇒ "边转边走"，与用户 m00117「执行任务一直往前走、不循迹」一致
+未完成：实车确认（任务已恢复，可直接跑）
+下一步：跑 out/_watch_task.ps1 记录 state_id 是否 3 s 后 0→1、mode 是否 3→1
+
+## 2026-10-04
+完成：排除误判：参数表是默认值（param_crc 45399、44 项）、标定完好（quality 8/8 路 ok）、自适应帧状态 OK（state=1、cal valid/analog_ok=1）、遥测 line(8 路) 走的是数字口不是循迹环信号（模拟量在 gray）
+下一步：按 out/_watch_task.ps1 实车取证后再改
+
+## 2026-10-04
+完成：桥以 `python -m bridge.main --port 8770 --baud 230400 --serial COM27 --no-browser` 常驻（workdir tools/console），当前 rx 44406 / tx 16 / crc 0 / resync 0 / drops 0 / telem_hz 100 / rtt 120 ms，固件 quandi-car 0.2.0 proto 2 caps 255
+
+## 2026-10-04
+完成：新探针 VCOM 速率实测完成：用 J-Link 临时改 LPUART1->BRR(0x4000800C)（纯寄存器写、复位还原）逐档验证，确认 230400~3 Mbaud 全通、帧长 71B；真起桥 @3000000 + set_telem_hz=200 得 rx=201.3 帧/s、crc=0、resync=0。期间误报『链路变噪声』，用桥自带 FrameDecoder 解码 2 秒抓包（28719B/405 帧/crc_errors=0）证伪。已把测试时设的 telem_hz=200 复位为 100，桥在 COM27@230400 恢复（rx +304/3s=101Hz、crc=0、resync=0）
+未完成：是否把链路默认速率正式提到 460800 或 921600（待用户定）；『执行任务一直往前走、不循迹』的实车记录仍未做（主电已上 vbat≈11.9V）
+下一步：用户定档后：改 firmware/Core/Src/board.c:561 DL_BAUD + tools/console/bridge/link.py:57 / main.py:56 / launch.ps1:17 默认 baud + serial_safety.py:27 按 PID 放行新探针（PID_1024 放行、PID_0105 仍卡 230400），重编译烧录
+
+## 2026-10-04
+完成：查清「超过支持上限」弹窗并恢复被它连带影响的 CPU：弹窗 = JLinkARM.dll V6.82c 自己的速度检查（`JLINKARM_SetSpeed(120000 kHz): Maximum JTAG speed exceeded. Did you specify speed in Hz instead of kHz ?`），探针 #2 上限 100000 kHz（100000 静默通过 2056 KB/s；110000/120000/150000/200000 全部弹模态框卡住进程，我杀掉进程后对话框随之消失 ⇒ 「弹一下就没了」是我造成的）。验证无副作用：脚本在 speed 即中止、无任何 loadbin/savebin、param_crc 仍 45399、无残留 JLink 进程。真副作用是 JLinkGDBServerCL 一连上就 halt CPU，我杀进程后 CPU 留在停止态（表现为桥 rx/fw.t 冻结），用 out/_resume.jlink 复位 + `go` + 清 DEMCR 恢复（E000EDFC=0，rx +305 B/3 s、fw.t 2 s 走 2019 ms、vbat 11903 mV）。
+未完成：用户是否要装新版 J-Link 软件（建议先 7z 解包免安装试跑）
+下一步：若要试新版：下最新安装包 → 7z 解到临时目录 → 用其中 JLink.exe 对同一颗探针复测 1 MB 读带宽，再决定是否正式安装
+
+## 2026-10-04
+完成：用户换上第二颗探针后完成测速与两颗对比，报告 out/probe_compare.md（1MB 读扫描 12 档 + 256KB 对照 + 不停机 + 强制真烧写 39.6 KB/s，读回与 haixin-app.bin 逐字节一致）。三个坑已验证：①内容与镜像相同时 J-Link 跳过编程却报成功（0.48s 空跑），要测写速必须先烧垃圾镜像再烧真镜像、用两点法算；②单次 savebin 有 ~154ms 固定开销，256KB/次最多测到 1.05 MB/s、1MB/次才到 2.0 MB/s（真实传输率约 2.8 MB/s），两探针必须在同读长度下比；③换探针后 J-Link CDC 换名（COM26→COM27），桥必须换口重启。
+未完成：「执行任务一直往前走、不循迹」仍未实车确认（主电 vbat=447mV 未上）。
+下一步：等用户把主电接上、车放到线上后，跑 out/_watch_task.ps1 记录任务 0 的 state/t_flags/mode，确认「执行任务一直往前走」是不是 state0 的 WAIT_COND 3 秒超时跳进 state1（路口转向）后不再回循迹。
+
+## 2026-10-04
+完成：查明「车上没应答（0.6s 超时）」真因：用户换第二颗探针（SAM-ICE S/N 24060505）后 J-Link 的 CDC 口重新枚举，COM26 整个消失、新口变 COM27，而常驻桥仍抱着死句柄。证据：停桥后用 SerialPort 开 COM26 报 'Could not find file COM26'；直接听 COM27 @230400 收到 21592 字节/3s（帧头 A5 5A 03 00）⇒ MCU 一直活着。已把桥以 --serial COM27 重启为后台任务，验证 link.rx 正常增长、resync=0、fw.t 一秒走一秒。另清掉一个台架遗留的 JLink.exe（PID 39792，100% 烧 CPU 并占住 SWD）。
+下一步：等用户上主电（现在 vbat=495mV）并把车放线上，启动任务，用 out/_watch_task.ps1 记录 state_id/超时位/mode 确认「3 秒跳出循迹」这条
+
+## 2026-10-04
+完成：解析车上任务 0 字节码（122 字节，crc 0xF137，新核对对齐正确）：state0「常态循迹」= SET_MODE 3 + SET_SPEED 6480 + WAIT_COND(CROSS,超时3000ms→跳state1) + GOTO 0；state1「路口转向」= WAIT_MS 200 + TURN_DEG(flags=1 相对 -90° 容差1.0° 超时2000ms) + GOTO 1。⇒ 干净的直线上 3 秒必超时跳出循迹，而 state1 没有回 state0 的路，且 TURN_DEG 不清基准速度（motion.c 的 MOTION_GYRO 分支把当前 s_base 当真速用）⇒ 表现为「一直往前走、不循迹」。已核对 flags.bit0 的语义是「p1 是相对当前朝向」（web/src/lib/taskedit.ts:101 + pages/Tasks.tsx:123），不是原地转。
+未完成：H6 只差实车记录确认（state_id 是否 3s 后变 1、任务 flags bit0 是否置上、mode 是否 3→1）
+
+## 2026-10-04
+完成：第二颗探针（SAM-ICE S/N 24060505，CDC=COM27）开始按探针 #1 同一套流程测速率，脚本 out/_bench2.ps1：每档速度先跑 base（connect/halt/go）再跑 meas（同前 + 4 次 savebin 256KB），纯读时间 =(meas-base)/4；另含 info 横幅、最好档复核 3 次、不停机对照、Export-Csv。
+
+## 2026-10-04
+完成：用户 m25581「不要文字背景」改完并提交 **8a54bed**（6 files）：`tools/console/web/src/index.css` 的 perf-lite 段 —— 侧栏/卡片 `background-color: transparent`（卡片连 background-image 高光与 shadow-card 一起去掉，只留 `.glass` 的 `ring-1 ring-white/10` 分组），顶栏必须不透明所以改成**画 body 自己那三张 radial-gradient + `background-attachment: fixed` + 底色 #0b1020**（与 body 辉光逐像素对齐），`html.is-scrolling` 同步；删掉 #0d1428/#121a33/#141d3d。`perf.test.ts` 的"低特效是有层次的"换成"低特效下没有文字背景"（断言 transparent、旧三色去注释后不许出现、顶栏 radial-gradient 列表与 body 逐字相同 + fixed）；`docs/API.md` §5 设计行改口径。验证：`npx tsc --noEmit` 0；vitest **21 文件/200 条**（跑在 8788 mock 上）；`node out/looklite.cjs` 全过 —— **藏掉 header 后同一块像素最大通道差 1/255、藏掉 aside 0/255**（融合的硬证据），默认 perf-lite + backdrop 全 none + 脉冲 none，关掉开关回到 blur + pulseDot；`node out/allpages.cjs` 10 个页面各截一张 `out/pages/*.png` 零 console 错误；dist 重建 `assets/index-BFr2K83H.css` + `assets/index-DlTzi0AN.js`。
+未完成：① 新观感（卡片只剩一圈 1px 亮边）待用户确认；他若嫌那圈线也是"方框"，去掉 ring 是一行，perf.test.ts 那条护栏要同步改。② 仍是暗底的"文字背景"没动：控制与日志页的日志框/ACK 框（`Control.tsx:42,55` 的 `bg-ink-900/60`）、操控页读数小方块（`Drive.tsx:242-288` 的 `bg-ink-900/50`）、任务页编译输出块（`Tasks.tsx:120,354` 的 `bg-black/20|10`）、波形/迷你波形屏（`ui.tsx:273,312` 的 `bg-ink-900/80`，这个是"屏幕"观感，建议保留）—— 他说的"文字背景"若指这些，得再抹一遍。
+下一步：让用户刷新 http://127.0.0.1:8770 看总览/任务页；若他指的是日志框那类小暗块，报一句就一起抹平。
+
+## 2026-10-04 · KK_UI 界面
+完成：用户 m24999 的两件事都落地并烧进真车（提交 7d08bb5，25 files +670/−428）：①车上任务页重做 —— 标题行 = 状态词（任务/运行）+ 选中序号 i/N + 最右端任务名（右对齐到 x=122，UTF-8 截宽），y=14 分隔线以下是整块循迹扫描状态（与循迹页共用同一份 draw_trace_bars()：8 路灰度柱 + 每路 0/1 + XOR 阈值线），上/下 选任务（绕圈跳空槽）、中键 跑选中的/正在跑就停、左键 返回，进页面时解释器在跑就自动选中在跑的那个，空车打「车上没任务」；②「开机自启」整个删掉 —— main_app.c 上电只扫描不启动，task_store 删 TASK_STORE_FLAG_AUTO/TaskStore_AutoSlot、flags 变保留位原样往返，桥/仿真器/mock 不再掩码 bit0，Tasks.tsx 删开关+徽章+toast，docs/任务编程.md、docs/上位机通信协议.md、memory/PROJECT.md 同步。验证：run_tests.ps1 通过 13/失败 0（t_taskstore 560 项检查 0 失败）；make 干净（text 116520/data 376/bss 34008）；pytest 167 passed；tsc --noEmit 干净；vitest 21 文件/200 条全过；dist 重建（index-CIPzNBCO.js 344.68kB + index-W9H3ASIu.css 39.45kB，新 bundle grep「自启」0 命中）。真车：tools/flash.ps1 回读逐字节一致（116904 B，firstDiff=none，页 58/63 未擦）；复位后 /api/tasks/status = running=false id=65535 ⇒ 上电不自启；车上目录仍是用户那条 #0「常态循迹」122B flags=0；/api/cal 8 路 quality=8 全 ok、阈值与烧前一致（nvram 页 63 完好）；/api/params 44 项 param_crc=45399（含 0x0112=3000）；rx 持续增长 crc=0 resync=0；J-Link 抓屏 out/taskpage.png 是任务页真实版面（任务 1/1 + 常态循迹右对齐 + 8 柱 + 0/1）；网页只读探针 out/pwtasks.cjs 确认「开机自启」字样已消失、车上现有列出 #0、零 console 错误
+未完成：「运行」态版面与中键启动/停止只由代码与字形检查覆盖，没在真车上按过中键（按了会真的开车）；屏上观感与按键手感只有用户能验
+下一步：请用户在车上任务页按下/上选任务、看标题栏最右的名字，再按中键跑他那条常态循迹（离线、不接电脑），要停再按一次中键；刷新网页看任务页已无「开机自启」开关
+
 ## 2026-10-04
 完成：用户 m24215 的三条诉求全部改完并验证：①固件新增 `gyro_corr_ref` 让差速天花板随基准速度放大（nvram 升 v6 保住标定）②桥/前端把「每帧弹 HTTP 200」改成说人话的错误 + toast 去重 ③低特效当默认并把面板改成不透明分层主题。验证：`firmware/test/run_tests.ps1` 13/13（t_gyrotest 48044 检查、t_nvram 47 含新的 v5→v6 升级用例）；`tools/console` pytest 167；web `tsc --noEmit` 0 + vitest 21 文件/200 条；真车 J-Link 烧录回读逐字节一致（扇区 63 未擦）、复位后遥测恢复、桥 44 项参数 `param_crc=45399` 与车上一致、`0x0112=3000` 在位、`/api/cal` 与 `/api/actions` 完好；浏览器验收 `node out/looklite.cjs` 全过（默认挂 perf-lite、三层不透明有层次、无纯黑、关掉开关回到模糊+脉冲），截图 `out/lite-overview.png` / `out/lite-params.png`。提交 4452987。
 未完成：满速「前进+左转」的真实转弯半径只能由用户在真车上按 W+A 复测（给车发非零速度是被禁止的，没法自证）；低特效主题在用户屏幕上的主观观感也待他确认。
@@ -817,311 +919,4 @@
 完成：陀螺仪页按用户要求重排：三维线框移到屏幕左半边（中心 GY_CX=27/GY_CY=39、GY_SC=9），右侧改成三行全名「横滚/俯仰/偏航」，数值用 fmt_x10_compact 右对齐到 x=126（GY_TX=56/GY_TRIGHT=126，行 y=18/32/46）；无信号时右侧居中显示「无信号」。线框尺寸不是拍的：正方体投影后的外接半径最坏 = 2.42*GY_SC 像素（对角顶点朝向观察者时），旧值 GY_SC=11/中心(64,33) → 26px，上顶标题栏(y=7)、下压角度文字(y=59)，这就是用户说的「方框太大超出去」；GY_SC=9 → 22px，最坏跨度 x 6..48 / y 18..60 刚好落在标题栏以下。用新写的查字工具确认「横滚俯仰偏航无信号」都在 kk_font_body 的 187 字形子集里，**本轮不需要重新生成字模**。text 62,348 / data 132 / bss 12,404，已烧录 Verify successful。
 下一步：上板目视陀螺仪页：线框是否越界、三行标签与数值是否重叠。
 
-## 2026-09-29 · KK_UI 界面
-完成：表盘↔图标菜单做成 6 位环并修好动画方向：kk_ui_nav.c 重构出 kk_ui_navigate_push/pop(多一个 bool reverse)，新增 KK_UI_NavigateToDirected/KK_UI_NavigateBackDirected，并新增一次性入口选中项 KK_UI_SetEntrySelection(index)（在 push 里消费，只对 KK_UI_PAGE_HOME 且 index<item_count 生效）；kk_ui_home.c 的 kk_ui_home_delta 改纯差值、kk_ui_home_move 两端夹住；app_ui.c 的 PAGE_SPLASH 分支按左=SetEntrySelection(最后一项)+NavigateToDirected(reverse=true)，按右/中=SetEntrySelection(0)+NavigateTo。构建 text 61668 / data 132 / bss 12404，用 out/flash_app.jlink（内含 device STM32G474RB，缺了会 'Writing target memory failed'）烧录，Verify successful。
-未完成：等用户上板确认'从表盘按左落点=陀螺仪'这一步；模块测试页的电机电压疑案（先量 PC6/PC7 占空比）；循迹 SDK 未到、编码器 TIM3/TIM4 未配、renwu()/TIM6/TIM7 未启动。
-下一步：用户上板按左键进菜单，确认落点是'陀螺仪'且左边是'模块测试'、右边空。
-
-## 2026-09-29 · KK_UI 界面
-完成：①主页改成智能手表式：root_page=PAGE_SPLASH（表盘），表盘按左/右/中 → KK_UI_NavigateTo(PAGE_HOME)；图标菜单去掉『主页』那格回到 5 项，在最左/最右项继续往左/右由 app 侧 KK_UI_HomeOnMove 钩子调 KK_UI_NavigateBack 滑回表盘（前进/回退成对，导航栈恒 1 层）。这同时解掉了用户报的『卡到主页+亮一下白框』：旧代码每次回家都 NavigateTo 压栈不弹，8 层撞 KK_UI_NAV_DEPTH 后 kk_ui_nav.c:66-71 置 reject_flash=2。②自定义页补齐过渡水平位移 s_dx（原来是 (void)x_offset，只裁不平移 → 标题被裁剪边逐段露出，看着像『偏一下』）。③模块测试返回图标由朝上的 ︿ 改成与 kk_ui_menu.c:275-280 原生返回行逐像素相同的左尖角。④4 个只读 subagent 全量审计：路由/菜单/绑定/计数全部自洽；清掉孤儿陀螺仪信息页(PAGE_INFO_GYRO 无入口，连带 k_info_pages[0] 与每帧 snprintf 的 app_ui_refresh_gyro_rows)、死配置 k_confirms、死宏 EV_BUZZER_ON/OFF、死字段 g_live.speed_l/r、死参数 draw_task_page(task_id)，页面 ID 顺势重编号 1..10。⑤发现并修复真缺字：kk_font_body 原本 186 字形里没有『右』U+53F3，屏上『按左右键』只会显示『按左键』(KK_OLED 缺字静默跳过)；已按 kk-oled-font 技能重生成 wenquanyi_9pt/12px 187 字形/3698B。已烧录，text 61,460 / bss 12,404 / Verify successful。
-未完成：电机测试量两端电压无变化（怀疑 AT8236 VM=0，需实测 PC6/PC7 占空比）；五向键左 PC15 仍未单独实测；编码器 TIM3/TIM4 未配置；renwu()/TIM6/TIM7 未启动(等 12V/7.4V)；循迹 SDK 未到；host_link 三处待改。
-下一步：上板目视确认：上电停在表盘、左/右/中任一键滑进图标菜单、菜单头尾『缝』滑回表盘时整屏滑动且标题不蹦、模块测试返回行是 '<'。若电机测试仍量不到两边电压，先量 MCU 侧 PC6/PC7 的 PWM，判断是固件还是 AT8236 的 VM（7.4V）没上电。
-
-## 2026-09-29 · KK_UI 界面
-完成：按 m01247 改完并已烧录（text 61,624 / data 132 / bss 12,508）：
-1) 陀螺仪页小车模型换回正方体（gy_box 140,140,140，删掉 4 个轮子和 wheel[]）。
-2) 菜单「返回」标识：删掉应用自加的 11→10 / 3→2 两项返回，消除重复行与错误的 ">"。
-3) 主页图标顺序：任务 提到第一位。
-4) 新增 PAGE_SPLASH 上电主页 + root_page 改指它 + 按下键/中键进菜单 + 图标菜单按上回主页（在 kk_ui_home.c 加了 weak 钩子 KK_UI_HomeOnUp(selected)）。
-5) 模块测试页电机项右侧显示实际占空比（s_motor_echo：按住显示 1500，松开 0）。
-另修：out/flash_app.jlink 少了 device STM32G474RB，导致烧录报 "Writing target memory failed"。
-未完成：电机测试量两端电压无变化（未定因，已加屏上占空比回读用于分离固件/硬件）；主页文案要中文需重生成字模。
-下一步：让用户选「模块测试→电机」按住中键，看右侧是否从 0 变 1500；再确认万用表量的是 PC6/PC7（U2.38/39）还是 AT8236 输出端，以及电机电源 VM 是否已接。
-
-## 2026-09-29
-完成：**按用户 m01174 反馈改完并烧录（61,400B，逐字节校验 OK）。**
-
-**1. 字模缺字根因 + 重新生成**：用户反馈"模块测试只能看见测试"——根因是 **KK_OLED 的 u8g2 静态字体子集里没有「模」「块」等字形，`OLED_DrawUTF8()` 遇到缺字直接什么都不画**（不报错、不画方框）。这不是排版问题。已按 **kk-oled-font 技能**流程（先读 https://ledfont.botelvdong.com/agent-api.md 作为唯一权威，再 `GET /api/v1/compressed-fonts` 查实时目录）重新生成两套字模：
-- `kk_font_body`：`wenquanyi_9pt` size 12 → **186 字形 / 3669 字节**
-- `kk_font_home`：`wenquanyi_11pt` size 15 → **108 字形 / 1850 字节**
-- 字符集 = 全部可打印 ASCII(0x20–0x7E) + UI 实际用到的中文（设置/任务/循迹测试/模块测试/陀螺仪/关于/返回/取消/确定/提示/开关/速度/按键蜂鸣/过点蜂鸣/循迹反转/闭环/蜂鸣器/电机/编码器/响一下/按住中键执行/左偏航/横俯滚仰/状态/无信号/待机运行/在线离/主控频显示固件字体 等）。
-- API 目录里的可用字体 id：wenquanyi_12pt(16)、wenquanyi_11pt(15)、wenquanyi_13px(14)、wenquanyi_10pt(13)、wenquanyi_9pt(12)、WenQuanDengKuanWeiMiHei(ttf 8-64)、Alibaba-PuHuiTi-Regular(ttf 8-64)、boutique_bitmap_7x7(8)、boutique_bitmap_9x9(10)、boutique_bitmap_9x9_bold(10)。**字模版权归生成服务，不随 KK_OLED 的 MIT 许可。**
-
-**2. 陀螺仪页：正方体 → 小车模型**（`draw_gyro_page()`）。新增通用 `static void gy_box(m00,m01,m02,m10,m11,m12,cx,cy,cz,sx,sy,sz)` 画长方体线框（8 角点用同一个旋转矩阵投影，坐标单位 1/100 单位，**1 单位 = GY_SC 像素**）；车身 `gy_box(..., 0,0,0, 140,80,30)`，4 个轮子在 `(±85,±85,-35)` 各画一个 6×4 实心块。车头朝 +X。
-
-**3. 角度正方向统一到一个函数**：新增 `static void gyro_angles(int32_t *roll, int32_t *pitch, int32_t *yaw)` —— `*roll=-g_live.pitch_x10; *pitch=-g_live.roll_x10; *yaw=g_live.yaw_x10`，符合用户约定「向左偏=横滚增大、向下低头=俯仰增大、向左转=偏航增大」。**轴序交换+取反只在这一个地方**，陀螺仪页/任务页/信息页三处显示都走它，以后要翻只改这里。
-
-**4.** 顺手修掉 `snprintf(tail, sizeof(tail), "")` 的 `-Wformat-zero-length` 告警（改 `tail[0]=0`）。
-
-**工程经验（值得记）**：KK_OLED 用的是**静态字符子集字模**，改文案时如果引入了子集外的汉字，屏幕会**静默地少画几个字**（不是乱码、不是方框）。以后改 UI 文案必须同步重新生成字模。
-未完成：用户尚未反馈小车模型/横滚俯仰正负是否合意；循迹模块 SDK 未到（`g_live.gray[]` 仍是 0/1 电平换算）；编码器 TIM3/TIM4 模式未配置；`renwu()`/TIM6/TIM7 未启动；五向键左/中未实测。
-下一步：等用户目视确认小车模型与角度方向；SDK 到手后接真灰度。
-
-## 2026-09-29
-完成：**两件事：① 用完整版网表查清了电源器件（含悬而未决的 D4）；② 按用户 m01126 的反馈重做 UI 并烧录。**
-
-**① 完整网表（40744B，带立创编号/厂商/描述）核对结果** —— 之前只有 7859B 的简化版，查不到器件型号：
-- **D4 = BZT52C5V1-TP（立创 C78728，MCC）＝ 5.1V 齐纳**，接在 VCC5V 与 GND 之间。
-  ⚠️ **5.1V 偏低**：5V 轨额定 5.0V，齐纳击穿 ±5% = 4.85~5.36V，下限落点会在**正常工作时就开始导通**，把 5V 轨往下拉并发热；**应当用 5.6V**（与当初建议一致）。⚠️ 方向必须阴极接 5V、阳极接 GND，装反 = 正向导通把 5V 拉到 0.7V。
-- 其余确认：U9 = **RT9013-33GB**(C47773，输入上限 5.5V)；D1 = BZT52C15(15V 齐纳，12V 钳位)；D2 = SMF15CA(双向 TVS 15V)；D3 = 1N4148W(蜂鸣器续流)；D5 = SS54(40V 5A 肖特基)；Q3 = PJQ4465AP(60V 15A P-MOS 防反接)；F1 = SMD2920-500-24(5A 自恢复保险丝)；R2 = 5mΩ 1W 1206 采样；R30 = 3296W-50kΩ 可调(7.4V 调压)；U7/U8 = SP1N28。
-
-**② UI 按用户反馈全部改完并烧录（60,692B，约 46% Flash，逐字节校验 OK）**：
-1. **修掉负余数格式化 bug**：`-123/10=-12`、`-123%%10=-3` → 直接拼小数得到 "-12.-3"（用户看到的 `-12.-4`）。新增 `fmt_x10()` 先取绝对值再拼符号，**横滚/俯仰/偏航现在全部带 1 位小数**。
-2. **横滚/俯仰按用户反馈交换显示**（`draw_gyro_page()` 与 `app_ui_refresh_gyro_rows()` 两处都改）。
-3. **陀螺仪图变大、字变小**：立方体 `GY_CX 36 / GY_CY 37 / GY_SC 15`（原 cx30/cy40/sc10，半宽 17→26px），右侧文字列 x=68 且改用 12px 字体（原 15px）。
-4. **「总测试」改名「模块测试」**（首页 + 页标题）。
-5. **修"选中框盖住文字"**：根因是先画实心 RBox 再写字、写字的 CLEAR 背景把框擦了。改为 **先清行 → 写字 → 最后画空心 Frame**。
-6. **蜂鸣器改为"按一下响一下"**（`beep_ms(60)`），不再常响。
-7. **电机改为按住中键转、松开停**：在 `KK_UI_CustomOnTick()` 里轮询 `keys_raw()` 的物理中键位(0x10)，并加 `s_motor_on` 边沿检测；`KK_UI_CustomOnLeave()` 强制 `Load(0,0)` 兜底。
-8. **编码器项直接显示数值**（当前 0，TIM3/TIM4 编码器模式仍未配置）。
-9. **退出方式统一**（用户明确要求"不要混着来"）：设置菜单 11 项、任务菜单 3 项，**末尾都有「返回」**；模块测试页 **4 行（蜂鸣器/电机/编码器/返回）**，上/下选、中键执行；**无选项框的页（循迹/任务A/B/陀螺仪）用左键返回**（左键在 `app_ui_read_input()` 里本就被归一化成 UP）。
-10. 顺手修掉隐藏 bug：陀螺仪信息页里"横滚"和"偏航"**显示了同一个 yaw 值**，现在横滚/俯仰/偏航各自正确（`k_gyro_rows` 由 5 行缩为 4 行）。
-11. 删掉已无人调用的 `draw_status_page()`（消除编译告警）。
-
-**新增设置项（App/Inc/app_ui.h 的 app_settings_t）**：`bool beep_key`（按键时响）、`bool beep_marker`（任务每过一个点响一下）——用户要求"设置关于蜂鸣器有两个选项"。默认 `beep_key=false, beep_marker=true`。
-未完成：⚠️ **D4（5.1V 齐纳）的容值和方向待用户确认**；用户尚未目视确认新陀螺仪页/温度计/模块测试页；循迹模块 SDK 仍未到（`g_live.gray[]` 仍是 0/1 电平换算）；编码器模式仍未配置；`renwu()`/TIM6/TIM7 未启动。
-下一步：用户反馈新 UI 观感；确认 D4 是否需要换 5.6V 并核对方向；等 SDK 接真灰度。
-
-## 2026-09-29
-完成：**按用户新需求重做 UI**（用户原话要求见末段）。
-1. **陀螺仪数据通了**：用户确认"设置里的陀螺仪有偏航角的数据" ✅ —— 根因是 `main_app.c` **从来没初始化 USART3**；已加 `board_uart_jy61_init()` + `board_jy61_start_rx()`，主循环把字节喂给旧上层 `jy61p_ReceiveData()`，并用 `gyro_bytes` 置 `g_live.gyro_ok`。
-2. **修好"进陀螺仪页黑屏"**：根因是我只加了 `PAGE_CUSTOM_GYRO` 的路由，**没写绘制函数也没在分发里加分支**。现在 `draw_gyro_page()` 用 **Q1000 定点**（自带 91 点 sin 表，**故意不引 math.h/libm**，因为工程是 nano.specs）把单位立方体按 roll/pitch/yaw 旋转后正交投影，右边一列：偏航(小字标题)+**大号偏航值**(15px 字体)+「横x 俯x」一行。
-3. **循迹测试页改成用户要的"温度计"**：8 条竖条，每条约 `TC_W=12/TC_STEP=15/TC_H=44`，**灰度 0..255 线性映射成 0..44 像素从底部往上填**（越白条越高）—— 数据取自新加的 `g_live.gray[8]`。
-4. **新增总测试页**：蜂鸣器 / 电机 / 编码器 三项，**下键换选中、中键执行**（蜂鸣器切换 ON/OFF；电机 `Load(1500,1500)` 转 0.5s 再停；编码器显示"未接"）。
-5. **清掉重复项**：设置菜单里的「陀螺仪」「总测试」删除，任务二级菜单里的「总测试」删除（只剩任务A/任务B）—— 它们首页已经有了。
-6. **字体/图标**：重新生成 12px 字模（185 字形，补 总测试/电机/编码器/传感器/灰度/姿态 等）与 15px 大字体（59 字形，**补了 + - . :** 才能显示大号带符号的偏航值）；新画 2 个 32×32 图标 `kk_icon_gyro`/`kk_icon_test`。
-7. **修掉 Makefile 缺头文件依赖跟踪的真 bug**：原来改了 `.h` 不触发重编，`make` 报 "Nothing to be done" 却链接旧 `.o`（这次改 `app_ui.h` 的页面宏就这么混过去，只因宏值恰好同数字）。已加 `-MMD -MP` 到 `CFLAGS` + 末尾 `-include $(wildcard $(BUILD)/*.d)`。
-8. clean 重编 + 烧录 + 逐字节校验通过，Flash **60,496B / 128KB（约 46%）**；RTT 正常（`FRAME: update avg=752~913us`、`oled tx_done` 每秒增约 390）。
-**遗留**：`draw_status_page()` 现在没人调用（编译器告警 unused），可删；用户还没确认新页面的观感。
-未完成：用户找的**循迹模块 SDK 未到**（灰度数据目前仍是 `tracing_data[]` 的 8 位数字电平，不是真灰度）；总测试的编码器项未实现（PB4–PB7 的 TIM3/TIM4 编码器模式从来没配过，见 `docs/控制算法升级方案.md`）；`renwu()`/TIM6/TIM7 仍未启动。
-下一步：用户看新页面观感并反馈；SDK 到手后把灰度接进 `g_live.gray[8]`；补编码器测速。
-
-## 2026-09-29
-完成：**新网表核对 + 屏幕翻转 + 修掉"自定义页出不来"的 bug。**
-1. **网表 `Netlist_Schematic1_2026-09-29.tel`（两份都核过：7859B 与 40744B 版）**：所有与固件相关的网**逐条一致**（I2C1=U2.51/U2.62、电机 U2.38–41、舵机 U2.42–45、编码器 U2.57–60、五向键 U2.2/3/4/10/11、LPUART1=U2.8/U2.9、UART4=U2.52/53、USART3=U2.30/33、BUZZER=U2.55、huidu1–8=U2.12/13/14/17–21、SWD=U2.49/50、BOOT0=U2.61、VCC3V3 成员）→ **`board.h` 无需改动**。新增 **D4**（VCC5V↔GND 的 5V 保护，器件类型待用户确认）；OLED 外围改成 C41/C44=1µF（飞电容）、C45=4.7µF（VCC）、C31=4.7µF（VCOMH），值都对。
-2. **审查了另一个会话新增的 `App/Svc/host_link.c/.h`**（上位机协议，LPUART1）：实现干净（SOF+CRC16-CCITT+滑窗重同步+长度校验+参数范围校验+SET 回读）。发现 3 处待改：`host_link_poll(cyc_last/170u)` 传的是 UI 刷新耗时而非主循环周期；`ina226_init()` 被塞进 `host_link_init()`；`renwu()`/TIM6/TIM7 仍未启动。
-3. **屏幕翻转 + 按键跟转**：新增 `APP_UI_DISPLAY_ROT180`（app_ui.h），`app_ui_setup_display()` 紧跟 `OLED_Init()` 调 `OLED_SetRotation(OLED_ROTATION_180)`；`app_ui_read_input()` 里上↔下、左↔右互换。
-4. **修 bug：自定义页进去出不来**（用户报告"系统状态"页卡死、按键只改屏上的二进制）。根因是我漏了 KK_UI 自定义页**没有内置返回**；已在 `KK_UI_CustomOnInput()` 里加 **按【上】= `KK_UI_CustomRequestClose()`**，并在标题栏右上角画 `<` 提示。
-5. 每次改动都 **`make` + J-Link 烧录 + 逐字节校验**通过，实机 RTT 正常（`FRAME: update avg=118us`、`HOST: tx=..  hz=50`）。当前 Flash **58,280B / 128KB（约 44%）**。
-未完成：D4 器件类型未确认；`renwu()`/TIM6/TIM7 未启动（有意）；五向键左(PC15)/中(PC3) 从未实测过；5V/12V 侧功能未测；屏幕翻转方向与按键方向待用户目视确认。
-下一步：用户确认屏幕方向/按键方向；确认 D4；等电源稳定后启动周期任务与 renwu()，上车联调。
-
-## 2026-09-29
-完成：**板子复活 + 新网表核对 + 主程序烧录成功。**
-
-1. **J-Link 恢复正常**：VTref=3.29V、读到 DEVID 0x20036469 —— **3V3–GND 短路已修好、MCU 没被打死**。
-2. **新网表 `pcb/Netlist_Schematic1_2026-09-29.tel`（7859B，198 行，另一种导出格式，无 LCSC 属性）已核对**：所有与固件相关的网**与 v6 完全一致**（I2C1=U2.51/U2.62、电机 U2.38–41、舵机 U2.42–45、编码器 U2.57–60、五向键 U2.2/3/4/10/11、LPUART1=U2.8/U2.9、UART4=U2.52/53、USART3=U2.30/33、BUZZER=U2.55(PD2)、huidu1–8=U2.12/13/14/17/18/19/20/21、SWD=U2.49/50、BOOT0=U2.61+R3 10k）→ **`board.h` 无需改动**。
-   变化只在电源/OLED 外围：**C39/C40 改名为 C41/C44（1µF 飞电容）**、**C45=4.7µF 接 U16.28(VCC)**、**C31=4.7µF 接 U16.27(VCOMH)**，值都对；**新增 D4（SOD-123）接在 VCC5V 与 GND 之间**（用户加的 5V 保护，器件类型待确认）。
-3. **发现工作区被另一个会话（"嵌入式固件工程师"）改过**：新增 `App/Svc/host_link.c/.h`（16.9KB，上位机协议），并改了 `app_ui.c`/`board.c`/`board.h`/`main_app.c`/`stm32g4xx_it.c`/`stm32g4xx_hal_conf.h`（09-24）。**审查结论：协议实现干净** —— SOF 同步 + CRC16-CCITT + 滑窗重同步 + 长度合法性检查 + 参数范围校验 + SET 后回读；`board_dl_init()` 把 LPUART1 配成 **PC1=TX/PC0=RX、AF8**，与网表的网名互换一致（代码按实际功能配）。
-4. **主程序已烧录并逐字节校验通过**：`build-app/haixin-app.bin`，58,008B text（约 45% Flash）。实机 RTT：`CLK 170MHz` / `OLED init OK` / `KK_UI init OK` / `FRAME: update avg=118us` / `HOST: rx=0 tx=284 crc=0 resync=0 hz=50`。
-
-**审查中发现的问题（已告知用户）**：① `host_link_poll(cyc_last/170u)` 传的是**UI 刷新耗时**而不是主循环周期，遥测里那个 loop_us 字段会偏小；② `ina226_init()` 被塞进 `host_link_init()`，耦合了通信模块与外设初始化；③ `renwu()` 与 TIM6/TIM7 周期任务**仍未启动**（有意，等 12V/7.4V）；④ D4 若是普通二极管则挡不住过冲（U9 仍会被打）。
-未完成：D4 器件类型待确认；renwu/周期任务未启动；五向键左(PC15)/中(PC3) 仍未实测；5V/12V 侧功能未测。
-下一步：确认 D4 类型；等电源稳定后启动 TIM6/TIM7 与 renwu()，上车联调。
-
-## 2026-09-27
-完成：对比用户给的两份 0.96" 30P OLED 引脚表：**不通用**，30 脚里 20 脚不同。图2（Pin Assignment 表）= 本板 U16 那款 **X096-2864KSWPG01-H30** 的定义，与 固件接口规格.md 3.7 + v6 网表逐脚吻合（2/3=C39、4/5=C40、11=BS1→3V3、12=BS2→GND、18=D0→SCL、19/20 短接→SDA、28 只接电容）；图1 是常见「通用 SSD1306／立创EDA 符号」定义（2–5 脚 C1/C2 顺序相反、10=BS0、29=VLSS、16/17/21–25 为 NC）。另按网表核实：板上 100Ω **只有两处** —— 电机输入串阻 R6/R9/R10/R11（配 100k 下拉）与编码器输入串阻 R29/R31/R32/R33（配 100nF 到地 + 10k 上拉 5V）；两处都属信号串阻，换 120Ω 无损（编码器那处 RC 截止 15.9k→13.3kHz，而编码器单相约 1.2~2.5kHz，仍有 5 倍以上裕量）。
-未完成：**主板选型与设计.md:111 与网表不一致**：文档写舵机「信号串 100Ω」，但 v6 网表里 TIM1_CH1..CH4_SERVO1..4 各只有两个节点（U2.42/43/44/45 ↔ U11.1/4/7/10），**实际是直连、没有任何串阻**。待用户确认是有意省略还是漏画。
-下一步：用户确认后：若有意省略就把 主板选型与设计.md:111 改成「信号直连」，若属漏画则列入下一版改板清单。
-
-## 2026-09-24
-完成：**做固件侧上位机链路（LPUART1），编译通过；硬件验证待接板**。
-
-**先查手册确认复用编号**（不靠记忆）：DS12288 Rev6 第 75 页 Table 13 → **PC0 = AF8 = LPUART1_RX、PC1 = AF8 = LPUART1_TX** ✓（规格书只写了功能名没写 AF）。
-
-**新增/改动**：
-- `App/Svc/host_link.c/.h`（新建 506 行）：CRC16/CCITT-FALSE（与上位机同参数，校验值 0x29B1）、帧收发、**23 项参数表**（id/默认值/范围与 `protocol.py` 逐项对应）、HELLO/PARAM_GET/SET/SAVE、命令分发、遥测打包、收帧状态机（CRC 错只前移 1 字节重同步）。对外提供 `host_param_get(id, fallback)` 给控制代码取参数。
-- `board.c`：`board_dl_init()`（LPUART1 115200 8N1）、512 字节环形缓冲、`board_dl_send()`；两个 UART 回调加 LPUART1 分支。
-- `board.h` 四个声明；`stm32g4xx_it.c` 加 `LPUART1_IRQHandler`；`main_app.c` 加初始化 + 主循环 `host_link_poll(loop_us)`/`host_link_tick_1hz()`。
-- Makefile 无需改（`wildcard App/Svc/*.c` 自动纳入）。
-
-**遥测都是真实读数**：yaw/pitch/roll 来自 JY61P；`pwm_l/pwm_r` 读 **TIM8 CH1..4 的 CCR**；舵机读 TIM1 CCR；电压电流读 INA226（**只在 `OLED_IsBusy()==0` 时读**，否则会和异步刷屏抢 I2C1）；`line_mask` 取灰度原始电平；`state_id` 取 `black_num`。
-**诚实边界**（未实现就明确回 `ST_NOT_READY`，不假装成功）：参数写 Flash、陀螺校准、车上记录；**遥测 v_l/v_r 恒 0**（编码器未做）——不拿 PWM 假装速度，否则调参台的波形会骗人；flags 的"陀螺有效/记录中"不发。
-
-**验证**：`cd firmware && make` → **编译链接通过**，Flash 45%（text 58008+data 128 / 128KB）、RAM 10%。协议文档 §8.1 换成实际实现状态，新增 **§10 硬件验证步骤**（先看 RTT 的 `HOST: rx/tx` 递增 → 连上位机看握手/指纹 → 读参数 → 改参数看回读 → 最后才接状态机）。
-
-**踩坑**：①**环形缓冲定义必须在中断回调之前**（C 要求先声明）——我第一次把整段 LPUART1 块连同回调一起挪，白改一轮；②**PowerShell 5.1 按 ANSI 读 .ps1**，UTF-8 中文会把引号拆坏（和 .bat 同一个坑，脚本必须纯 ASCII）；③TS 模板里嵌 markdown 反引号会截断字符串，改用 `chr(96)` 生成。
-
-**未完成**：**用户没接板子，所以没烧录、没跑实测**（准备好的 flash+RTT 验证因此中断）。
-未完成：① 硬件验证（接 U12 或 USB-TTL 后按协议文档 §10 走）；② **把 pid.c / gyro_control.c 的 #define 换成 host_param_get()** —— 在这之前改参数不影响控制律，这是当前最大的『看着能用其实没接线』处；③ 编码器（PB4..PB7）测速，否则波形里轮速恒 0；④ 参数写 Flash。
-下一步：用户接上板子后：先只看 RTT 的 HOST 统计行确认 tx 在涨，再用上位机串口模式连接。
-
-## 2026-09-24
-完成：**继续优化上位机（调参台）**：围绕"真实调参工作流"加了四件东西 + 一个会话记忆。
-
-1. **改前改后对比**：波形页「存为基线」把当前窗口的数据冻结成**虚线**，改完参数再跑，实线（新）叠虚线（旧）—— 调 PID 最核心的动作。「清基线」清除。
-2. **波形读数**：鼠标移到波形上出现**点线游标 + 各通道该时刻的值**（`t -3.42s 航向=+12.3° …`）。
-3. **量化指标**：底部按可见通道显示 **峰峰 / 均值 / 标准差 / 过零次数** —— 调参别只靠眼睛数"晃了几下"。指标算法抽到纯函数模块 `metrics.py`（含 `settling_time`/`overshoot`/`zero_crossings`，带 deadband 忽略噪声），9 个单测覆盖。
-4. **参数 diff 高亮**：参数表与参数总览里，**与默认值不同的项标黄**；总览页带 `*` 前缀，一眼看出这次调了什么。
-5. **会话记忆**：模式/波特率/倍速/窗口/勾选通道存 `tools/host/config.json`，下次自动恢复；`MainWindow(load_config=False)` 供测试隔离。
-
-**又抓到两个真 bug（都是测试/实跑发现的）**：
-- `metrics.settling_time` 我写成了"稳定到结尾的时长"，正确约定是"从起点到稳定的时刻"（单测直接指出 2 != 3）。
-- **改完参数"参数总览"不刷新**：`_refresh_param_row` 里只置了个标志位、没人消费它。已改为直接 `set_params()`；并把原来的测试从"手动调 `_fill_params`"改成走真实的"参数回读 → 实时刷新"路径，否则这个 bug 会被测试掩盖。
-
-**验证**：`python tests/run_all.py` → **101 用例全过**（协议 40 / 指标 9 / 链路 25 / 启动脚本 4 / tk 界面 8 / Qt 界面 15）。另跑了完整调参工作流截图（存基线 → 改 line_kp 375→1500 → 再跑），`out/host/ui_wave_tuning.png` 能看到虚线基线与实线新曲线分离、底部四项指标。
-未完成：固件侧 LPUART1 与 host_link 仍未实现（真正调参要等这个）；障碍位置与大型阶梯高度待现场复核。
-下一步：① 按 docs/上位机通信协议.md 第 8 节做固件侧链路，打通后这套调参台就能对真车用；② 现场量场地校正规则文档。
-
-## 2026-09-24
-完成：**按用户要求砍掉地图与赛道仿真，把上位机收敛成调参台**（用户原话：地图太垃圾、仿真完全不对，都删了，只留波形+参数查看下发+参数的图形化显示）。
-
-**删掉**：`field.py`（场地模型）、`MapView`（Qt 与 tk 两版）、`tests/test_field.py`、协议里的 **T_POSE 位姿/得分帧**及其收发、两版的"赛道"页与得分/障碍清单面板。规则与地图本身保留在 `docs/全地形机器人比赛规则与场地.md`（那是资料，不是仿真）。
-**留下并加强**：波形（每通道独立量程）、参数表（双击改值即下发、预设）、实时图形（灰度条/表盘/轮速条/状态格）、**新增「参数总览」页** —— 每个参数一条，画出当前值在允许范围里的位置（绿=有余量/黄=接近边界/红=越界），一眼看出谁调到头了。
-`simulator.py` 重写为 `DemoSource`：**只是信号发生器**（正弦偏差 + 反推灰度掩码 + 速度/电流/电压联动 + 注入堵转），不再有场地/障碍/计分；`line_kp` 调大偏差摆幅变小，保留"改参数看得出来"。界面模式名"模拟器"→"**演示数据**"。
-
-**修掉两个真问题（都是我的错）**：
-1. **`tools/host/main.py` 被覆盖成了 shot.py 的内容** —— `run_host.bat` 跑的其实是截图脚本，参数不认直接失败。已恢复；并扫过全部 21 个文件确认只有这一个被写坏。教训：脚本化写文件后要**回读校验**，别信"写成功"的返回值。
-2. **"回放模式"弹窗一直弹** —— 根因是 `QComboBox.setCurrentText("模拟器")` 对**不存在的项静默无效**（模式名已改成"演示数据"），模式停在"回放"，点一次"连接"弹一次。已改为：连接流程**永不弹模态框**，模式不对/没串口就记日志并自动回落到演示数据；新增 `select_mode()` 带校验的切换方法。
-
-**顺带**：重写 `ui_qt/widgets.py` 时漏了 `QPen` 导入（每次绘制都抛异常）—— **被 Qt 离屏冒烟测试抓到**，这就是那个测试的价值。
-
-**验证**：`python tests/run_all.py` → **88 用例全过**（协议 40 / 链路 25 / 启动脚本 4 / tk 界面 8 / Qt 界面 11）；`python main.py --sim` 实测正常打开窗口、无报错。
-未完成：固件侧 LPUART1 与 host_link 仍未实现；障碍编号位置与大型阶梯高度待现场复核；地图已不在上位机里。
-下一步：① 按 docs/上位机通信协议.md 第 8 节做固件侧链路；② 现场量场地后校正规则文档里的障碍位置；③ 把实测轮径/轮距填进参数表。
-
-## 2026-09-24
-完成：**修好"双击 .bat 打不开"**（用户反馈"这个 bat 文件用不了"）。
-
-**根因（实测复现，不是猜）**：`cmd /c run_host.bat` 输出 `'）' is not recognized as an internal or external command` / `'errorlevel' is not recognized...` —— 脚本被 cmd **按行拆错**了。两个原因叠加：
-1. **换行符是 LF**，而 cmd.exe 要求 **CRLF**：LF-only 的 .bat 会被当成一行解析，命令全糊在一起；
-2. 脚本里有 **UTF-8 中文**，而 cmd 用 OEM 代码页读脚本文件 → 乱码。
-
-本仓库的写文件工具**默认给 LF**，所以我先前写的 `run_host.bat` / `selftest.bat` 必然踩这个坑。**与 Python、PySide6 无关**（同时单独验证了 `python main.py --offline` 正常）。
-
-**修法**：两个 .bat 重写为**纯 ASCII 英文提示 + CRLF**，并加了健壮的 Python 查找（`where python` → `py -3` 兜底）、`cd /d "%~dp0"`、失败时 `pause` 留屏。
-**实测**：`cmd /c run_host.bat` → 输出 `Starting host GUI with the built-in simulator...` 后 GUI 正常打开；`cmd /c "selftest.bat < nul"` → 跑完 104 用例、打印汇总表、停在 pause。两个都可用。
-
-**顺带修的**：
-- 新增 `tests/test_launchers.py`（4 项）**兜底防回归**：断言所有 `.bat` 是 CRLF、无 BOM、纯 ASCII、且 `cd /d "%~dp0"` —— 因为写文件的工具默认给 LF，这个坑很容易再犯。
-- 测试里的**临时文件名写死了**（`%TEMP%/haixin_rec_test.csv` 等 6 处），两个测试进程并发时会 `WinError 32 另一个程序正在使用此文件`（我同时跑 selftest.bat 和 run_all.py 时暴露的）。已全部加上 `os.getpid()`。
-
-**验证**：`python tests/run_all.py` → **104 用例全过**（协议 40 / 链路 24 / 场地 20 / 启动脚本 4 / tk 界面 8 / Qt 界面 8）。
-未完成：固件侧 LPUART1/host_link、T_POSE 未实现；障碍编号位置待现场实测校正；大型阶梯立面高度待复核。
-下一步：无阻塞项。下一步仍是固件侧链路（docs/上位机通信协议.md 第 8 节）与现场场地校正。
-
-## 2026-09-24
-完成：**按用户要求把上位机界面从 tkinter 换成 PySide6**（用户原话："界面太丑了，有那么多新的库你为啥不用"）。
-
-**为什么换**：当初选 tkinter 是为了零安装，代价是观感差；但这是现场调参要盯着看的工具，不该省这一步。先确认 **PySide6 6.11.2 是 abi3 轮子、兼容 Python 3.14**（第一次装被网络中断，换清华镜像成功）。
-
-**做法：逻辑层一行没动**，只换界面层 —— `protocol/transport/device/field/simulator/recorder` 全部保留，所以 100 个测试对两个界面都有效。
-- 新增 `ui_qt/`：`theme.py`（深色 QSS）、`widgets.py`（QPainter 自绘：场地地图 / 8 路灰度条 / 航向表盘 / 速度条 / 状态格）、`window.py`（工具条 + 左侧车况 + 赛道|波形|参数|命令|记录|日志 六页）。
-- 波形页做成**每通道独立量程的泳道**：共用一根 Y 轴时 PWM(0~7200) 会把航向(±180)和电流压成直线，没法调参。
-- tkinter 版留作**零依赖备胎**（`--ui tk`），`main.py` 默认 Qt、缺 PySide6 自动退回并提示。
-- **能在离屏模式渲染成 PNG 自己看并迭代**（tkinter 做不到）：`shot.py`。据此修掉了障碍标签压框/被截断的问题。
-
-**验证**：`python tests/run_all.py` → **100 用例全过**（协议 40 / 链路 24 / 场地 20 / tk 界面 8 / **Qt 界面 8**）。截图 `out/host/ui_*.png` 肉眼确认：深色仪表盘、障碍通过变绿打勾、车+轨迹、状态栏链路统计都正常。
-
-**坑**：①pip 装 168MB 的 PySide6 中途断流（IncompleteRead），换国内镜像解决；②**离屏平台字体数为 0**，截图里全是方块 —— 那是测试环境假象，真实 Windows 平台有 353 个字体，先在离屏下误判成"字体选错了"；③Qt 与 Tk 不能同进程，界面测试各自独立进程跑。
-未完成：界面已换新，但**功能上仍缺**：固件侧 LPUART1/host_link、T_POSE 未发；障碍编号位置待现场实测校正；大型阶梯立面高度待复核。
-下一步：① 现场量场地后改 field.py 的 OBSTACLES；② 做固件侧链路（含 T_POSE）；③ 按官方 11 个编号重排 renwu.c 状态机。
-
-## 2026-09-24
-完成：**改名 + 把比赛场地搬进上位机仿真。**
-
-**1. 改名（用户明确）**：比赛名叫**海信杯**，「不是说我的车叫海信」。所以「海芯/海信」作为车的自称整个是错的 —— 已按**字节级替换**清掉全仓库 21 个文件里的「海芯」字样（含固件注释、RTT 字符串、`firmware/Makefile`、两份文档、上位机 4 个文件）；OLED 首页标题 `海芯 G474` 改成 `G474`（**字库是二进制子集，无法确认「全地形」在不在里面，所以用纯 ASCII，零风险**；要中文标题得用 kk-oled-font 重新生成字模）。目录 `Haixin/` 与 `haixin-app.bin` 是历史文件名，未动。
-
-**2. 场地图数字化** → `tools/host/field.py`。场界/跑道/出发区/测试区用**黑色像素检测 + 45cm 网格标定**得到（±5cm）：大矩形环 + 中央十字 + 右侧凸出 + 顶部高台拱形、出发区 L 带、测试区 A/B。**11 个障碍的编号位置读不出来** —— PDF 里的地图是 465×522 像素位图，编号字只有 3~6 像素高（试过 500dpi 裁剪 + 连通域检测 + 拼图对照，只能看到蓝色像素团）。改为「蓝色标号连通域中心 + 障碍尺寸 + 必须压黑线」推断并**吸附到线上**（±20~30cm，`pos_conf` 标可信度，现场量完改表即可）。
-
-**3. 上位机新增「赛道」页**：`widgets.MapView` 画场地/跑道/障碍(通过变绿)/车的位置朝向轨迹 + 得分/已完成清单/5 分钟倒计时。协议新增 **T_POSE（0x02，12 字节）**：x/y(0.1cm)、yaw、当前障碍、flags、得分、done_mask。
-
-**4. 模拟器改成「真的在跑比赛」**：不再跑抽象正弦弯道，而是沿黑线的**密集路径纯追踪**（路点法实测会因跑道自交导致目标点前后翻转、原地打转上百秒，已弃用）；障碍按官方规则判定：1~10 号**前端进末端出**（穿越 ≥65% 占位）、11 号**登上即得分**（≥35%）、重复通过不重复计分；车高 25cm 会**卡在 20cm 隧道口**、车宽 30cm 过不了 25cm 窄桥。
-
-**验证**：`python tests/run_all.py` → **92 用例全过**（协议 40 / 链路 24 / 场地 20 / 界面 8）。上位机实测：启动后得分 50、完成 4 个障碍、状态格显示 50/190 与剩余 2:30、地图 93 个图元、轨迹 58 点。场地模型另渲染成 `out/rules/field_model.png` 与官方俯视图逐项对照过。
-
-**踩坑**：①地图位图分辨率太低，障碍编号物理不可读（见上）；②**转向符号反了** —— y 向下时 yaw 顺时针为正，目标在东边车却往西转；③障碍的「通过方向」不能取长边，要取**穿过它的那条黑线的走向**（柔软草地 40×60 摆在横线上，穿过的是 40 那一维）；④检测框要按循迹误差放宽（车沿黑线有 ~10cm 横向误差，用官方尺寸当判定框会擦边漏判）。
-未完成：① 大型阶梯立面标的 3.0/5.0cm 比小型阶梯 10.8cm 还矮，待复核；② 障碍位置待现场实测校正；③ 固件侧 LPUART1 链路与 host_link 仍未实现（画地图用的 T_POSE 也还没发）；④ 车高/车宽未实测。
-下一步：① 现场量场地后改 field.py 的 OBSTACLES；② 按 docs/上位机通信协议.md 第 8 节做固件侧链路（含 T_POSE）；③ 按官方 11 个编号重排 renwu.c 状态机，并加『进障碍前锁航向 + 卡住后退重试』。
-
-## 2026-09-24
-完成：读了用户给的《第七届吉林省大学生人工智能创新大赛 竞赛规则》PDF，定位到赛项「**十、全地形机器人自主创新设计比赛**」（第 46–55 页），产出 `docs/全地形机器人比赛规则与场地.md`；PDF 存进 `docs/竞赛规则-第七届吉林省AI创新大赛.pdf`；新增可复用工具 `tools/pdf_pages.py`（--list/--dump/--render/--images）。
-
-**关键规则事实**：11 障碍 = 外围 6×10 分（1栅格 2减速带 3小型阶梯 4石块地形 5方形隧道 6U形隧道）+ 内围 4×20 分（7防滑带 8柔软草地 9大型阶梯 10窄桥）+ 核心 1×45 分（11高台）；满分 190 = 185 障碍 + 5 计时；5 分钟从首次启动计时；**I 取单次运行最高分、不累积**，重跑次数不限；**1~10 号必须沿黑线前端进、末端出**，侧边进出/重复通过不得分；**11 号高台只需登上不必通过**；**不允许任何形式的远程控制干预**。
-
-**硬约束**：隧道净高 **20cm**（整车总高必须<20cm）、窄桥桥面宽 **25cm**、窄桥坡 16.2cm、小型阶梯总高 10.8cm、高台约 20.5cm。**renwu.c 里的注释（2级台阶/木刺/栅栏/减速带/草/方形通道/UUUUU/超级大坡/十字路口）与这条赛道逐条对应**——旧固件任务 A 就是这个赛项。
-
-**改名（第一轮）**：我发明的"**巡线小车**"是错的（它是全地形机器人）→ 先改为"海芯全地形机器人"。**用户随后澄清**：比赛名是「**海信杯**」，并明确"不是说我的车叫海信"——所以"海芯/海信"这个自我命名整个是错的，见下条。
-
-**验证**：上位机 73 用例重跑全过；`tools/pdf_pages.py --list/--render` 实测可用。
-
-**踩坑**：障碍尺寸图与障碍标题**不在同一页**（如"栅格"的文字在第 49 页、图在第 50 页顶部），按页码猜会张冠李戴——正确做法是按阅读顺序把每张图归给**前面最近的障碍标题**。第一次用页码对齐时把 4 张图标错了。
-未完成：① 第 9 号「大型阶梯」立面标的是 3.0/5.0cm（比小型阶梯的 10.8cm 还矮），两次读图一致但与直觉相反，需对着原图再核；② 尚未按官方 11 个编号重排 renwu.c 状态机；③ 车高/车宽未实测，无法确认能否过 20cm 隧道、25cm 窄桥。
-下一步：① 核实大型阶梯高度；② 实测车高/车宽对照 20cm 隧道与 25cm 窄桥；③ 按官方障碍编号重排状态机，并加『进障碍前用陀螺锁航向对准黑线延伸方向』+『卡住后退重试』；④ 把实测轮径/轮距填进上位机参数表（现为 65/150 待实测）。
-
-## 2026-09-24
-完成：做完了**上位机**（`tools/host/`，Python3 + tkinter + pyserial，除 pyserial 外无第三方依赖）。
-1. `protocol.py`：帧 = `A5 5A | type | seq | len | payload | CRC16-CCITT-FALSE`（开销 7 字节）；遥测**定长 32 字节**；参数表 23 项，默认值全部取自固件源码行号（循迹 375/1.5/50、陀螺 100/1.5/10、PWM 上限 7200 等）；HELLO 带 `param_crc` 指纹，两边参数表漂移会告警。
-2. `transport.py`：真实串口 / 内置模拟器 / CSV回放 / 回环 四种传输 + 后台读线程 `Link`。CRC 失败只前移 1 字节重同步，所以上电乱码能自愈。
-3. `simulator.py` **不是假动画**：灰度读数是横向偏差的函数，横向偏差又被参数表里的 line_kp/ki/kd 驱动回零，且控制器吃的是**量化后的掩码误差**（和真实固件一致）→ 改参数真的改变行为（Kp 375→5000 时横向偏差 26→6mm）。
-4. 界面 `app.py`+`widgets.py`：24 项界面测试全过，关窗会取消残留 after 回调。
-5. **验证**：`cd tools/host && python tests/run_all.py` → **73 用例全过**（协议 40 / 链路 25 / 界面冒烟 8），编译 0 失败；入口三种参数路径（--offline/--sim/--csv）实测。
-6. 踩坑：①HELLO 帧 `<HBBH` 把 16 位 param_crc 当 8 位，被单测抓到；②模拟器最初横向动力学写错（转向指令既当角速度积分又当航向直接赋值），导致灰度掩码恒为同两路、line_error 峰值差 0，重写为"一阶转向延迟 + 正弦弯道 + 量化误差驱动 PID"后才正常；③**tkinter 界面测试必须独立进程**，同一进程反复建销 Tk 会 `Tcl_AsyncDelete` 直接崩（故用 tests/run_all.py 逐文件起进程）。
-未完成：**固件侧链路未实现**：`board.c:11` 有 `hdl` 句柄、`:451` 有 `board_dl_handle()`，但 **LPUART1 从未初始化**（无 init 函数、main_app 未用）。所以上位机目前只能对模拟器/回放跑，接真车要等固件补完。参数改写只在 RAM，掉电不保存。
-下一步：按 `docs/上位机通信协议.md` 第 8 节做固件侧，顺序：①只初始化 LPUART1 每秒发 TEXT 证明链路通 → ②发 TELEM 看波形与 CRC 计数 → ③PARAM_GET 回读且 param_crc 一致 → ④改参数用 RTT 对照 → ⑤最后接任务状态机。
-
-## 2026-09-24
-完成：回答"固定动作的车还能加什么算法"，产出 docs/控制算法升级方案.md。核心结论：JY61P 是 6 轴无磁力计，yaw 本身就是积分量 → 不做全局坐标系，改**分段局部坐标系**（进入状态锁存 yaw0/cnt0，段内只用 Δψ/Δs，段间靠黑标/重新咬线/ZUPT 零速修正重锚）。
-
-顺带读代码挖到 6 个此前没记录的事实（都会浪费后人时间）：
-1. **HAL_TIM_PeriodElapsedCallback 在整个工程里没有定义** —— stm32g4xx_it.c:71-78 只调 HAL_TIM_IRQHandler，TIM6/TIM7 每 5ms 进中断后走 HAL 空弱回调 → motor_tracing_pid_0_task()/GyroControl_Task() 从来没被执行过。
-2. **App/Bsp/encoder.c 整段是注释**，且 TIM3/TIM4 编码器模式在 Core/ 里也不存在（PB4–PB7 焊了没用）。
-3. main_app.c 既不调 bsp_periodic_start() 也不调 renwu()（有意等电源，接回时要连上回调）。
-4. **renwu.c 有 5 个分支永远进不去**：black_num==8(减速带,:422)/12(方形通道,:454)/14(:593)/20(:700)/22(:744) —— 这些值从未被赋值，在这几块上调参是白费。另有 210 处 HAL_Delay、212 行注释。
-5. gyro_control.c:169 的 dt 硬编码 0.01，而 bsp_board.c:16-17 的 BSP_GYRO_PERIOD_MS=5 → I/D 项实际增益差 2 倍。
-6. gyro_control.c:239-250 的 TurnLeftFixed/TurnRightFixed **名实相反**（Right 调 TurnLeft），且注释写"10度"实际 TURN_ANGLE_OFFSET=90。
-未完成：方案未实施。P0（TIM3/TIM4 编码器 + 补 HAL_TIM_PeriodElapsedCallback + 非阻塞步骤框架）全未动；固有死分支与 dt 不符也未修。
-下一步：做上位机（本轮开始）；之后按 docs/控制算法升级方案.md 的 P0→P3 落地。
-
-## 2026-09-23
-完成：回答"为什么生产封装的引脚号越来越大"：用 v6 网表核实 —— 多出来的脚号是**散热焊盘**和**连接器固定脚**，不是错误：
-- **U3/U4（AT8236，ESOP-8）**：物理 8 脚，网表用到 **9** 个，`U3.9/U4.9` = 底部**散热焊盘(EPAD)**，接 GND。
-- **U12（SH1.0-6P）**：用到 **8** 个，7/8 = 固定脚（GND）；**U13（SH1.0-10P）**用到 **12** 个，11/12 = 固定脚；**U14/U15（SH1.0-4P）**各用到 **6** 个，5/6 = 固定脚。
-- **U16（OLED FPC 30P）**用到 19 个、最大 28（29/30 是 NC）；U5（MSOP-10）最大 10、U2（LQFP64）最大 64 —— 这两个正常。
-Gerber/贴片只看焊盘坐标，不看引脚编号，所以编号大小本身不影响生产。
-
-**顺带给当前 1Ω 短路加了一条排查线索**：这些"多出来的固定脚"都接 GND，而 **U12（调试座 SH1.0-6P）的 1 脚是 3V3、7/8 脚是 GND 固定脚**，两者相邻 —— **如果那里连锡，就是 3V3–GND 短路**。另外 U1（JY61P 座，1/8 脚接 3V3）同理值得看一眼。
-未完成：用户板子上的 3V3–GND 1Ω 短路仍未定位。
-下一步：按上面线索：先看 U9 焊盘残锡、U12 的 1 脚 vs 7/8 固定脚、掀 OLED FPC 再量。
-
-## 2026-09-23
-完成：**电机输入电阻选型答复**（按网表核实位号）：AT8236 输入侧**串阻 = R6/R9/R10/R11（100Ω ±1%）**、**对地下拉 = R12/R13/R14/R19（100kΩ ±1%，接在 MCU 侧）**。下拉作用是复位/Hi-Z 时把两根输入钉成 0/0 → 电机滑行不转（安全）；且 **AT8236 输入端内部本来就有下拉**，外部这个是第二重保险，所以阻值不敏感。结论：**73kΩ 换上去更好**（拉低更硬、抗干扰更强，静态电流 33µA→45µA 可忽略）；**200kΩ 能用但不推荐**（拉低强度减半、抗干扰变差，只省 16µA）；**别低于 ~10kΩ**。时序上 200k×10pF≈2µs，远小于 23.6kHz 的 42µs 周期，无影响。已把 `pcb/主板选型与设计.md` 里写错的"R10–R13 一组"改成准确的串阻/下拉位号并补上结论。
-未完成：是否要改（属下一版改板；现板已焊）。
-下一步：无（等用户决定）。
-
-## 2026-09-20
-完成：**把旧固件上层并入新工程并通过编译+烧录运行**。
-1. `App/Svc/`（renwu/tracing/PID_tracing/pid/gyro_control/jy61p，**上层逻辑不动**）+ `App/Bsp/`（motor/servo/encoder/key/buzzer/rgb，按新板重写）。
-2. 新写 `App/Bsp/bsp_board.c`：TIM1 舵机 50Hz(PA8–PA11)、TIM8 电机 PWM 23.6kHz **保留旧板 0–7200 刻度**(PC6–PC9)、TIM6/TIM7 两个周期任务（替代旧 TIM2/TIM4，G4 上 TIM7 的中断向量叫 `TIM7_DAC_IRQn`）、循迹 PA0–PA7 读取。
-3. 引脚重映射全部用脚本完成：循迹 8 路→`bsp_trace_bit(n)`、蜂鸣器 PD10→PD2、按键 PC1/2/3→五向键、舵机 CH4/CH3→CH1/CH2。`motor.c` 重写为 AT8236 双输入方案（正速度 IN1 出 PWM / 负速度 IN2 出 PWM）。`rgb.c` 空实现。
-4. 旧的 `show_tracing_data()` / `show_tracing_data_pid()` 改成空实现（显示归 KK_UI，数据仍在 `tracing_data[]` 里供自定义页读），删掉 `OLED.h` 依赖。
-5. **踩到编码坑**：旧工程源码编码混杂（部分 GBK、部分 UTF-8），统一按 GBK 转会吞换行把结构体成员注释掉；改成逐文件自动识别重拷后解决。
-6. 主循环接上 `read_tracing_data()` → `g_live.trace[]`、`Yaw` → `g_live.yaw_x10`；`Motor_Init/Servo_Init/bsp_trace_init` 已调用（**TIM8 上电 PWM=0，电机不转**）；**TIM6/TIM7 周期任务暂不启动**（等电源到位再开，避免无电时跑控制）。
-7. 实机验证：烧录校验通过，RTT 打印 `I2C1 @400kHz / OLED init OK / KK_UI init OK / FRAME: update avg=106us`，UI 正常运行。
-（另外：主程序刷新方式经两轮人眼实验定为 **400kHz + IT**，用户确认有画面；400kHz+DMA 偶发黑屏已弃用。）
-未完成：五向键 左/中 未实测；`renwu()` 任务状态机尚未接入 UI 事件（有意先不跑，避免无电时驱动电机/舵机）；TIM6/TIM7 周期任务未启动；5V/12V 侧全部未测。
-下一步：电源件到齐后：调 R30→7.4V、开 TIM6/TIM7、把 `renwu_flag` 接到 KK_UI 的任务页、上车联调循迹与任务 A/B。
-
-## 2026-09-20
-完成：**黑屏根因排查（两轮人眼实验）**。
-1. 先修掉一个真 bug：**STM32G4 的 DMAMUX1 时钟必须显式开**（`__HAL_RCC_DMAMUX1_CLK_ENABLE()`），HAL 不自动开；漏了会静默地永不作异步传输，但阻塞式的 `OLED_DriverInit()` 照常成功，极易误判。
-2. 建了 `make DIAG=1` 诊断固件（`App/Src/oled_diag.c`）：利用 `OLED_Update()`(阻塞)/`OLED_UpdateIT()`/`OLED_UpdateDMA()` 是**运行时可选**的三个公共 API，一次烧录轮播多种组合，每相 5 秒画大字母+全屏图形。
-3. 第一轮（v1）：A 100K阻塞✅ / B 100K+DMA✅ / C 400K阻塞✅ / **D 400K+DMA❌**。
-4. 第二轮（v2，同样 4 相但换速率与方式）：A 400K+DMA✅ / **B 300K+DMA❌** / C 200K+DMA✅ / D 400K+IT✅。
-   → **A 在 v1 黑、v2 好（配置完全相同）= 临界偶发**，不是速度阈值。结论：`400kHz + DMA` 不可靠，`400kHz + 中断` 正常。
-5. 配套的软件量化手段（不用眼睛）：测 `OLED_IsBusy()` 持续时长 —— 8 页×128B≈1024B，100kHz≈92ms、400kHz≈23ms；实测 100K DMA=79ms、400K DMA=21ms、300K=28ms、200K=42ms，全部与理论吻合，**证明"数据确实发出去了"**，所以黑屏只能靠人眼在人眼层面区分。
-6. 主程序已改为 **400kHz + IT** 并烧录验证（`oled tx_done=16 err=0 busy=0 st=0`），画面待用户确认。
-未完成：400kHz+IT 的画面待用户确认；若仍偶发黑屏则退回 400kHz+阻塞（已验证）；旧上层(renwu/tracing/gyro/pid)尚未并入；五向键左/中未实测；5V/12V 侧未测。
-下一步：用户确认 400kHz+IT 画面 → 继续把旧上层并入 App/Svc。
-
-## 2026-09-20
-完成：**排查"异步刷新黑屏"**。已确认的事实：
-1. **根因之一（已修）**：STM32G4 上 **DMAMUX1 的时钟必须显式打开**（`__HAL_RCC_DMAMUX1_CLK_ENABLE()`），`HAL_DMA_Init()` 不会自动开（官方 `NUCLEO-G474RE/I2C_TwoBoards_ComDMA` 例程的 main.c 里有这一句）。漏了它的现象极其误导：**DMA 请求没被路由 → 异步传输永不发生**，但 `OLED_DriverInit()` 走阻塞调用所以照常打印 "OLED init OK"，看起来一切正常。加上后 `tx_done` 从 0 变 16。
-2. **判定"异步到底有没有真搬数据"的办法**（纯软件、不用眼睛）：测 `OLED_IsBusy()` 持续时长。8 页 ×128B ≈ 1024B，**100kHz 应 ≈92ms、400kHz 应 ≈23ms**。实测 100kHz DMA **79ms**、400kHz DMA **21ms** —— 与理论吻合，证明整帧数据确实按正确速率发了出去；若只有几微秒就是"假完成"。
-3. 建了 `make DIAG=1` 诊断固件（`App/Src/oled_diag.c`）：**四种组合自动轮播**（A 100K阻塞 / B 100K+DMA / C 400K阻塞 / D 400K+DMA），每相 5 秒画一个大字母 + 全屏图形（框/方块/圆/斜线）并打印 `oled_init/update/busy/last/tx_delta/err/busy_ms`。因为 `OLED_Update()`(阻塞) 与 `OLED_UpdateDMA()`(异步) 是**运行时可选**的公共 API（`KK_UI_REFRESH_MODE` 宏只决定 KK_UI 调哪个），所以一次烧录就能把"速率"和"DMA"两个变量分开。
-
-**当前状态**：四组合的 API 层全部返回 OK、DMA 传输耗时也正确，但用户报告 400K+DMA 的主程序是黑屏；诊断为哪几个字母能显示**待用户肉眼确认**。教训：之前把 400kHz 和 DMA **两个变量一起改**且中间那版 400kHz 阻塞没让用户看过，导致无法二分。
-未完成：黑屏根因未定 —— 需用户在四组合诊断固件上确认哪些字母有画面；旧上层(renwu/tracing/gyro/pid)尚未并入；五向键左(PC15)/中(PC3)未实测；5V/12V 侧未测。
-下一步：用户报告 A/B/C/D 哪些能显示 → 据此定位是速率还是 DMA → 修复后回到主程序。
-
-> 更早的会话条目已归档到 212 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 235 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
