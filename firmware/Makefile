@@ -130,7 +130,15 @@ else
 endif
 
 MCU     = -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=hard
-OPT     = -Og -g3
+# ★2026-10-06 换档：`-Og -g3` → `-Os -g3`（用户 m 同意）。
+#   为什么：程序区只有 116K（页 58/59~61/63 留给任务存储+NVRAM），而 `-Og` 是**调试档**
+#   （为了"变量能看、能单步"放弃大部分优化）。实测同一份源码：
+#     -Og -g3 = 118332 B（99.6%，只剩 452 B）| -Os -g3 = **106320 B**（省 12012 B）
+#     -Os -g3 -flto = 97320 B（再省 9000 B；LTO 未启用，要单独验证 __weak/RTT 符号后再上）
+#     -Os -g0 = 106320 B ⇒ **-g3 一分 Flash 不占**（只影响 .elf 与编译时间），所以留着。
+#   代价：源级单步/看变量会变差（变量被优化掉、行号跳）。**要单步调试时编这一档**：
+#     make OPT="-Og -g3" BUILD=build-dbg        # 30 秒就有一份能单步的固件（注意它余量只有 452 B）
+OPT     = -Os -g3
 CFLAGS  = -MMD -MP $(MCU) $(C_DEFS) $(C_INCLUDES) $(OPT) -Wall -Wno-unused-parameter \
           -fdata-sections -ffunction-sections
 LDFLAGS = $(MCU) -T STM32G474RBTx_FLASH.ld --specs=nano.specs \

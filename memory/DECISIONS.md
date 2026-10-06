@@ -12,6 +12,21 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-06 — ★已执行：`firmware/Makefile` 的 `OPT` 从 `-Og -g3` 改为 **`-Os -g3`**（用户 m 同意，并已烧录到车上 106320 B / 回读 firstDiff=none）。
+选择：★已执行：`firmware/Makefile` 的 `OPT` 从 `-Og -g3` 改为 **`-Os -g3`**（用户 m 同意，并已烧录到车上 106320 B / 回读 firstDiff=none）。
+放弃：保持 `-Og`（调试舒服，但 118332/118784 = 99.6%，只剩 452 B）；也否掉了 `-Os -g0`（实测与 `-Os -g3` 的 bin 逐字节同大小 ⇒ `-g3` 对 Flash 免费，没必要丢调试信息）。
+因为：验证链（均已完成）：① 构建 106320 B、余量 452→**12464 B**；② 主机测试 **15/15**、pytest **176 passed**、check_static 0 error、check_warnings 待处理 0；③ **静态热点指令数对照**（`objdump`，以 `out/_ref_og.elf` 为参照）：TIM6_DAC_IRQHandler 6→4、SysTick_Handler 3→1、DMA1_Ch2 3→1、GyroControl_Task 1011→892（−11.8%）、HAL_TIM_IRQHandler 181→166（−8.3%）、Motion_Task 120→114、SpeedControl_Task 195→192 —— 两个“★变慢”是**度量假象**：`host_link_poll` 96→915 是 `-Os` 把子函数**内联进来**了（省了调用开销），`Encoder_ReadDelta` 16→20 就多 4 条指令；④ **运行时体检**（不发车、走链路）：遥测 200.2 Hz（-Og 同口径 200.0）、**crc/resync/drops 全 0**、字段异常 0 帧、45 项参数与 -Og 时完全一致（仅 base_speed=7200 非默认）。
+
+## 2026-10-06 — 单步调试档随时能编回来：`make -C firmware OPT="-Og -g3" BUILD=build-dbg`（同一份源码，30 秒）。
+选择：单步调试档随时能编回来：`make -C firmware OPT="-Og -g3" BUILD=build-dbg`（同一份源码，30 秒）。
+放弃：为了“以后可能要单步”而不换档（换个角度也成立：调试档现在反而只剩 452 B 余量，代码再长就装不下了）。
+因为：换档对调试的代价只在“源级单步的舒适度”（`-Og` 存在的唯一理由：变量留在内存、行号不跳、少内联）；而 `-g3` 保留 ⇒ 符号/DWARF/宏全在，日常用的 RTT/遥测/RAM 读/DWT/故障转储全不受影响。
+
+## 2026-10-06 — 台架固件不再属于“修不了”：换 `-Os` 后它自己就能编过了。
+选择：台架固件不再属于“修不了”：换 `-Os` 后它自己就能编过了。
+放弃：之前的“台架变体暂不修”与“给它拆独立源文件表剔界面/字模”（仍然可行，但不再必需）。
+因为：实测 `make MOTOR_BENCH=1` 现在 **exit=0，bin = 110868 B，余 7916 B**（`-Og` 时是 `region FLASH overflowed by 4548 bytes`）；主固件与车上那份都是 106320 B、未受影响。（SELFTEST 家族的 `htim6/htim7` 未定义与编译档无关，仍未修。）
+
 ## 2026-10-06 — `out/_poke.py`（以及 `_srate_ab.py`）的 RAM 符号地址**改成按名字从 `.elf` 查**（`nm --radix=x`），不再写死；查不到的名字才回落旧表并**打警告**，同名两个 static 也报警。
 选择：`out/_poke.py`（以及 `_srate_ab.py`）的 RAM 符号地址**改成按名字从 `.elf` 查**（`nm --radix=x`），不再写死；查不到的名字才回落旧表并**打警告**，同名两个 static 也报警。
 放弃：继续维护那张写死的地址表（它已经错了 14/23 项）。

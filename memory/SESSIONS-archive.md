@@ -1,4 +1,11 @@
 ## 2026-09-30
+完成：**验收「20ms 滑动平均测速」到底有没有改进（用户 m00692 要求实测）。** 做法：给台架 `firmware/App/Bsp/motor_bench.c` 加量化指标（每个闭环点 `STAT` 打 `mean/p2p/rev/stall/outp`，`outp` = PWM 指令峰峰抖动），再用命令行宏覆盖做**同一份固件只差一个宏**的对比：`make MOTOR_BENCH=1 -B -j8 C_DEFS="-DUSE_HAL_DRIVER -DSTM32G474xx -DMOTOR_BENCH -DSPEED_AVG_TICKS=1"`（关平滑）vs 去掉最后一项（默认 4 = 开平滑），然后 `make MOTOR_BENCH=1 C_DEFS="..." flash` + `python …\stm32-dev.py rtt --elf firmware/build-bench/haixin-bench.elf --device STM32G474RE --seconds 80 --out out\bench_<tag>.log`。**按 A-B-A-B-A 交替跑了 5 次**（日志 `out/bench_s1_avg1.log`、`s4_avg4.log`、`s2_avg1.log`、`s4b_avg4.log`、`s1c_avg1.log`，每组 n=400 拍）。结论：① **目标 ≥3000 时 PWM 输出峰峰抖动降到约 1/3–1/2**，且「3 次关平滑」与「2 次开平滑」两组**取值范围完全不相交**（组均值，左/右：5000 目标 269/290→88/112；4000 290/296→155/160；3000 322/364→196/289）——真效果，不是噪声。② **目标 ≤1250 测不出差别**，因为那里的摆动是粘滑极限环本身（关平滑三次复跑目标 1000 的均值 358/510/386、输出峰峰 1882/809/1222）。③ **稳态跟踪零代价**：两版均值在每个目标点上一致；≥2000 稳在 ±5% 内，1500 约 ±10%。④ 机理自洽：每拍计数的 ±几拍随机抖动经 kp=20 放大成 ±100 量级 PWM；4 拍平均压掉不相关部分≈2–3 倍，而真实机械脉动（齿轮/齿槽）相关时间 >20ms 平均不掉——所以**速度读数的峰峰（1200–2200）两版一样，只有 PWM 输出抖动下降**。⑤ 已把结论写进 `固件接口规格.md` §3.2（含群延迟代价与外环风险）。⑥ 验收后已 `make -B flash` 烧回正式固件（`build-app/haixin-app.bin` **81804 B**，`OK：回读一致 81804 字节，firstDiff=none`）。
+未完成：外环（角度环/循迹环）在 20ms 反馈延迟下会不会振，台架测不了，要实车。
+下一步：上实车看循迹/角度环在 20ms 平滑下的相位裕度；或者按用户示意回退平滑（删窗口那 4 行即可）。
+
+> 更早的会话条目已归档到 266 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-30
 完成：**踩到的两个方法论坑（下次做台架 A/B 直接照做）。** ① `make` 的 `C_DEFS='...'` 是**完全替换** Makefile 里的默认定义，漏掉 `-DUSE_HAL_DRIVER -DSTM32G474xx -DMOTOR_BENCH` 就编不过；带上才是干净的 A/B。② **低速段的台架对比不可靠**：粘滑极限环是混沌的，同一份固件两次复跑目标 1000 的均值差 42%、输出峰峰差 2.3 倍——单次对比在那里没有任何分辨力，必须 A-B-A 交替多次、看两组取值范围是否相交再下结论。另：`make -B` 的输出极长（89 个文件），要 `*> file` 重定向，别直接回显；`stm32-dev.py rtt` 打印的 head/tail 常是主循环的 `FRAME:/MOTION:` 行，**台架行一定在 `--out` 文件里**，要用 `Select-String -Pattern '^STAT|^CLOSE|^STEP'` 去文件里捞。
 
 > 更早的会话条目已归档到 265 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
