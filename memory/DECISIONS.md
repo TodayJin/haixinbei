@@ -12,6 +12,16 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-07 — ★舵机动作表：固件里**固定 20 个动作**（`SERVO_ACTION_N` 14 → 20）。分工：**角度下发**由任务编排给（每个动作 ↔ 两路舵机角度），**动作执行**由任务按**编号**调，**舵机页负责“编号 → 具体角度”的映射与显示**。
+选择：★舵机动作表：固件里**固定 20 个动作**（`SERVO_ACTION_N` 14 → 20）。分工：**角度下发**由任务编排给（每个动作 ↔ 两路舵机角度），**动作执行**由任务按**编号**调，**舵机页负责“编号 → 具体角度”的映射与显示**。
+放弃：保持 14 个（现在的实现）。
+因为：用户 m 2026-10-07 明确：“一共就是 20 个动作，你固件里也就写 20 个…这个就是得这样弄好。目前最多支持 20 个动作，现在是 14 个，你把这个功能都完善好。”
+
+## 2026-10-07 — ★扩展舵机动作表的落地清单（跨 4 处，必须一次改完，否则不生效或丢存档）：① `firmware/App/Bsp/servo.h` 的 `SERVO_ACTION_N`；② `servo.c` 的 `k_action_default[][2]` / `k_action_name[]`（补到 20）；③ `nvram.c` 的 `action_pose[SERVO_ACTION_N][2]` **会涨 12 字节 ⇒ 必须加 pad 凑 8 字节对齐 + `NVRAM_VERSION` 7 → 8**（不升版本 ⇒ 旧存档被判不合格 ⇒ 用户所有设置回默认）；④ 上位机：舵机页列表 + **任务编排里能按编号选动作并看到它的两路角度**（`/api/actions` 问车要表）。
+选择：★扩展舵机动作表的落地清单（跨 4 处，必须一次改完，否则不生效或丢存档）：① `firmware/App/Bsp/servo.h` 的 `SERVO_ACTION_N`；② `servo.c` 的 `k_action_default[][2]` / `k_action_name[]`（补到 20）；③ `nvram.c` 的 `action_pose[SERVO_ACTION_N][2]` **会涨 12 字节 ⇒ 必须加 pad 凑 8 字节对齐 + `NVRAM_VERSION` 7 → 8**（不升版本 ⇒ 旧存档被判不合格 ⇒ 用户所有设置回默认）；④ 上位机：舵机页列表 + **任务编排里能按编号选动作并看到它的两路角度**（`/api/actions` 问车要表）。
+放弃：只改 `SERVO_ACTION_N` 或只改上位机（会一半生效一半不生效）。
+因为：动作表的**唯一真值在固件**（`k_action_default`/`k_action_name`/`s_action_pose`），上位机与屏上都是问车要的；而 NVRAM 里 `action_pose` 是 payload 的一部分 ⇒ 改变它就要走“末尾加字段 + 升版本 + 8 字节对齐”那三条铁律（今晚刚踩过：不升版本会把用户设置冲回默认）。
+
 ## 2026-10-07 — ★改 NVRAM payload 的三条铁律：**① 字段只能往末尾加**（旧记录靠 version+length 前缀兼容）；**② payload 长大就必须 `NVRAM_VERSION` +1**（判据是 version==NVRAM_VERSION 时要求 length==sizeof(payload)，不升版 ⇒ 旧存档被判不合格 ⇒ **用户所有设置回默认**）；**③ 字节数要凑 8 的整数倍**（文件里有编译期断言 `nvram_record_size_must_be_8x`，加 4 字节当场编不过）。
 选择：★改 NVRAM payload 的三条铁律：**① 字段只能往末尾加**（旧记录靠 version+length 前缀兼容）；**② payload 长大就必须 `NVRAM_VERSION` +1**（判据是 version==NVRAM_VERSION 时要求 length==sizeof(payload)，不升版 ⇒ 旧存档被判不合格 ⇒ **用户所有设置回默认**）；**③ 字节数要凑 8 的整数倍**（文件里有编译期断言 `nvram_record_size_must_be_8x`，加 4 字节当场编不过）。
 放弃：只加字段不升版本（我第一次就是这么干的：`nvram_payload_t` 末尾加了 4 字节 ⇒ 差点把用户所有设置冲掉，而且它很可能就是之前“设置被复位”的真因）。

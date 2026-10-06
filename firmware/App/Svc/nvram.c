@@ -21,7 +21,8 @@
 #include <stddef.h>
 
 #define NVRAM_MAGIC      0x31425848UL   /* "HXB1"（小端存下来是 48 58 42 31） */
-#define NVRAM_VERSION    7U             /* v7：直角转弯开关（v6：角度环差速天花板参考；v5：控制环标定量 + 舵机动作表）。
+#define NVRAM_VERSION    8U             /* v8：舵机动作表 14 → **20** 个（v7：直角转弯开关；v6：角度环差速天花板参考；
+                                         * v5：控制环标定量 + 舵机动作表）。
                                          * ★铁律：**payload 长大就必须升这个版本号** —— 判据是
                                          *   `version == NVRAM_VERSION` 时要求 `length == sizeof(payload)`，
                                          *   只加字段不升版本 ⇒ 旧存档被判不合格 ⇒ **用户所有设置回默认**。 */
@@ -86,7 +87,9 @@ typedef struct {
     int32_t  pivot_kp;
     int32_t  pivot_ki_x100;
     int32_t  pivot_kd;
-    uint8_t  action_pose[SERVO_ACTION_N][2];   /* 14 个动作的终点角度 {舵1,舵2} */
+    uint8_t  action_pose[SERVO_ACTION_N][2];   /* 14 → **20** 个动作（用户 m 2026-10-07）：+12 字节，
+                                                * 靠下面的 pad 凑成 +16 ⇒ 记录仍是 8 的整数倍。 */
+    uint8_t  pad_action[4];                    /* ★补齐：动作表涨 12 字节，这里补 4 ⇒ 总涨 16（8 对齐） */
     uint8_t  pad5[10];                         /* 补到 8 的整数倍（见下面的编译期断言） */
     /* ---- v6 新增：角度环差速天花板随速放大的参考刻度（用户 m24215）----
      * 只往末尾加、并且**多留 4 字节 pad6**：payload 必须比 v5 大，

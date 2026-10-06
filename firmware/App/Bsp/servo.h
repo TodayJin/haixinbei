@@ -28,7 +28,9 @@ void Servo_Move(int x);                              /* 旧接口：按动作编
  * 动作编号 1..SERVO_ACTION_N，与旧代码 Servo_Move() 的 case 一一对应；
  * 终点姿态的**出厂默认值**在 servo.c 的 k_action_default[]，运行期真值在
  * RAM 表 s_action_pose[]（上位机可改，用户 m13466 要求能固化进 Flash）。 */
-#define SERVO_ACTION_N 14
+#define SERVO_ACTION_N 20   /* ★14 → 20（用户 m 2026-10-07：“目前最多支持 20 个动作…你固件里也就写 20 个”）。
+                             * 编号 1..20 与旧代码 Servo_Move() 的 case 一一对应；多出来的 6 个默认 {0,0}，
+                             * 名字「动作15..20」，用户在舵机页改了角度会存 NVRAM。 */
 int   Servo_ActionCount(void);                       /* = SERVO_ACTION_N */
 void  Servo_ActionPose(int x, int *a1, int *a2);      /* 取第 x 个动作的终点姿态（不动舵机） */
 void  Servo_ApplyAction(int x);                      /* 只下发终点姿态（不含 5/9 号的中间延时） */
