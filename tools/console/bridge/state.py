@@ -595,7 +595,7 @@ class Console:
         self.emit({"n": "tasks", "src": {"ok": True, "items": items}})
         return {"ok": True, "supported": True, "items": items}
 
-    def task_get(self, tid: int, timeout: float = 2.0) -> dict:
+    def task_get(self, tid: int, timeout: float = 2.0, _retry: int = 0) -> dict:
         """`T_TASK_GET` → 一串 `T_TASK_DATA`（成功时不回 ACK），按 off 拼回整镜像。"""
         g = self._cap_guard()
         if g:
@@ -629,6 +629,10 @@ class Console:
         buf = bytearray()
         for off, data in sorted(chunks):
             if off != len(buf):
+                # ★2026-10-07 中间帧丢了（实测："数据块不连续（off=512，已有 448 B）"）：
+                #   尾帧到了不代表中间没缺 ⇒ **整条重读**（最多 2 次），重读是幂等的。
+                if _retry < 2:
+                    return self.task_get(tid, timeout, _retry + 1)
                 return {"ok": False, "supported": True,
                         "error": f"数据块不连续（off={off}，已有 {len(buf)} B）"}
             buf += data
