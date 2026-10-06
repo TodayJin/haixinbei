@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-06 · 编译坑
+完成：把“还有没有别的能腾 Flash 的办法”量到底（四档实测，产物均在独立目录、未烧）：`-Og -g3`=118332（现状）、`-Os -g3`=**106320**、`-Os -g3 -flto`=**97320**（共 −21012 B = 17.8%）、`-Os -g0`=**106320**（⇒ `-g3` 对 Flash 免费）。加上前面已证的“HAL 无益（18/60 模块 + gc-sections 已丢 71%）”，结论：**编译档是唯一大杠杆**。
+未完成：`-Os`/`-flto` 未启用（全局改动，要重验 ISR/主循环耗时 + 控制环）；非编译器杠杆（字模/界面审计、页 62 的 +2K、死代码）均未动。
+下一步：若用户同意换档：先烧 `-Os` 版并**不发车**就能做时序验证（DWT/RTT 1Hz 行里的 ISR 与主循环耗时、遥测无缺帧、crc=0），确认无回归后再上车跑直角；`-flto` 分成单独一步，以免两个变量缠在一起。
+
+## 2026-10-06 · 编译坑
 完成：把用户“把用不上的 HAL 注释掉”的建议量到底：**已在源码表与链接器两道里做完了** —— Makefile 手挑 18/60 个 HAL 模块；`-ffunction-sections -fdata-sections` + `--gc-sections` 已从这 18 个模块里丢掉 **48778 B（71%）**，HAL 在镜像里只剩 **20378 B（text 的 21.6%）**。⇒ 这里没有可省的 Flash。同时纠正了“HAL ~49K”的错误说法（那是整份 .o 的口径）并定下“量镜像体积要按 map/nm、不能按 *.o”这条。
 未完成：镜像 text 94534 B 的构成：HAL 20378（21.6%），其余 ~74K 全是应用（中文字模、KK_UI/KK_OLED、host_link、循迹/角度环、task_*、nvram…）—— 想再腾地方就只剩 `-Os`（实测 -12012 B）或剔界面/字模。两个既有编译变体仍不修。
 下一步：等用户接上 12V 电池并许可：真车直角实测 `290c22c`（判据用双直角口径）。
@@ -920,9 +925,4 @@
 ## 2026-09-30
 完成：**踩到的两个方法论坑（下次做台架 A/B 直接照做）。** ① `make` 的 `C_DEFS='...'` 是**完全替换** Makefile 里的默认定义，漏掉 `-DUSE_HAL_DRIVER -DSTM32G474xx -DMOTOR_BENCH` 就编不过；带上才是干净的 A/B。② **低速段的台架对比不可靠**：粘滑极限环是混沌的，同一份固件两次复跑目标 1000 的均值差 42%、输出峰峰差 2.3 倍——单次对比在那里没有任何分辨力，必须 A-B-A 交替多次、看两组取值范围是否相交再下结论。另：`make -B` 的输出极长（89 个文件），要 `*> file` 重定向，别直接回显；`stm32-dev.py rtt` 打印的 head/tail 常是主循环的 `FRAME:/MOTION:` 行，**台架行一定在 `--out` 文件里**，要用 `Select-String -Pattern '^STAT|^CLOSE|^STEP'` 去文件里捞。
 
-## 2026-09-30
-完成：按用户拍板的方案实现了 20ms 滑动平均测速并烧录。`firmware/App/Svc/speed_control.c`：新增 `#define SPEED_AVG_TICKS 4`、静态量 `s_win[2][SPEED_AVG_TICKS]`/`s_win_sum[2]`/`s_win_n`/`s_win_pos` 与 `static void win_reset(void)`（在 `SpeedControl_Init()`、`SpeedControl_Enable()` 的 0→1 边沿、`SpeedControl_Stop()` 三处调用）；`speed_pi_step()` 的反馈形参从 `int counts` 改成 `float counts`（不取整，保留亚计数分辨率）；`SpeedControl_Task()` 里做环形窗口更新（`s_win_sum[0] -= s_win[0][s_win_pos]; s_win[0][s_win_pos] = dl; s_win_sum[0] += dl;` 右轮同理）后 `avg_l = s_win_sum[0] / s_win_n`（s_win_n 至少 1，不会除零），PI 和 `s_mmps[]` 都改吃 avg，**控制节拍仍是 5ms**。`firmware/App/Svc/speed_control.h` 同步了头部注释与 `SpeedControl_Counts()` 的注释。验证：`make -j8`（workdir=firmware）编译通过，只有已知的 RWX 链接警告；`make flash` 回读一致 81804 字节、firstDiff=none、程序已 go。**按用户要求没做台架 A/B 实测** —— User said (m00613 附近): 「不用测试了就用你说的方案」。回退成本很低：删掉窗口那几行、把 `avg_l/avg_r` 换回 `(float)s_counts[0]/(float)s_counts[1]` 即可。
-未完成：平滑后的低速表现没上板验证（用户明确说不测）；`SPEEDFF_GAIN`/kp/ki 仍是台架整定值，量纲没变所以未重调。
-下一步：在菜单/上位机侧把速度目标限到 ≥1500，然后联调循迹（灰度）+ 舵机。
-
-> 更早的会话条目已归档到 264 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 265 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。

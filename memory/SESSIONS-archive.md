@@ -1,4 +1,11 @@
 ## 2026-09-30
+完成：按用户拍板的方案实现了 20ms 滑动平均测速并烧录。`firmware/App/Svc/speed_control.c`：新增 `#define SPEED_AVG_TICKS 4`、静态量 `s_win[2][SPEED_AVG_TICKS]`/`s_win_sum[2]`/`s_win_n`/`s_win_pos` 与 `static void win_reset(void)`（在 `SpeedControl_Init()`、`SpeedControl_Enable()` 的 0→1 边沿、`SpeedControl_Stop()` 三处调用）；`speed_pi_step()` 的反馈形参从 `int counts` 改成 `float counts`（不取整，保留亚计数分辨率）；`SpeedControl_Task()` 里做环形窗口更新（`s_win_sum[0] -= s_win[0][s_win_pos]; s_win[0][s_win_pos] = dl; s_win_sum[0] += dl;` 右轮同理）后 `avg_l = s_win_sum[0] / s_win_n`（s_win_n 至少 1，不会除零），PI 和 `s_mmps[]` 都改吃 avg，**控制节拍仍是 5ms**。`firmware/App/Svc/speed_control.h` 同步了头部注释与 `SpeedControl_Counts()` 的注释。验证：`make -j8`（workdir=firmware）编译通过，只有已知的 RWX 链接警告；`make flash` 回读一致 81804 字节、firstDiff=none、程序已 go。**按用户要求没做台架 A/B 实测** —— User said (m00613 附近): 「不用测试了就用你说的方案」。回退成本很低：删掉窗口那几行、把 `avg_l/avg_r` 换回 `(float)s_counts[0]/(float)s_counts[1]` 即可。
+未完成：平滑后的低速表现没上板验证（用户明确说不测）；`SPEEDFF_GAIN`/kp/ki 仍是台架整定值，量纲没变所以未重调。
+下一步：在菜单/上位机侧把速度目标限到 ≥1500，然后联调循迹（灰度）+ 舵机。
+
+> 更早的会话条目已归档到 264 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-30
 完成：2026-09-30 用 J-Link 把电机+编码器标定通过。① 新建 `make MOTOR_BENCH=1` 台架固件（`firmware/App/Bsp/motor_bench.c`，`#define BENCH_MODE` 0=完整台架/1=转向目视+起步脉宽/2=手推标定）；② 确认两轮编码器都工作、互不串扰、正反转对称；③ 手推标定 + 目视确认解出极性模型；④ 修 `motor.c`（`Load()` 第二路取负）与 `encoder.c`（左路取负）；⑤ 复测：`Load(+,+)` 两轮都朝车头（用户目视确认），速度环目标 1500–5000 跟到 ±5%；⑥ 结论写进 `固件接口规格.md` §3.1/§3.2；⑦ 烧回正式固件 `build-app/haixin-app.bin`（81612 B）。验证：RTT 日志 `out/bench_fix2.log`（CLOSE 分段实测）、`out/bench_dir4.log`（起步脉宽 + ±6000 计数）、`out/bench_spin.log`（手推累计符号）、`out/bench_probe2.log`（修前对照）。
 未完成：速度目标 <1500 的粘滑极限环只做了文档化，没做控制律补偿；`SPEED_MIN_ACTIVE 500` 与真实死区 2600 仍然不匹配。
 下一步：循迹（灰度）+ 舵机联调；上层给速度目标加 <1500 下限；补测五向键左/中。
