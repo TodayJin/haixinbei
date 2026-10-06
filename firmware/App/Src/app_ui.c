@@ -313,6 +313,8 @@ static const KK_UI_MenuItem k_settings_items[] = {
     { "循迹速度", KK_UI_MENU_INT,    0 },
     { "灰度接口", KK_UI_MENU_INT,   13 },   /* 0=自动 1=I2C 2=串口 3=数字 */
     { "连续判线", KK_UI_MENU_BOOL,   4 },   /* = 连续插值(开) / 纯 0/1(关)；单帧自适应已删(m31902) */
+    { "直角转弯", KK_UI_MENU_BOOL,   5 },   /* ★= k_bool_bindings[] 第 6 项（0=关默认纯循迹/1=开主动转弯）；
+                                             *   ★只加 k_bool_bindings[] 而不加这一行，屏幕上**看不到**这个开关 */
     { "陀螺仪闭环", KK_UI_MENU_BOOL, 0 },
     { "按键蜂鸣", KK_UI_MENU_BOOL,  2 },
     { "过点蜂鸣", KK_UI_MENU_BOOL,  3 },
