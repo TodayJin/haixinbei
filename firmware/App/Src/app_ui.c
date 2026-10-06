@@ -416,7 +416,10 @@ static const KK_UI_BoolBinding k_bool_bindings[] = {
     /* 「连续判线」= 连续插值 / 纯 0/1 两种判线口径的切换（trace_cal_set_adapt），设置页第 3 行引用它。
      * 名字从「自动判线」改过来（用户 m32216）：单帧自适应已按用户 m31902 删掉，这行现在只是
      * 口径开关，"自动"名不副实；上屏同时按 tools/font/gen_font.mjs 重新生成了字模补 连/续 两字。 */
-    { "连续判线",   &g_cfg.trace_adapt,  EV_NONE }
+    { "连续判线",   &g_cfg.trace_adapt,  EV_NONE },
+    /* ★「直角转弯」：0 = 关（默认，纯循迹）；1 = 探头半边 4 路压线就一次把目标航向转 100°、
+     *   原地对转、见线即停。**存在 NVRAM 里**（和上面那排开关一样，改完就存）。 */
+    { "直角转弯",   &g_cfg.trace_corner, EV_NONE }
 };
 
 static const KK_UI_App k_app = {
@@ -469,6 +472,7 @@ static void push_pid_params(void)
     host_param_set_local(HP_GYRO_KI,     (float)g_cfg.gyro_ki_x100 / 100.0f);
     host_param_set_local(HP_GYRO_KD,     (float)g_cfg.gyro_kd_x100 / 100.0f);
     host_param_set_local(HP_GYRO_ILIMIT, (float)g_cfg.gyro_ilim);
+    host_param_set_local(HP_TRACE_CORNER, g_cfg.trace_corner ? 1.0f : 0.0f);   /* ★直角转弯开关（NVRAM）*/
 }
 
 /* 参数表 -> UI 镜像，×100 / ×1000 量化（都是非负数，+0.5 四舍五入）。 */
@@ -501,6 +505,7 @@ static void pull_pid_params(void)
     g_cfg.gyro_ki_x100 = param_to_x100(HP_GYRO_KI,       0.0f);
     g_cfg.gyro_kd_x100 = param_to_x100(HP_GYRO_KD,      15.0f);
     g_cfg.gyro_ilim    = (int32_t)host_param_get(HP_GYRO_ILIMIT, 1000.0f);
+    g_cfg.trace_corner = (host_param_get(HP_TRACE_CORNER, 0.0f) >= 0.5f);      /* ★直角转弯开关（NVRAM）*/
 }
 
 /* =====================================================================

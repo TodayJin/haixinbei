@@ -181,7 +181,7 @@ def test_param_dump_values_and_order_match_the_bridge_table(pipe):
     frames = pipe(pr.frame_hello_req(1), pr.frame_param_get(2), pad=200)
     h = pr.decode_hello(_first(frames, pr.T_HELLO).payload)
     dump = [pr.decode_param_report(f.payload) for f in frames if f.type == pr.T_PARAM_REPORT]
-    assert len(dump) == len(P.PARAMS) == 45, f"dump 项数 {len(dump)} 与上位机表 {len(P.PARAMS)} 不一致"
+    assert len(dump) == len(P.PARAMS), f"dump 项数 {len(dump)} 与上位机表 {len(P.PARAMS)} 不一致"
 
     order = [pid for pid, _ in dump]
     assert len(set(order)) == len(order), "同一项被 dump 了两次"

@@ -42,6 +42,7 @@ SYNC = [
     ("gyro_ki_x100",         "gyro_ki",         100.0),
     ("gyro_kd_x100",         "gyro_kd",         100.0),
     ("gyro_ilim",            "gyro_ilimit",     1.0),
+    ("trace_corner",         "trace_corner",    1.0),   # ★直角转弯开关（0=关默认/1=开，存 NVRAM）
 ]
 
 
