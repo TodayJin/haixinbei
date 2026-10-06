@@ -1,4 +1,10 @@
 ## 2026-09-30
+完成：复核补丁后复测：不设 STM32_PROGRAMMER_CLI、PATH 里没有 SEGGER 的情况下 make flash 仍能找到 CLI（D:\APP\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe）→ CLI 段 NVM size : 128 KBytes + Download verified successfully → J-Link 段 "Skipped. Contents already match" → 回读 81612 字节 firstDiff=none → 退出码 0。中途发现 tools.edit 丢 BOM 导致 .ps1 报错，已补回并复测通过。
+下一步：继续别的目标；编辑 .ps1 后记得补 BOM。
+
+> 更早的会话条目已归档到 261 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-30
 完成：用户装好 STM32CubeCLT 1.22.0（D:\APP\ST\，CLI 2.23.0）后复核整套链路，全部通过：make size（text 81384/data 220/bss 14264、bin 81612 B）→ make flash（CLI 段 NVM size : 128 KBytes + Download verified successfully；J-Link 段 "Skipped. Contents already match"；savebin 回读 81612 字节 firstDiff=none；退出码 0，日志 .work/flash-clt.log）→ stm32-dev.py rtt（77 行/4 s，横幅 BUILD: Sep 30 2026 12:33:16、CLK 170 MHz、host link init OK、FRAME avg≈674 us、HOST tx=1719 hz=50）→ stm32-dev.py doctor 退出 0。给 tools/flash.ps1 打了三处补丁（CLI 探测改先点已知布局、D:\APP 从递归扫描剔除、CLI 失败只告警继续走 J-Link）。另按用户要求清了 C: 盘：3.14 GB → 23.13 GB 剩余（约 +20 GB），用户随后叫停。
 未完成：C: 清理停在「净 +20 GB」：pagefile 32 GB 固定未改；DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase 被拒 0x80070005（Access is denied，日志 C:\Windows\Logs\DISM\dism.log）未解。CLT 自带的 STMicroelectronics_CMSIS_SVD 未与现用 SVD 比对。
 下一步：等用户下一个目标（当前工具链构建/烧录/观测/doctor 全绿；便捷路径 make flash 与 tools/flash.ps1 都能用）。

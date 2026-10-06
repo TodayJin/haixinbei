@@ -13,6 +13,11 @@
 >
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
+## 2026-10-06 · 编译坑
+完成：把“台架固件装不下”查清并量化：① 区域预算 —— 芯片 128K，但 `.ld` 的 FLASH 只有 **116K**（页 58/59~61/63 共 12K 留给任务存储+NVRAM）；② 主固件 **text 117948 + data 376 = 118332 B = 99.6%**，只剩 **452 B**；台架 = 主固件 + 台架代码 ⇒ 溢出 4548 B；③ 占用大头是 **HAL 驱动~49K + 中文字模 14.7K + 界面（app_ui 14.6K + kk_ui*/kk_oled* ~12K）**，“循迹/控制”那部分很小（`gyro_control` 4.9K / `trace_cal` 4.7K / `PID_tracing` 3.4K）；④ **实测 `-Os` 省 12012 B（10.2%）**，主固件 →106320 B、余量 12464 B。
+未完成：① `-Og`→`-Os` 未实际切换（需重测 ISR/主循环耗时 + 复验控制环后再定）；② `build-app/` 里有个历史遗留的 `renwu.o`（源码已删，6KB text+data，**不在链接列表里**）—— 会让我那种“按 *.o 排序”的占用表虚高，`make clean` 可清；③ 台架变体未修（正解=剔除界面/字模）。
+下一步：若要真的修好台架/腾出余量：先量 `-Og` vs `-Os` 下的 ISR 与主循环耗时（同一套 `out/` 里的观测手段），确认时序无回归后换 `-Os`；再给 bench 变体做独立源文件表（剔除 KK_UI/字模）。
+
 ## 2026-10-06 · 固件-验证
 完成：不发车全面回归 19 项，**除两个既有编译变体之外全绿**：固件主机 15/15；`check_static.ps1` 53 文件 0 error；`check_warnings.ps1` 待处理 0；上位机 pytest 176 passed；前端 vitest 默认 194 passed/8 skip；`tsc --noEmit` exit 0；**前端 + mock 后端跑全量 21 文件/202 条 0 skip**（平时跳过的合同/SSR 也在内）；`probe.py` 921600 = 最高可用；`bench.py --attach` 200.9 帧/s、crc/resync/drops 全 0；10 个只读端点全 ok；遥测 405 帧无缺字段/无越界；频率往返 102.0/204.0Hz；**全参数审计 45 项里 44 项 = 固件默认值**（只有 `base_speed` = 屏上设的 7200）；`/api/cal` quality=8 全 ok；网页服务 index 逐字节 == dist、JS/CSS 200、POST-only 端点 GET 回 404；`npm run build` 后 **dist 与源码完全一致**（git 无 diff）。
 未完成：① 两个既有编译变体坏了（MOTOR_BENCH 溢出 4548B、SELFTEST 家族缺 htim6/7），本次不修。② **12V 动力电池现在没接**（遥测 `vbat=321mV`、`ibat=0`）⇒ 要发车实测前必须接上电池。③ 直角相仍待实测（`290c22c` 已烧上并验证、车停着）。
@@ -919,8 +924,4 @@
 完成：把 SVD 换成 CLT 自带版（G4 v3.0）并验证：stm32-dev.py doctor 退出 0；svd TIM8.TIM8_CNT --all 读到 0x00001a18 @0x40013424；随后 RTT 3 s 抓到 77 行、HOST tx 从 1719 涨到 32827（目标未被挂住）。寄存器名不一定带前缀（I2C1=CR1，TIM8=TIM8_CNT）；svd 子命令读寄存器会因 JLinkGDBServer 不支持 detach 而让退出码为 1，属已知无害噪声。
 下一步：无。
 
-## 2026-09-30
-完成：复核补丁后复测：不设 STM32_PROGRAMMER_CLI、PATH 里没有 SEGGER 的情况下 make flash 仍能找到 CLI（D:\APP\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe）→ CLI 段 NVM size : 128 KBytes + Download verified successfully → J-Link 段 "Skipped. Contents already match" → 回读 81612 字节 firstDiff=none → 退出码 0。中途发现 tools.edit 丢 BOM 导致 .ps1 报错，已补回并复测通过。
-下一步：继续别的目标；编辑 .ps1 后记得补 BOM。
-
-> 更早的会话条目已归档到 261 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 262 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
