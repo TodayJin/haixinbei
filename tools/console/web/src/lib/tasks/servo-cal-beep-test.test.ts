@@ -2,12 +2,29 @@
  * 真车自测任务 `servo-cal-beep-test.json`：只验两件当晚刚做完、还没在真车上跑过的事 ——
  *   ① 任务块 `CAL_SET`(0x0B) 真的会切灰度标定套；② 「过点蜂鸣」每切一次状态响一声。
  *
- * 这里钉死四件事，防止以后改块/改编码把这些性质悄悄改掉：
+ * 这里钉死五件事，防止以后改块/改编码/改文件形状把这些性质悄悄改掉：
  *   ① 走**页面「导入」的真实入口**（`importTaskFile`）能认，且存回再导入不走样；
- *   ② `validateTask()` **errors 与 warnings 都为空**（否则页面点「烧写」会被拦下）；
- *   ③ 编码后的**字节数 / CRC / 状态数 / 块数**（尺寸护栏：改了块或名字就会在这里报到）；
- *   ④ ★**不含任何会驱动轮子或舵机的块** —— 用的是白名单（只允许 CAL_SET/WAIT_MS/GOTO/END），
+ *   ② ★**文件的形状与参照物 `renwu-lap.json` 完全同构**（顶层 `{ver,tasks}`、
+ *      任务 `{id,name,prog}`、程序 `{states,main}`），而且**文件内容 === 编辑器「导出」出来的文本**
+ *      —— 见 `it('★形状…')` 与 `it('★文件就是编辑器导出的规范形态…')`；
+ *   ③ `validateTask()` **errors 与 warnings 都为空**（否则页面点「烧写」会被拦下）；
+ *   ④ 编码后的**字节数 / CRC / 状态数 / 块数**（尺寸护栏：改了块或名字就会在这里报到）；
+ *   ⑤ ★**不含任何会驱动轮子或舵机的块** —— 用的是白名单（只允许 CAL_SET/WAIT_MS/GOTO/END），
  *      而不是黑名单：以后新增了别的"会动的"块，这条会自然红。
+ *
+ * **2026-10-07 BUG-1（用户实测「导入后编辑器里看不到它的块」）**：这份文件原来带着三个
+ * **非任务格式的注释键**（顶层 `_note` / `_op_audit` + 任务里的 `_note`），顶层键是
+ * `['_note','_op_audit','ver','tasks']` —— 与能正常导入的 `renwu-lap.json`
+ * （`['ver','tasks']`）形状不一致。现在这些注释键**全部删掉**，文件重写成参照物的形状
+ * （`id` 也从 0 改到 **3**：车上现有 #0 常态循迹 / #1 旧全程11障碍 / #2 测试，别再撞号）。
+ * 那三条注释里值得留的信息搬到这里：
+ *   · 为什么这么设计：固件 `seq_begin()` 每进一个状态就 `AppUi_Beep(20)` 响一声 ⇒
+ *     10 个状态 = 10 声，间隔 1000ms，第 N 声 ⇔ 遥测 `state_id` = N−1 ⇔ 标定被切到该状态名里写的套；
+ *   · 标定 0 = 普通（宝丽布）、1 = 亚克力；顺序 0→1→…→0，**跑完停在「普通」**，不留副作用；
+ *   · 已知无害现象：`trace_cal_select_set()` 里有 `if (v == s_set) return;` ⇒ 若车本来就在
+ *     「普通」套，状态 0 的 `CAL_SET 0` 是空操作（蜂鸣照响），第一次看得见的切换在状态 1。
+ *   · `_op_audit` 的结论就是下面那个白名单用例：只有 `0x0B/0x05/0x07/0x08` 四类，
+ *     `0x01/02/03/04/06/09/0A` 一个都没有。
  *
  * ⚠ 这条任务的**真车结论**（听到几声、标定切没切）只能由人在车上给；本文件只保证"编出来的东西
  *   与设计一致、且不会让车动"。固件侧的同一份字节另有独立验证：`TaskProg_Validate` 见报告。
@@ -18,6 +35,8 @@ import { OP, crc16Ccitt, decodeTask, encodeTask, validateTask, type TaskBlock } 
 import { importTaskFile, loadTaskFile, serializeTaskFile } from '../taskedit'
 
 const RAW = readFileSync(new URL('./servo-cal-beep-test.json', import.meta.url), 'utf8')
+/** 参照物：能被正常导入、且形状就是"任务文件该有的样子"的那份（旧全程 11 障碍） */
+const REF = readFileSync(new URL('./renwu-lap.json', import.meta.url), 'utf8')
 const file = importTaskFile(RAW)
 const task = file.tasks[0]
 const prog = task.prog
@@ -37,18 +56,43 @@ const EXPECT_STATES = 10
 const EXPECT_BLOCKS = 28
 const EXPECT_WAIT_MS = 1000
 
+/** 行尾与末尾换行不影响"是不是同一份 JSON 文本"，比对前统一掉 */
+const norm = (s: string): string => s.replace(/\r\n/g, '\n').replace(/\n+$/, '')
+
 describe('自测任务：切灰度标定套 + 过点蜂鸣（servo-cal-beep-test.json）', () => {
   it('能当普通任务文件导入（页面「导入」按钮走的就是这条路）', () => {
     expect(file.skipped).toBe(0)
     expect(file.tasks).toHaveLength(1)
-    expect(task.id).toBe(0)
+    // id 3：车上现有 #0 常态循迹 / #1 旧全程11障碍 / #2 测试 ⇒ 不与它们撞号
+    expect(task.id).toBe(3)
     expect(task.name).toContain('自测')
     expect(prog.main).toBe(0)
     // 任务名要进 Flash 页 58 的目录记录（上限 30 字节）
     expect(new TextEncoder().encode(task.name).length).toBeLessThanOrEqual(30)
-    // 注释性键（_note/_op_audit）是给人看的，导入时会被 sanitize 丢掉 —— 但文件里必须在
-    expect(RAW).toContain('_note')
-    expect(RAW).toContain('_op_audit')
+  })
+
+  it('★形状与参照物同构：顶层 {ver,tasks} / 任务 {id,name,prog} / 程序 {states,main}', () => {
+    // ① 键名逐项钉死（BUG-1 就是顶层多了 _note/_op_audit 这类非格式键）
+    expect(Object.keys(JSON.parse(RAW))).toEqual(['ver', 'tasks'])
+    expect(Object.keys(JSON.parse(RAW).tasks[0])).toEqual(['id', 'name', 'prog'])
+    expect(Object.keys(JSON.parse(RAW).tasks[0].prog)).toEqual(['states', 'main'])
+    // ② 与参照物**逐键对齐**（两份文件的形状不许漂开）
+    const ref = JSON.parse(REF) as { tasks: Array<Record<string, unknown>> }
+    expect(Object.keys(JSON.parse(RAW))).toEqual(Object.keys(JSON.parse(REF) as object))
+    expect(Object.keys(JSON.parse(RAW).tasks[0])).toEqual(Object.keys(ref.tasks[0]))
+    expect(Object.keys(JSON.parse(RAW).tasks[0].prog)).toEqual(
+      Object.keys(ref.tasks[0].prog as object),
+    )
+    // ③ 块字段也只有 6 个（参照物的块长这样）
+    const refBlock = (ref.tasks[0].prog as { states: Array<{ body: Array<Record<string, unknown>> }> })
+      .states.flatMap((s) => s.body)[0]
+    expect(Object.keys(allBlocks[0])).toEqual(Object.keys(refBlock))
+    // ④ 反面判据：这几个键在文件里一个都不许再有
+    for (const k of ['_note', '_op_audit']) expect(RAW).not.toContain(k)
+  })
+
+  it('★文件就是编辑器导出的规范形态（内容 === serializeTaskFile 的输出）', () => {
+    expect(norm(RAW)).toBe(norm(serializeTaskFile({ ver: 1, tasks: [task] })))
   })
 
   it('过校验：没有 error，也没有 warning', () => {
@@ -64,13 +108,20 @@ describe('自测任务：切灰度标定套 + 过点蜂鸣（servo-cal-beep-test
     }
     const used = new Set(allBlocks.map((b) => OP_NAME.get(b.op)))
     for (const f of FORBIDDEN) expect(used.has(f), `不该出现 ${f}`).toBe(false)
-    // 轮子相关的四个 op 一个都不能有
+    // 轮子相关的三个 op 一个都不能有
     for (const op of [OP.SET_SPEED, OP.SET_MODE, OP.TURN_DEG]) {
       expect(allBlocks.some((b) => b.op === op)).toBe(false)
     }
     // 舵机相关的两个 op 一个都不能有
     for (const op of [OP.ACTION, OP.SET_SERVO]) {
       expect(allBlocks.some((b) => b.op === op)).toBe(false)
+    }
+    // ★0x0B(CAL_SET) 出现 9 次；0x01/02/03/04/06/09/0A 都是 0（= 不动轮子/舵机）
+    const hist = new Map<number, number>()
+    for (const b of allBlocks) hist.set(b.op, (hist.get(b.op) ?? 0) + 1)
+    expect(hist.get(OP.CAL_SET)).toBe(9)
+    for (const op of [OP.SET_SPEED, OP.SET_MODE, OP.TURN_DEG, OP.ACTION, OP.WAIT_COND, OP.SET_SERVO, OP.CROSS_CLEAR]) {
+      expect(hist.get(op) ?? 0, `${OP_NAME.get(op)} 不该出现`).toBe(0)
     }
   })
 

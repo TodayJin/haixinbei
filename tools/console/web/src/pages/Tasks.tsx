@@ -889,6 +889,19 @@ export function TasksPage() {
                     store.toast('err', '这个文件里没有能读的任务')
                     return
                   }
+                  /* ★2026-10-07 两处修复（用户 m 报「导入之后没有/看不到块」）：
+                   *   ① 导入后要**切换选中项**到刚导入的那条 —— 新建/复制都 setSelTask(...)，
+                   *      导入却没有 ⇒ 新任务被 push 到列表末尾，界面还停在原来选中的那条上
+                   *      （他当时选的是 3 块的「测试」⇒ 以为「导入后什么都没有」）。
+                   *   ② 编辑器满 EDIT_MAX_TASKS 时原来静默 break、toast 仍报「导入 N 个」✗
+                   *      ⇒ 满员直接说人话；放不下的也如实报出来。 */
+                  const base = file.tasks.length
+                  const room = Math.max(0, EDIT_MAX_TASKS - base)
+                  if (room === 0) {
+                    store.toast('err', `编辑器已经有 ${EDIT_MAX_TASKS} 条任务了 —— 先在左边删掉一条，再导入`)
+                    return
+                  }
+                  const added = Math.min(tasks.length, room)
                   setFile((prev) => {
                     const merged: TaskDef[] = [...prev.tasks]
                     for (const t of tasks) {
@@ -899,7 +912,8 @@ export function TasksPage() {
                     }
                     return { ...prev, tasks: merged }
                   })
-                  store.toast('ok', `导入 ${tasks.length} 个任务${skipped ? `，跳过 ${skipped} 个` : ''}`)
+                  setSelTask(base)          /* ★选中刚导入的第一条 */
+                  store.toast('ok', `导入 ${added} 个任务${skipped ? `，跳过 ${skipped} 个` : ''}${tasks.length > added ? `（还有 ${tasks.length - added} 条放不下：编辑器上限 ${EDIT_MAX_TASKS} 条）` : ''}`)
                 }}
               />
             </div>

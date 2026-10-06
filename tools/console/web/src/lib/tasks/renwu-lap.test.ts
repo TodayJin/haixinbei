@@ -8,15 +8,26 @@
  *  ④ 几个关键块还在（两轮直给 / 转角度 / 动作 2 后等 2050ms / 状态尾都是 GOTO 或 END），
  *     防止以后改瘦身规则时把语义悄悄删掉。
  *
- * **2026-10-07 第二版（修正版）**：用户报「这份 JSON 与旧代码对不上」，逐行对拍后改了三类：
+ * **2026-10-07 第二版**：用户报「这份 JSON 与旧代码对不上」，逐行对拍后改了四类：
  *  · 换算基准 6480 → **7000**（`HP_TASK_SPEED` 的当前值，`host_link.c:108`）⇒ 全部速度刻度重算；
  *  · 补回第一版漏掉的 3 段循迹：栅栏 54×20ms=**1080ms**、方通 14×20ms=**280ms**、28×20ms=**560ms**
  *    （以及「关角度环后电机恢复到 enable 时保存的速度」被误写成「速度 0」的几处）；
  *  · 原地转前显式发「速度 0」（旧代码的 `Toggle_Gyro_Control(1,0,0)`），不再依赖残留状态；
- *  · 旧代码里 5 处「只看一半探头」的入口条件改用**条件 11（哪几路是白的）+ 掩码**精确表达
- *    （段6/17 = 0x1F、段13/21 = 0xF8、段19 = 0x0F）—— 这 5 块需要固件带 `TASK_C_CH_WHITE`
- *    （`task_prog.h:81`，2026-10-07 新增；更老的固件会把它当"永不满足"⇒ 停在那一段一直循迹）。
- *  原文件留在 `renwu-lap.json.bak`；逐段依据见 `out/_lap2_table.md` 与 `out/_gen_lap2.py`。
+ *  · 旧代码里 5 处「只看一半探头」的入口条件改用掩码精确表达。
+ *
+ * **2026-10-07 第三版（★极性修正，就是本文件最底下那两条用例钉的东西）**：用户当场指出
+ * 「为什么会有全白？我记得我都是扫到黑线算的呀」—— 第二版把入口条件**整体译反了**。
+ * 旧板 `Haixin/Hardware/tracing.c:9-16` 是 `tracing_data[i] = !HAL_GPIO_ReadPin(...)`（取反），
+ * 而 `Haixin/Hardware/PID_tracing.c:18-25` 拿原值当「这一路看见线」；`firmware/App/Svc/host_link.c:496`
+ * 写死 `if (bsp_trace_bit(i) == GPIO_PIN_SET) m |= 1<<i;` 并注上「1 = 压线」，
+ * `docs/上位机通信协议.md:163` 同口径，`docs/控制算法升级方案.md:42` 更是直说
+ * **「`renwu.c` 里『全 0』事件 = 8 路原始位全 SET（整排压线）」**。
+ * ⇒ **`tracing_data[i] == 0` = 第 i 路压到黑线**（不是白！）。
+ * 所以全部 21 个入口条件改成**条件 10 `CH_BLACK` + 掩码**：
+ *   16 处「8 路全 0」→ 掩码 `0xFF`；5 处「只看一半探头」→ `0x1F / 0xF8 / 0x1F / 0x0F / 0xF8`（同第二版）。
+ * 镜像**除这 21 块的条件号/掩码外逐字节相同**：仍然 **2434 B / 208 块 / 15 状态**，CRC `0x7319` → **`0xE021`**。
+ * 逐段依据见 `out/_lap3_table.md` 与 `out/_gen_lap3.py`；第二版原件留在
+ * `out/renwu-lap.json.bak-v2-fuhao-fan`（tasks 目录里的 `renwu-lap.json.bak` 是第一版的）。
  *
  * ⚠️ **倒车块依赖一处固件修复**：`task_block_t` 的 `p2` 是 u16（只有 `p1` 是有符号），
  *    所以「两轮直给 −3888/−3888」编码后 p2 变成 61936，固件的
@@ -65,6 +76,9 @@ describe('旧全程流程转出来的任务文件（renwu-lap.json）', () => {
     expect(enc.bytes.length).toBeLessThanOrEqual(4096)
     // 程序区 6144 B 里还能再放一个短任务
     expect(enc.bytes.length).toBeLessThan(6144)
+    // CRC 护栏：第三版把 21 个入口条件从「全白」改成「全压黑」后是 0xE021
+    // （第二版/全白那版是 0x7319）—— 条件再被改反，这里立刻红
+    expect(enc.bytes[6] | (enc.bytes[7] << 8)).toBe(0xe021)
   })
 
   it('名字都不超 32 字节，单序列都不超 64 块', () => {
@@ -82,8 +96,10 @@ describe('旧全程流程转出来的任务文件（renwu-lap.json）', () => {
     for (let i = 0; i < states.length; i++) {
       const body = states[i].body
       expect(body[0].op).toBe(OP.WAIT_COND)
-      // 16 处入口 = 「8 路全白」；5 处 = 旧代码里"只看一半探头"的段（条件 11 + 掩码，见下一个用例）
-      expect([COND.LINE_LOST, COND.CH_WHITE]).toContain(body[0].p0)
+      // ★第三版：**每个**入口都是「哪几路压到黑线」（条件 10）。
+      // 第二版这里写的是 [LINE_LOST, CH_WHITE] —— 那是把旧代码的极性译反了（见文件头）。
+      expect(body[0].p0).toBe(COND.CH_BLACK)
+      expect(body[0].p1 & 0xff).not.toBe(0) // 掩码 0 = 恒不满足（固件 task_run.c 明确定死）
       const tail = body[body.length - 1]
       if (i === states.length - 1) {
         expect(tail.op).toBe(OP.END)
@@ -94,12 +110,28 @@ describe('旧全程流程转出来的任务文件（renwu-lap.json）', () => {
     }
   })
 
-  it('旧代码里 5 处「只看一半探头」的入口，用条件 11 + 掩码精确表达（不是退化成 8 路全白）', () => {
-    // renwu.c：段6/段17 看 data[0..4]==0、段13/段21 看 data[3..7]==0、段19 看 data[0..3]==0
-    const whites = allBlocks.filter((b) => b.op === OP.WAIT_COND && b.p0 === COND.CH_WHITE)
-    expect(whites.map((b) => b.p1)).toEqual([0x1f, 0xf8, 0x1f, 0x0f, 0xf8])
-    // 其余入口仍是「8 路全白」：21 个阶段 = 16 + 5
-    expect(allBlocks.filter((b) => b.op === OP.WAIT_COND && b.p0 === COND.LINE_LOST)).toHaveLength(16)
+  it('★极性：入口条件是「压到黑线」而不是「全白」——旧代码 tracing_data[i]==0 就是这个意思', () => {
+    // 判据链（哪一个都够，这里是四取一的自证）：
+    //   tracing.c:9-16 `!HAL_GPIO_ReadPin` 取反  ↔  PID_tracing.c:18-25 用原值当"看见线"
+    //   host_link.c:496  `== GPIO_PIN_SET → 1 = 压线`
+    //   docs/上位机通信协议.md:163 「bit i = 第 i+1 路灰度压线（1 = 压线）」
+    //   docs/控制算法升级方案.md:42  「renwu.c 里『全 0』事件 = 8 路原始位全 SET（整排压线）」
+    const waits = allBlocks.filter((b) => b.op === OP.WAIT_COND)
+    expect(waits).toHaveLength(21)
+    // 一条都不许再用「丢线 / 全白」那两条条件
+    expect(allBlocks.filter((b) => b.op === OP.WAIT_COND && b.p0 === COND.LINE_LOST)).toHaveLength(0)
+    expect(allBlocks.filter((b) => b.op === OP.WAIT_COND && b.p0 === COND.CH_WHITE)).toHaveLength(0)
+    // 16 处「8 路全 0」= 8 路全压黑（掩码 0xFF）
+    expect(waits.filter((b) => b.p1 === 0xff)).toHaveLength(16)
+    // 5 处「只看一半探头」= 那几路全压黑（掩码与第二版逐个相同，只是判据反了过来）
+    expect(waits.filter((b) => b.p1 !== 0xff).map((b) => b.p1)).toEqual([0x1f, 0xf8, 0x1f, 0x0f, 0xf8])
+  })
+
+  it('旧代码里 5 处「只看一半探头」的入口，用掩码精确表达（不是擅自扩成 8 路）', () => {
+    // renwu.c：段6(H271)/段17(H642) 看 data[0..4]==0、段13(H461)/段21(H719) 看 data[3..7]==0、
+    //          段19(H679) 看 data[0..3]==0（5..7 或 0..2 那几路被作者注释掉了 ⇒ 不管）
+    const masked = allBlocks.filter((b) => b.op === OP.WAIT_COND && b.p0 === COND.CH_BLACK && b.p1 !== 0xff)
+    expect(masked.map((b) => b.p1)).toEqual([0x1f, 0xf8, 0x1f, 0x0f, 0xf8])
   })
 
   it('关键动作没在转换里丢：两轮直给、右转 90°、动作 2 后等 2050ms', () => {
