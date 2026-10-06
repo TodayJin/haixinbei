@@ -12,6 +12,16 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-07 — ★“屏幕上改了设置却**不弹保存标志**”的头号原因：`nvram_poll()` 里 `if (nvram_motion_active()) return;`（nvram.c:514）—— **只要车还在驱动模式（循迹/角度环/速度环任一使能或调度不是 IDLE）就绝不擦写 Flash**。
+选择：★“屏幕上改了设置却**不弹保存标志**”的头号原因：`nvram_poll()` 里 `if (nvram_motion_active()) return;`（nvram.c:514）—— **只要车还在驱动模式（循迹/角度环/速度环任一使能或调度不是 IDLE）就绝不擦写 Flash**。
+放弃：以为又是开关/参数表的问题（我上一版甚至去加 `nvram_touch()`，那只是跳过 1.5s 防抖，不是主因）。
+因为：代码注释里写了硬理由：本板 128KB Flash 只有 2 个 bank、代码 106KB 已跨到 bank2，而存档页 0x0801F800 也在 bank2 ⇒ **擦/写 bank2 期间 CPU 从 bank2 取指会被 stall ⇒ TIM6 的 5ms 运动控制中断被拖住（擦一页最坏几十毫秒）= “车顿一下冲出去”**。存档晚点没关系：s_live 与 s_saved 仍不同，**车停下来下一拍就会存**。⇒ 排查“保存没生效”时，**先确认车已停（mode=off）**再等 1.5s 防抖；另外真实擦写是交给 `nvram_service()` 的（先进“正在保存”让界面画提示+吃按键）。
+
+## 2026-10-06 — ★固件屏上**布尔开关**要完整生效需三步：① `k_bool_bindings[]` 定义；② `k_settings_items[]` 加行（下标）；③ **自己在每拍把 g_cfg 的变化推给参数表并 `nvram_touch()`**。
+选择：★固件屏上**布尔开关**要完整生效需三步：① `k_bool_bindings[]` 定义；② `k_settings_items[]` 加行（下标）；③ **自己在每拍把 g_cfg 的变化推给参数表并 `nvram_touch()`**。
+放弃：以为改 g_cfg 就够了（或以为框架会自动同步）。
+因为：两个真坑（同一个根）：**屏上布尔行的绑定事件是 `EV_NONE`** ⇒ ① 只有改**数值型**参数才会调 `push_pid_params()` ⇒ 布尔开关只改 `g_cfg`、**从不写回参数表**（而控制逻辑读的是参数表 ⇒ 屏幕上翻它等于没翻；发车前核对参数才发现：屏上已打开而桥读回 0）；② NVRAM 存的是**参数表的镜像**（`nvram.c:70`：snapshot/apply 全走 `host_param_*`），靠 `nvram_poll()` 比对 `s_live/s_saved` 自动回写 ⇒ 值没进参数表就**不落盘、也不弹「保存成功」**（用户 m：“这个好像不会触发自动保存啊…没那个保存的标志”）。修法（已做，两条）：新增 `s_corner_applied` 每拍变化就 `host_param_set_local` + `nvram_touch()`。
+
 ## 2026-10-06 — ★改固件屏上任何**中文文案**，必须重生成字模并在同一次改动里烧进去：`node tools/font/gen_font.mjs firmware/App/Fonts/kk_font_body.c wenquanyi_9pt 12 kk_font_body <新文案的字>`，再用 `check_charset.mjs <那个 .c>` 复核缺字=0。
 选择：★改固件屏上任何**中文文案**，必须重生成字模并在同一次改动里烧进去：`node tools/font/gen_font.mjs firmware/App/Fonts/kk_font_body.c wenquanyi_9pt 12 kk_font_body <新文案的字>`，再用 `check_charset.mjs <那个 .c>` 复核缺字=0。
 放弃：只改 `app_ui.c` 的菜单文案就编烧（以为字会自动出现）。
