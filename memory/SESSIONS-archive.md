@@ -1,4 +1,11 @@
 ## 2026-09-30
+完成：Makefile 的 shell 改成 Git for Windows 自带的 sh（SHELL = C:/Program Files/Git/bin/sh.exe，本机本来就有，无需安装 —— 之前"没有 sh"只是 PATH 里没有），clean/mkdir 恢复 POSIX 写法；踩到 GNU make 在 Windows 上对不含 shell 元字符的行会跳过 shell 直接 CreateProcess，所以 mkdir -p "$@" 的引号必须留着。全链实测通过：make clean（真删干净、无 "-p"）→ make -j4（bin 81612 B）→ make erase → erase 后第一次 make flash 一次成功、回读一致、退出码 0。tools/flash.ps1 的 CubeProgrammer 路径改为自动探测（-Cp > 环境变量 > PATH > C:/D: 常见位置），用户装完即自动生效。
+未完成：CubeProgrammer 仍未安装（用户自己去装）。
+下一步：用户装完 CubeProgrammer 后跑 make flash，确认前置段打印出找到的 CLI 路径。
+
+> 更早的会话条目已归档到 259 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-30
 完成：本机烧录便捷路径全部修好并实测：Makefile 的 flash 目标改为调用 tools/flash.ps1（单一实现），新增 tools/verify_readback.ps1 逐字节回读比对（容忍 0x080001D8..0x080001DF），以回读为唯一结论、失败自动重试一次；DEVICE 改 STM32G474RE；clean 改 rmdir；mkdir 不再建 "-p"；cmd 的 echo 引号坑用 (echo a&echo b) 分组解决。实测：erase→flash 全量 81920 字节 + 回读一致退出码 0；内容已一致时 J-Link 报假错（Programming failed @ 0x08010534）但回读一致、仍退 0；make clean + make -j4 全量重编译通过（bin 81612 B）；烧完 RTT 抓到启动横幅证明板子在跑，DEMCR 已清。
 未完成：STM32CubeProgrammer CLI 仍未安装（ST 官网下载要走下载/登录流程，抓不到直链；C: 只剩 3.40 GB）。
 下一步：等用户决定是否装 CubeProgrammer；不装就维持现有 J-Link + 回读链路（flash.ps1 已留好分支）。

@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-06 · 固件-验证
+完成：★探针事故已恢复并完成补烧（用户物理拔插 J-Link 后）：`COM27` 回来、设备状态 OK（那些 CM_PROB_PHANTOM 是旧探针 PID_0105/0101 的幽灵项，无害）。重编并重烧 `290c22c`（路口减速修复版）：**118332 字节、回读 firstDiff=none**。重启桥后实测：`connected=True COM27 @921600`、rx 在涨、**crc=0 / resync=0 / drops=0**；`param_crc = 3730`（上次是 29653，差在 `HP_LINE_KD` 默认值 12→36 —— 这正好独立证明车上跑的是新镜像）；重启桥真读 12 项参数全一致。**全程未发任何驱动指令（用户 m：“你不能启动车，可以烧录”）**。
+未完成：上一轮那个“轻微摆”的精确定位仍未动：两个直角之间那段直线里 pos 在 2.0↔5.0 之间以 ~0.5Hz 缓慢摆（±1.5~2.5 格）。下次若继续，先把 `cross`/lost 时间线记进 `_capdrive.py` 日志再调外环。
+下一步：等用户许可后在真车上实测这个修复（路口减速现在在“线还看得见”时就生效）—— 判据用 DECISIONS 最上面那条双直角口径（第 1 个直角处的丢线时长 + 两角之间那段直线 1.6~4.1s 的 pos 摆幅），别再看“末段”（那是第 2 个直角/到时间了）。
+
+## 2026-10-06 · 固件-验证
 完成：桌面代码审查一轮（用户 m：“我睡觉了你继续检查优化代码，干一轮就行”）：通读 `PID_tracing.c` 串级主体，抓到并修掉一个真缺陷 —— “路口减速”那行写在 `all_sensors_lost` 分支里，而 `s_cross` 成立时线**通常还看得见**（≥4 路压线 = 车正压在路口上）⇒ 原来要等车已经冲出弯口、丢线之后才减速，而丢线紧接着就是 `base=0`，中间那半速档几乎不存在，**形同虚设**。修法=把那行提到丢线分支之外（一行位置变更，无新参数）。**已提交 `290c22c`**（2 文件 +29/−1）。验证：`t_cascade` 新增 §12/§13 两节（4 路压线且线看得见 ⇒ 基准必须让一半；丢线走丢线那套），**71 项检查 0 失败**（§12 在修复前必然红）；固件主机测试 **15/15**；上位机 `pytest` **176 passed**。
 未完成：★**这个修复还没烧进车上**：`make flash` 卡了 >10 分钟，查下去是**探针 USB 栈死了** —— 车上那颗 J-Link（`USB\VID_1366&PID_1024\000024060505`）在 `Get-PnpDevice` 里是 **`CM_PROB_PHANTOM`**（设备从 USB 上消失），`COM27` 也没了（只剩 COM4/COM12），`pnputil /restart-device` 回 “The device is not connected” ⇒ **必须物理拔插探针**（与 2026-10-04 同型）。残留的编程器进程已清掉。另：车上最后一次**成功**烧录是 118348 B（基准斜坡版 + 回读 firstDiff=none），但卡住的那次 flash 走到哪一步**未知**（输出被 PowerShell 管道缓冲）⇒ **车上固件状态不确定**，可能是旧的、也可能被半途擦写。
 下一步：① 用户物理拔插 J-Link → 确认 COM 口回来（注意它可能改名，不一定是 COM27）；② `python -m bridge.probe --port COMxx --seconds 2` 看链路（区分“乱码=波特率不匹配”与“干净 0 字节=线/探针/固件”）；③ 重启桥（抱着死句柄的桥会表现成“车上没应答”）；④ `make -C firmware flash` 重烧 `290c22c` 并回读核对；⑤ 之后再实测这个修复在真车直角上的效果（判据用 DECISIONS 最上面那条双直角口径）。
@@ -918,9 +923,4 @@
 未完成：C: 清理停在「净 +20 GB」：pagefile 32 GB 固定未改；DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase 被拒 0x80070005（Access is denied，日志 C:\Windows\Logs\DISM\dism.log）未解。CLT 自带的 STMicroelectronics_CMSIS_SVD 未与现用 SVD 比对。
 下一步：等用户下一个目标（当前工具链构建/烧录/观测/doctor 全绿；便捷路径 make flash 与 tools/flash.ps1 都能用）。
 
-## 2026-09-30
-完成：Makefile 的 shell 改成 Git for Windows 自带的 sh（SHELL = C:/Program Files/Git/bin/sh.exe，本机本来就有，无需安装 —— 之前"没有 sh"只是 PATH 里没有），clean/mkdir 恢复 POSIX 写法；踩到 GNU make 在 Windows 上对不含 shell 元字符的行会跳过 shell 直接 CreateProcess，所以 mkdir -p "$@" 的引号必须留着。全链实测通过：make clean（真删干净、无 "-p"）→ make -j4（bin 81612 B）→ make erase → erase 后第一次 make flash 一次成功、回读一致、退出码 0。tools/flash.ps1 的 CubeProgrammer 路径改为自动探测（-Cp > 环境变量 > PATH > C:/D: 常见位置），用户装完即自动生效。
-未完成：CubeProgrammer 仍未安装（用户自己去装）。
-下一步：用户装完 CubeProgrammer 后跑 make flash，确认前置段打印出找到的 CLI 路径。
-
-> 更早的会话条目已归档到 259 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 260 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
