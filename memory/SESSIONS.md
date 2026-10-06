@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-06 · 循迹调参
+完成：把直角主动转弯从编译宏改成**运行时参数** `HP_TRACE_CORNER`(0x020B, 默认 0=关)：①`host_link.h` 加 id；②`host_link.c` 的 SPECS 加 `{HP_TRACE_CORNER, 0.0f, 0.0f, 1.0f}`；③`PID_tracing.c` 的直角段判据改成 `host_param_get(HP_TRACE_CORNER,0.0f) >= 0.5f`（直角代码**一行没删**）；④`tools/console/bridge/params.py` 加了镜像行。已经编过、主机测试 15/15、烧录回读一致（107096 B）、提交 096c47e + 本次。
+未完成：① **还差“存 NVRAM + 上屏菜单”那三处**（用户 m 明确要求“屏幕里能设置的都要保存”）：`app_ui.c` 的 `g_cfg` 加 `trace_corner` 字段、`k_bool_bindings[]`（411-419 行，照着“陀螺仪闭环/循迹反转”那一排）加一行「直角转弯」、`push_pid_params()`(452-471) / `pull_pid_params()`(485-503) 双向同步；★改 `g_cfg` 会动 **NVRAM 存档布局** ⇒ 要确认存档版本/长度校验会不会因此丢用户设置。② 三处没同步时 `test_params_spec.py::test_bridge_table_has_no_extra_entries` 等着会红（本次已加 params.py 镜像）。
+下一步：在 `app_ui.c` 里把开关接到 NVRAM+屏上菜单（g_cfg 字段 + 布尔绑定 + 双向同步 + NVRAM 版本/迁移确认）→ 跑 `run_tests.ps1` 与 `pytest tools/console/tests -q` 全绿 → 烧 → 真车读回确认开关默认 0、翻到 1 能生效。之后按用户 m 定的：**只调普通循迹的 PID**（基线 = final 那版：0/26 真反向、2.2/2.4 圈）。
+
+## 2026-10-06 · 循迹调参
 完成：本轮把“保持阶段”定稿为用户 m 的方案 B：丢线后 0~250ms 全速、250~1000ms 半速，期间**保持转向需求 + 继续推进目标航向**（车前进着持续转），累计转角夹 **150°**；>1000ms 才进找线扫描；>2500ms 保护停车。另修两处真问题：**掉头判据由时间改成实际转角（110°）**（原来 600ms 只等于 73°，够不到 90° 外的线）；**上位机“丢一次 ACK 就停车”改成重发 4 次**（一次丢帧废掉整趟的元凶）。真车 3 组共 ~6 趟：转弯本身变好了（用户：“拐得挺好的”），短丢线找回也变快（110~230ms，旧版 500~800ms）。
 未完成：① **方向判据仍是唯一未过的关**（comp 补偿法配方已定，见 DECISIONS）；② t_cascade 9 处红全是**旧设计预期**（最根本是“丢线期间目标航向不许推进”，而方案 B 就是要它推进）+ 2 个编译警告（TRACE_HOLD_MS 重复定义、s_lost_recent_at 无用）未清；③ 车上跑的是 dir 那版（106632B），与仓库一致；④ 想缩保持到 300ms 的念头已被用户“拐得挺好”的反馈否掉。
 下一步：① 实现 comp 方向（用 Gyro_Z，注意 include 与 t_cascade 里加桩）；② 写 out/_lever.py 用现有日志标定力臂；③ 把 9 处旧测试按新设计改对 + 清警告；④ 烧 + 20s×2 跑，判据：过弯最长丢线时长 + 出弯后 0.5s 的 |e|。
@@ -923,9 +928,4 @@
 未完成：用户侧肉眼验收新版面与读数刻度。
 下一步：让用户上电走一遍：进 设置→模块测试→电机，看两行卡片版式、左/右按中键切 停/正/反、读数是否约 73（新占空比）、按住中键不再连刷、退出后电机继续转。
 
-## 2026-09-30
-完成：修好「模块测试页按中键进不去电机测试页」：根因是 kk_ui 的导航策略在 firmware/Middlewares/kk_ui/src/kk_ui_nav.c:104-109 直接 `return KK_UI_NOT_ALLOWED` 拦掉「自定义页→自定义页」压栈，而 firmware/App/Src/app_ui.c 的中键处理写的是 `(void)KK_UI_NavigateTo(PAGE_CUSTOM_MOTOR, HAL_GetTick())` —— 返回值被丢掉，所以按键完全没有反应（屏不换、电机也不转），比报错更难查。改法：删掉那 5 行守卫并写明理由（应用确有两级自定义流程；框架已有 leave_custom 回调 + 类型无关弹栈）。验证：make -j8 过（text 86016 / data 228 / bss 14352，只剩已知 RWX 链接警告）、make flash 回读一致 86252 字节 firstDiff=none、J-Link 单次快照 uwTick=29107（在跑）且 kk_ui.transition.active=0 / blocked_keys=0 / keys[].stable=0 且 armed=1（无卡键）/ stack_count=0 / error.code=KK_UI_OK / current.page=10（PAGE_SPLASH，刚烧完重启）。
-未完成：用户上电复测：设置→模块测试→选「电机」按中键应能进入电机测试页（并确认页内左/右 正/反/返回 与编码器读数）。
-下一步：若在模块测试页按键仍无反应，用 J-Link 快照 kk_ui.keys[].pressed_at 与 kk_ui.current.page 区分「按键没进来」还是「页面状态卡住」——kk_ui 是全局符号（0x200010c8，size 0x1a4），可直接读。
-
-> 更早的会话条目已归档到 272 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 273 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
