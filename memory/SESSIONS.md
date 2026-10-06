@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-06 · 固件-验证
+完成：不发车全面回归 19 项，**除两个既有编译变体之外全绿**：固件主机 15/15；`check_static.ps1` 53 文件 0 error；`check_warnings.ps1` 待处理 0；上位机 pytest 176 passed；前端 vitest 默认 194 passed/8 skip；`tsc --noEmit` exit 0；**前端 + mock 后端跑全量 21 文件/202 条 0 skip**（平时跳过的合同/SSR 也在内）；`probe.py` 921600 = 最高可用；`bench.py --attach` 200.9 帧/s、crc/resync/drops 全 0；10 个只读端点全 ok；遥测 405 帧无缺字段/无越界；频率往返 102.0/204.0Hz；**全参数审计 45 项里 44 项 = 固件默认值**（只有 `base_speed` = 屏上设的 7200）；`/api/cal` quality=8 全 ok；网页服务 index 逐字节 == dist、JS/CSS 200、POST-only 端点 GET 回 404；`npm run build` 后 **dist 与源码完全一致**（git 无 diff）。
+未完成：① 两个既有编译变体坏了（MOTOR_BENCH 溢出 4548B、SELFTEST 家族缺 htim6/7），本次不修。② **12V 动力电池现在没接**（遥测 `vbat=321mV`、`ibat=0`）⇒ 要发车实测前必须接上电池。③ 直角相仍待实测（`290c22c` 已烧上并验证、车停着）。
+下一步：用户接上电池并许可后：按双直角判据实测 `290c22c`（路口减速提前生效）—— 第 1 个直角处的丢线时长 + 两角之间那段直线 1.6~4.1s 的 pos 摆幅。
+
+## 2026-10-06 · 固件-验证
 完成：★探针事故已恢复并完成补烧（用户物理拔插 J-Link 后）：`COM27` 回来、设备状态 OK（那些 CM_PROB_PHANTOM 是旧探针 PID_0105/0101 的幽灵项，无害）。重编并重烧 `290c22c`（路口减速修复版）：**118332 字节、回读 firstDiff=none**。重启桥后实测：`connected=True COM27 @921600`、rx 在涨、**crc=0 / resync=0 / drops=0**；`param_crc = 3730`（上次是 29653，差在 `HP_LINE_KD` 默认值 12→36 —— 这正好独立证明车上跑的是新镜像）；重启桥真读 12 项参数全一致。**全程未发任何驱动指令（用户 m：“你不能启动车，可以烧录”）**。
 未完成：上一轮那个“轻微摆”的精确定位仍未动：两个直角之间那段直线里 pos 在 2.0↔5.0 之间以 ~0.5Hz 缓慢摆（±1.5~2.5 格）。下次若继续，先把 `cross`/lost 时间线记进 `_capdrive.py` 日志再调外环。
 下一步：等用户许可后在真车上实测这个修复（路口减速现在在“线还看得见”时就生效）—— 判据用 DECISIONS 最上面那条双直角口径（第 1 个直角处的丢线时长 + 两角之间那段直线 1.6~4.1s 的 pos 摆幅），别再看“末段”（那是第 2 个直角/到时间了）。
@@ -918,9 +923,4 @@
 完成：复核补丁后复测：不设 STM32_PROGRAMMER_CLI、PATH 里没有 SEGGER 的情况下 make flash 仍能找到 CLI（D:\APP\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe）→ CLI 段 NVM size : 128 KBytes + Download verified successfully → J-Link 段 "Skipped. Contents already match" → 回读 81612 字节 firstDiff=none → 退出码 0。中途发现 tools.edit 丢 BOM 导致 .ps1 报错，已补回并复测通过。
 下一步：继续别的目标；编辑 .ps1 后记得补 BOM。
 
-## 2026-09-30
-完成：用户装好 STM32CubeCLT 1.22.0（D:\APP\ST\，CLI 2.23.0）后复核整套链路，全部通过：make size（text 81384/data 220/bss 14264、bin 81612 B）→ make flash（CLI 段 NVM size : 128 KBytes + Download verified successfully；J-Link 段 "Skipped. Contents already match"；savebin 回读 81612 字节 firstDiff=none；退出码 0，日志 .work/flash-clt.log）→ stm32-dev.py rtt（77 行/4 s，横幅 BUILD: Sep 30 2026 12:33:16、CLK 170 MHz、host link init OK、FRAME avg≈674 us、HOST tx=1719 hz=50）→ stm32-dev.py doctor 退出 0。给 tools/flash.ps1 打了三处补丁（CLI 探测改先点已知布局、D:\APP 从递归扫描剔除、CLI 失败只告警继续走 J-Link）。另按用户要求清了 C: 盘：3.14 GB → 23.13 GB 剩余（约 +20 GB），用户随后叫停。
-未完成：C: 清理停在「净 +20 GB」：pagefile 32 GB 固定未改；DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase 被拒 0x80070005（Access is denied，日志 C:\Windows\Logs\DISM\dism.log）未解。CLT 自带的 STMicroelectronics_CMSIS_SVD 未与现用 SVD 比对。
-下一步：等用户下一个目标（当前工具链构建/烧录/观测/doctor 全绿；便捷路径 make flash 与 tools/flash.ps1 都能用）。
-
-> 更早的会话条目已归档到 260 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 261 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
