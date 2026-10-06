@@ -17,6 +17,8 @@
 
 #include "task_run.h"
 #include "task_prog.h"
+#include "app_ui.h"        /* ★g_cfg.beep_marker：「过点蜂鸣」（切状态时响一下）*/
+#include "buzzer.h"        /* ★beep_ms()：蜂鸣器 */
 #include "gyro_control.h"
 #include "host_link.h"     /* HP_TASK_SPEED + host_param_get：启动时的默认基准速度 */
 #include "motion.h"
@@ -65,6 +67,11 @@ static void seq_begin(uint8_t st)
 
     TaskProg_ReadState(s_prog, st, &s);
     s_state = st;
+    /* ★「过点蜂鸣」（用户 m 2026-10-07）：**每次切换状态响一下**。
+     *   这个开关原来属于旧内置流程 `renwu.c`（2026-10-03 转成"上位机编排 + 解释器"那套时，
+     *   蜂鸣器/RGB 那两下被丢了）⇒ 菜单里的开关一直是**孤儿**（声明/默认/NVRAM 都在，没人读）。
+     *   现在接回：切状态就"嘀"一声，按键蜂鸣（beep_key）不受影响。 */
+    if (g_cfg.beep_marker) AppUi_Beep(20);
     if (s.n_enter > 0u) {
         s_phase = 0u;
         s_off   = s.enter_off;

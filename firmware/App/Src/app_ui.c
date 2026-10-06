@@ -724,6 +724,12 @@ static void beep_ms(uint16_t ms)
 }
 
 /* 到点关掉蜂鸣器；由 app_ui_tick() 每轮主循环调用。 */
+/* ★对外蜂鸣接口：「过点蜂鸣」（任务切状态响一下）用，内部还是走 beep_ms + beep_poll */
+void AppUi_Beep(uint16_t ms)
+{
+    beep_ms(ms);
+}
+
 static void beep_poll(void)
 {
     if (s_beep_until != 0U && (int32_t)(HAL_GetTick() - s_beep_until) >= 0) {
