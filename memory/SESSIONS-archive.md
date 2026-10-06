@@ -1,4 +1,11 @@
 ## 2026-09-30
+完成：重新生成 12px 字模修好「屏上汉字静默不画」（用户 m01831 报：菜单里前馈斜率/前馈摩擦是黑的）。做法：先 node -e 扫 firmware/{App/Src,App/Inc,App/Svc/trace_cal.c,App/Src/oled_diag.c,Middlewares/kk_ui/{src,include}} 里所有 "..." 字面量的汉字得到 267 字（存 out/_ui_chars.txt），再 `node tools/font/gen_font.mjs firmware/App/Fonts/kk_font_body.c wenquanyi_9pt 12 kk_font_body $ui` → 459 字形 / 11015 B（旧 346 / 7917）。验证：check_charset 对那 267 字**缺字=0**、对 '前馈斜率前馈摩擦' 缺字=0；`make -j8` text 86036 / data 228 / bss 14352（只剩已知 RWX 警告）；`make flash` → 回读一致 86272 字节 firstDiff=none；J-Link 快照 uwTick=14927（板子在跑）、k_app.route_count=16 / custom_page_count=8 / fonts.body_font=kk_font_body。同时把 tools/font/gen_font.mjs 改成自动保留旧文件的 #include 行。另：查清并写进 固件接口规格.md §3.1 —— ilim 3000 限的是积分累加器（单位「计数/5ms×拍」），经 ki=2 折算最多贡献 ±6000 PWM，既不是编码器量程也不是 7200 输出限幅。
+未完成：make flash 是 mass erase，这次又把 NVRAM 里的菜单设置和黑白阈值标定清回默认了
+下一步：让用户上电进「PID→速度环」看前馈斜率/前馈摩擦两项是否显示出来
+
+> 更早的会话条目已归档到 271 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-30
 完成：模块测试页的「电机」项改成进独立页 `PAGE_CUSTOM_MOTOR`（`firmware/App/Inc/app_ui.h`：16 / `CUSTOM_MOTOR` 7 / `PAGE_COUNT` 16 / `CUSTOM_COUNT` 8；`firmware/App/Src/app_ui.c` 的 `k_routes`、`KK_UI_CustomOnEnter/OnLeave/OnInput/OnTick/OnDraw` 各有分支，新增 `draw_motor_page()`：车体+两条履带+选中侧 XOR 圆角框+右上角「返回」+底行左/右读数）。左/右各自用中键在 停→正→反→停 循环（`MOTOR_TEST_PWM 4000`），**离开页面不停电机**（删掉 `KK_UI_CustomOnLeave()` 里原来那句无条件 `Load(0, 0)`），方向存在 `s_motor_dir[2]` 跨页保留，进页面若速度环使能先 `SpeedControl_Stop()` 再 `motor_test_apply()`。读数口径按用户 m01700 改成「最近 20ms 窗口的计数之和」：新增 `int SpeedControl_WindowCounts(int wheel)`（`firmware/App/Svc/speed_control.c:312` 返回 `s_win_sum[wheel & 1]`；该求和在 `SpeedControl_Task()` 里位于 `if (!s_enabled) return;` **之前**，未使能也有值），满速 ≈100（`SPEED_FULL_COUNTS 25.0f × SPEED_AVG_TICKS 4` = 100），倒转为负；里程表 odometer 方案加过又全删。模块测试列表 `TEST_N 4→3` = 蜂鸣器/电机/返回，电机行尾显示 运行/停。验证：`make -j8` 过（text 82940 / data 228 / bss 14352，只剩已知 RWX 警告）；`make flash` 回读一致 83176 字节 firstDiff=none；J-Link 单次快照读到 `k_app.route_count=16`、`k_app.custom_page_count=8`、`k_app.int_binding_count=16`、`s_motor_sel=0`、`s_motor_dir={0,0}`、`s_motor_show={0,0}`，两次读 `uwTick` 12311→19388 证明板子仍在跑；`python tools/host/tests/run_all.py` 101 项全过；字模核对 `'左轮右轮电机测试返回停正反运行计数'` 只缺「轮」→ 屏上文案只用「左」「右」。`固件接口规格.md` 的测速口径小节已补这一条。
 未完成：屏上布局（车/履带/选中框）只有用户眼睛能验收；副作用：进 设置→保存 擦 Flash 会停 CPU 几十毫秒而 PWM 照转，属已知可接受。
 下一步：让用户上电走一遍：进 设置→模块测试→电机，左右各按 正/反，看轮子方向与屏上读数（4000 占空比约 ±40）；再退到电流页确认两轮还在转。
