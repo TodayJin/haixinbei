@@ -784,7 +784,19 @@ void GyroControl_Task(void)
             /* 允许速度：s_ang_kp·err（= 唯一实测能收敛的形状），顶到 ±s_rate_max；
              * 停车带里 rate_ref 直接给 0（只刹车、不再给方向）——**有前馈时不能这么做**：
              * 循迹时车要一直按外环的转率转，停车带清掉 rate_ref 就等于把前馈吃了。 */
-            float rate_ref = s_ang_kp * err + ff_rate;
+            /* ★2026-10-06 P 项符号保护（**只动 ff≠0 的循迹路；ff==0 的 pivot 逐位不变**）：
+             *   当 P 项与前馈**反号**且 |P|>|ff| 时，rate_ref 会取 err 的符号 = **前馈的反号**
+             *   ⇒ 外环要左转、环却往右推，而且**持续到 err 收敛**（不是自限的过冲反打）。
+             *   残留的两条路径正好踩它：① 重新压线那一拍（保持段攒回的 lead 与新的 ff 反号）；
+             *   ② 扫描掉头那刻（err 钉在 +35，掉头瞬间新 ff 反向）。
+             *   反号门槛只有 |ff|/s_ang_kp = 12°，而 lead 常态就是 12~35° ⇒ 很容易踩上。
+             *   ⇒ 这种拍把 P 项掐掉、只留前馈：**方向始终听外环的**（多 agent 对抗性审查结论）。 */
+            float p_term = s_ang_kp * err;
+            if (ff_rate != 0.0f && ((p_term > 0.0f) != (ff_rate > 0.0f)) &&
+                fabsf(p_term) > fabsf(ff_rate)) {
+                p_term = 0.0f;
+            }
+            float rate_ref = p_term + ff_rate;
             /* 期望角速度上限**分两种工况**：pivot（无前馈）用 s_rate_max，循迹（有前馈，
              * 来自 PID_tracing 的串级）用 s_trace_rate_max。为什么必须分开：
              * corr = s_rate_kp×(rate_ref − v) ⇒ **corr 的上限 = rate_kp × rate_max**。

@@ -70,6 +70,8 @@ void GyroControl_Task(void)  { g_gyro_tasks++; }
 void GyroControl_Stop(void)  { g_gyro_stops++; }
 
 float Yaw = 0.0f;
+float Gyro_Z = 0.0f;   /* ★2026-10-06 补桩：PID_tracing.c 现在直接用陀螺的 Gyro_Z（不再用 d(Yaw)/dt），
+                        * 不补这个桩 t_cascade 会 undefined reference（回归网曾经是断的）。 */
 float NormalizeAngle(float a)
 {
     while (a > 180.0f)  a -= 360.0f;

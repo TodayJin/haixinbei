@@ -215,12 +215,20 @@
  * TRACE_HOLD_MS 半速；**超过 TRACE_HOLD_MS 才进"找线扫描"**（原地对转 + 按转角掉头），再超时保护停车。
  * ★累计转角夹子 TRACE_HOLD_MAX_DEG：用户 m 的例子——"0° 一直往前走、突然一个 180° 的大弯，
  *   这个最多只能拐到 150°" ⇒ 到了就只保持转率、不再推进目标航向（否则会把 180° 也拐过去）。*/
-#define TRACE_HOLD_MS       1000U  /* 保持阶段总时长。★用户 m 实测反馈："他这次拐得挺好的，但是就是容易
-                                    * 找不到这个弯、拐错了，这个概率还很大" ⇒ 转弯本身对了，所以**保持 1000ms
-                                    * 不要缩短**（曾试 300ms 的想法被这条反馈否掉）。剩下的是**丢线时方向选错**
-                                    * —— 见下面 TRACE_HOLD_MAX_DEG 注释里"最后一个已知缺口"那段。 */
+#define TRACE_HOLD_MS       150U   /* 保持阶段总时长。★2026-10-06 从 1000ms 砍到 150ms：
+                                    *   真车日志取证（146 事件、按版本）表明**“保持 = 继承丢线前那一拍的转向需求”
+                                    *   正是新版方向判错的主要来源** —— 旧版 sx（≈120ms 就交给确定性扫描）
+                                    *   真反向 0/13，而带 1000ms 保持的 hold/comp/dir 是 16.7%/18.8%/20.8%，
+                                    *   且 14 次真反向里 12 次“丢线第一拍 rate_ref 已是负的”（方向判错）。
+                                    *   保持还把长丢线占比从 7% 抬到 21% ⇒ 错就错满一秒。
+                                    *   ⇒ 只留很短一段（150ms），马上让扫描接管方向。*/
 #define TRACE_HOLD_FULL_MS   250U  /* 保持阶段里"全速"的那一段 */
 #define TRACE_HOLD_MAX_DEG  150.0f /* 保持阶段累计最多转这么多度 */
+
+/* ★2026-10-06 方向判据的补偿常数（见下面"最后一个已知缺口"整段）。
+ * 量纲 = 格/(°·s)：探头杆在旋转中心前方 d≈60mm、8 路跨 ~60mm ⇒ ~8.6mm/格
+ * ⇒ 力臂 ≈ (60/8.6)×(π/180) ≈ **0.12**。车左转时线相对杆往右扫，所以要从 ė 里**减掉** ω×它。 */
+#define TRACE_SENSOR_LEVER  0.19f
 /* ★2026-10-06 最后一个已知缺口：**丢线那一刻的方向选错**（用户 m："容易找不到这个弯、拐错了，
  *   这个概率还很大"）。现在方向取 `s_err_dir`（err 的短 EMA）= "**线最后偏在哪一侧**"，可是在直角处
  *   这一条**不等于转弯方向**：
@@ -259,6 +267,8 @@ static int8_t  s_sweep_dir       = 0;   /* 找线扫描方向 ±1；0 = 没在�
 static float   s_sweep_yaw0      = 0.0f;/* 本次扫描方向起点的偏航角 —— 掉头按**累计转角**判，不按时间 */
 static float   s_hold_rate       = 0.0f;/* 丢线瞬间"上一拍"的转向需求（°/s，>0=向左）—— 保持阶段用它 */
 static float   s_hold_yaw0       = 0.0f;/* 丢线瞬间的偏航角（TRACE_HOLD_MAX_DEG 的参照） */
+static float   s_yaw_rate        = 0.0f;/* 车自己的偏航角速度（°/s，直接用 Gyro_Z）—— comp 补偿要用 */
+static float   s_hold_dir        = 0.0f;/* ★丢线那一拍**锁死**的转向符号（−1=向右 / +1=向左）*/
 static uint8_t s_hold_on         = 0U;  /* 是否在"保持阶段"（丢线后先照上一拍走，见 TRACE_HOLD_MS） */
 static uint32_t s_see_since      = 0;   /* 连续看见线的起点；0 = 没在连续看见（用于 TRACE_REACQ_MS） */
 static uint32_t s_lost_recent_at = 0;   /* 最近一次"丢线"的时刻（用于 TRACE_SLOW_AFTER_LOST_MS） */
@@ -650,6 +660,14 @@ void motor_tracing_cascade(int base_speed)
 
     err = data - s_setpoint;                 /* >0：线在车的右侧 */
 
+    /* ★2026-10-06 偏航角速度：**必须用陀螺直接给的 `Gyro_Z`，不能用 d(Yaw)/dt**。
+     *   审查结论（见 DECISIONS 最新条目）：`Yaw` 名义 **10ms 才更新一次**（`gyro_control.c:309` 的注释
+     *   自己写着"差分出来在相邻两拍之间交替出现 0 和两倍值"），而本函数 **5ms 一拍** ⇒ 用差分算出来的
+     *   `s_yaw_rate` 会在 **0 / 2ω 之间逐拍跳** ⇒ `comp` 里的补偿项**约 50% 的拍子读到 0** ⇒ 方向判据
+     *   退化成**冻死的 `s_pos_rate`**（进弯前的旧趋势）⇒ **偶发反向转弯**（用户 m："明明是左转弯，
+     *   它有时候就是会右转弯"）。Gyro_Z 是模块直接给的角速度，没有这个交替。 */
+    s_yaw_rate = Gyro_Z;
+
     if (all_sensors_lost) {
         /* 丢线期间有效帧不再产生（trace_pos_frames 不前进），重新压线那一帧 data 会从冻住的
          * 旧值跳回来 ⇒ 标一下，让微分项重新起步，别把这个跳变当成"重心在飞"。*/
@@ -744,9 +762,24 @@ void motor_tracing_cascade(int base_speed)
         uint32_t lost_ms = (uint32_t)(HAL_GetTick() - s_lost_since);
 
         s_see_since = 0U;   /* 丢线：连续看见的计时作废（要重新连续看见才算出弯） */
-        if (!s_hold_on) {   /* ★刚丢线：记下"上一拍"和当时的航向（保持阶段要用，见 TRACE_HOLD_MS） */
+        /* ★方向判据：comp = 去掉"车自己转"那一份之后的横向速度（格/s）。**只在丢线那一拍算一次**，
+         *   之后用锁死的 `s_hold_dir`（见上面 `if (!s_hold_on)` 那段与 Gyro_Z 那段注释）。 */
+        float comp = s_pos_rate - s_yaw_rate * TRACE_SENSOR_LEVER;
+        if (!s_hold_on) {   /* ★刚丢线：锁方向、消掉存量领先、记下"上一拍"和当时的航向 */
             s_hold_on   = 1U;
             s_hold_yaw0 = Yaw;
+            /* ★方向判据**退回 `s_err_dir`**（err 的短 EMA = "线最后偏在哪一侧"）：
+             *   真车日志取证（146 个丢线事件、按版本分组）：用 `s_err_dir` 的 sx 版真反向 **0/13**
+             *   （它 `rate_ref<0` 只占 8%），而用 `comp` 的 dir/comp 版 **20.8% / 18.8%**，
+             *   且最大那次真反向 −163° 就出在 comp 版（丢线那拍 comp=+0.20 几乎是 0，平局被随手
+             *   判成"右"，然后钉死 1.8s）。comp 的物理量没错（直线段标定 −ė/ω 中位 −0.100，与
+             *   TRACE_SENSOR_LEVER=0.12 同量级同号），**错的是拿一个零点附近的噪声量做决定**。 */
+            s_hold_dir  = (s_err_dir >= 0.0f) ? -1.0f : 1.0f;
+            /* ★**把目标航向消零**（= 当前车头）：环里 `rate_ref = ang_kp×err + ff`，若目标里留着
+             *   进弯前最多 aim_max=35° 的**存量领先**，而它与 ff 反号且 |err|>|ff|/ang_kp（ff=120 时
+             *   只要 12°），rate_ref 就会取 err 的符号 = **前馈的反号** ⇒ 外环要左、环却往右推，
+             *   而且**能持续**到 err 收敛 —— 这正是"明明该左转却右转"（多 agent 审查结论）。 */
+            GyroControl_SetTargetAngle(NormalizeAngle(Yaw));
         }
 
         if (lost_ms > TRACE_LOST_STOP_MS) {
@@ -798,7 +831,7 @@ void motor_tracing_cascade(int base_speed)
                  *   ⇒ 看起来就是方向反了。所以：
                  *     · **方向**取抗噪的那个 —— `s_err_dir`（err 的短 EMA，不含 D 项）；
                  *     · **幅度**取保持下来的 |rate_cmd|。 */
-                float hold = ((s_err_dir >= 0.0f) ? -1.0f : 1.0f) * fabsf(s_hold_rate);
+                float hold = s_hold_dir * fabsf(s_hold_rate);
                 if (fabsf(NormalizeAngle(Yaw - s_hold_yaw0)) < TRACE_HOLD_MAX_DEG) {
                     GyroControl_AimRelative(hold * TRACE_CASCADE_DT_S);
                 }
@@ -811,8 +844,7 @@ void motor_tracing_cascade(int base_speed)
                 /* ★确定性来回扫（见 TRACE_SWEEP_DEG 注释）：第一猜 = "线最后偏在哪一侧"（= 那个方向的
                  * 短 EMA，抗噪）；**转够 TRACE_SWEEP_DEG 才掉头**（用陀螺实际转角判，不按时间）。 */
                 if (s_sweep_dir == 0) {
-                    s_sweep_dir = (s_search_dir != 0) ? s_search_dir
-                                                      : ((s_err_dir >= 0.0f) ? 1 : -1);
+                    s_sweep_dir = (s_hold_dir < 0.0f) ? 1 : -1;   /* 沿用丢线那一刻锁死的方向 */
                     s_sweep_yaw0 = Yaw;
                 } else if (fabsf(NormalizeAngle(Yaw - s_sweep_yaw0)) >= TRACE_SWEEP_DEG) {
                     s_sweep_dir = (int8_t)(-s_sweep_dir);                        /* 转够了还找不到 ⇒ 掉头 */
@@ -869,6 +901,8 @@ void motor_tracing_reset_cascade(void)
     s_hold_on       = 0U;     /* 保持阶段：下一趟重新开始 */
     s_hold_rate     = 0.0f;
     s_hold_yaw0     = 0.0f;
+    s_hold_dir      = 0.0f;
+    s_yaw_rate      = 0.0f;
     last_pid_output = 0.0f;
     s_lost_since    = 0U;
     s_lost_stop     = 0U;
