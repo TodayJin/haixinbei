@@ -275,6 +275,8 @@ int main(void)
         w_line((i & 1) ? 4 : 5, 200.0f);
         motor_tracing_cascade(1200);
     }
+    host_tick_add(250u);                                     /* ★连续看见线 ≥ REACQ_MS ⇒ 清掉方向锁存 */
+    motor_tracing_cascade(1200);                             /* （2026-10-06 起方向是锁存的，换场景要清） */
     for (int i = 0; i < 8; i++) g_w[i] = 200.0f;             /* 丢线 */
     for (int i = 0; i < 4; i++) motor_tracing_cascade(1200);
     host_tick_add(200u);
@@ -324,7 +326,7 @@ int main(void)
     motor_tracing_cascade(1200);
     CHECK_EQ_I(tracing_lost(), 1);
     settle_base(1200);
-    CHECK_EQ_I(g_gyro_l, 1200);
+    CHECK_EQ_I(g_gyro_l, 600);                               /* 刚丢线 ⇒ 压到 1/2（200ms 窗口） */
     host_tick_add(2600u);
     motor_tracing_cascade(1200);
     CHECK_EQ_I(host_load_left(), 0);
@@ -352,6 +354,7 @@ int main(void)
     motor_tracing_cascade(1200);
     CHECK_EQ_I(tracing_lost(), 0);
     CHECK(g_pid_resets >= 1);                                /* 内环积分清零 */
+    host_tick_add(500u);                                     /* 过掉"刚丢过线压速"的 400ms 窗口 */
     settle_base(1200);                                       /* 基准斜坡收敛后再断言 */
     CHECK_EQ_I(g_gyro_l, 1200);                              /* 速度回来 */
     CHECK_EQ_I(g_gyro_r, 1200);
@@ -373,10 +376,68 @@ int main(void)
     for (int i = 0; i < 8; i++) g_w[i] = 200.0f;             /* 均匀一片 = 丢线 */
     settle_base(1200);
     CHECK_EQ_I(tracing_lost(), 1);
-    CHECK_EQ_I(g_gyro_l, 1200);                              /* 刚丢线（还没到 SEARCH_DELAY）：不改基准 */
+    CHECK_EQ_I(g_gyro_l, 600);                               /* 刚丢线 ⇒ 压到 1/2（200ms 窗口） */
     host_tick_add(200u);
     settle_base(1200);
     CHECK_EQ_I(g_gyro_l, 0);                                 /* 开始找线 ⇒ 基准清零（pivot 工况） */
+
+    /* §14 ★找线方向 = "确定性来回扫"（2026-10-06 改）：朝一边扫 400ms 就**掉头**，不再赌到底；
+     *     而且"零星看见一帧"不算找回来 ⇒ 方向必须锁住（不让它被那一帧翻向）。
+     *     实测背景：8s×3 趟里 5 次"丢线后转向"有 4 次与"线往哪边跑"相反，错时幅度
+     *     −152.6°/−143.2°/+79.9° ⇒ 一猜反就整趟冲出赛道（用户原话"明明是左转，他右转"）。 */
+    scene();
+    for (int i = 0; i < 8; i++) g_w[i] = 0.0f;
+    g_w[2] = 200.0f;                                         /* 第 3 路压线 ⇒ err<0 = 线在左侧 ⇒ 需求向左 */
+    settle_base(1200);
+    host_tick_add(250u);                                     /* 清掉上一节遗留的扫描方向锁存 */
+    motor_tracing_cascade(1200);
+    CHECK_EQ_I(tracing_lost(), 0);
+    for (int i = 0; i < 8; i++) g_w[i] = 200.0f;             /* 丢线（均匀一片） */
+    motor_tracing_cascade(1200);                             /* ★先在当前时钟上把"丢线"侦测到 */
+    host_tick_add(200u);                                     /* 再推进时钟，过 TRACE_SEARCH_DELAY_MS(120) */
+    settle_base(1200);
+    CHECK_EQ_I(tracing_lost(), 1);
+    CHECK(g_ff_rate > 0.1f);                                 /* 第一猜：丢线前在左转 ⇒ 先继续向左扫 */
+    {
+        float d1 = g_ff_rate;
+        Yaw += 120.0f;                                       /* ★掉头判据是**实际转角**(110°)：转够了才掉头 */
+        settle_base(1200);
+        CHECK(g_ff_rate * d1 < 0.0f);                        /* 扫不到 ⇒ **掉头**（确定性，不靠猜） */
+
+        /* 零星看见一帧不算"找回来"：这一帧的线在**左侧**，若被采纳会把扫描翻回左边
+         *（与掉头后的方向相反）⇒ 能分辨出来。 */
+        for (int i = 0; i < 8; i++) g_w[i] = 0.0f;
+        g_w[1] = 200.0f;                                     /* 线在左侧 ⇒ 会要求往左 */
+        motor_tracing_cascade(1200);
+        CHECK_EQ_I(tracing_lost(), 0);
+        for (int i = 0; i < 8; i++) g_w[i] = 200.0f;         /* 又丢 */
+        motor_tracing_cascade(1200);                         /* 同样：先侦测到，再推进时钟 */
+        host_tick_add(300u);                                 /* 过 SEARCH_DELAY(120) 但还没到 600 ⇒ 找线段在跑 */
+        settle_base(1200);
+        CHECK_EQ_I(tracing_lost(), 1);
+        CHECK(g_ff_rate * d1 < 0.0f);                        /* 仍是掉头后那一边 ⇒ 没被那一帧翻回去 ✓ */
+    }
+
+    /* §15 ★找线/承诺期间要压速（修"全速冲过弯口出界"）—— 但**不用固定时长**：
+     *     实测固定 400ms 会把出弯也压住，低速削弱横向纠偏（∝ v×ω）⇒ 用户听出"拐完还震荡两下"。
+     *     现在的判据是 `s_sweep_dir != 0`（= 还没真回到线上）：一连续看见线 ≥ REACQ_MS 就恢复全速。 */
+    scene();
+    g_w[3] = 200.0f; g_w[4] = 200.0f;                        /* 在线上 */
+    settle_base(1200);
+    for (int i = 0; i < 8; i++) g_w[i] = 200.0f;             /* 丢线（均匀一片） */
+    motor_tracing_cascade(1200);                             /* 侦测到丢线 */
+    host_tick_add(200u);                                     /* 过 SEARCH_DELAY ⇒ 找线开始、方向锁存 */
+    motor_tracing_cascade(1200);
+    CHECK_EQ_I(tracing_lost(), 1);
+    for (int i = 0; i < 8; i++) g_w[i] = 0.0f;
+    g_w[3] = 200.0f; g_w[4] = 200.0f;                        /* 弯中瞥见线一帧 */
+    host_tick_add(100u);
+    settle_base(1200);
+    CHECK_EQ_I(tracing_lost(), 0);
+    CHECK(g_gyro_l <= 400);                                  /* 还在承诺期 ⇒ 压到 1/3 ✓ */
+    host_tick_add(300u);                                     /* 连续看见线 > REACQ_MS ⇒ 解除承诺 */
+    settle_base(1200);
+    CHECK_EQ_I(g_gyro_l, 1200);                              /* 真回到线上就立刻恢复全速 ✓ */
 
     /* §11 上位机可以点改串级增益（参数 517/518），越界要被夹住 */
     scene();

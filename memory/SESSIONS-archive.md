@@ -1,4 +1,18 @@
 ## 2026-09-30
+完成：模块测试页的「电机」项改成进独立页 `PAGE_CUSTOM_MOTOR`（`firmware/App/Inc/app_ui.h`：16 / `CUSTOM_MOTOR` 7 / `PAGE_COUNT` 16 / `CUSTOM_COUNT` 8；`firmware/App/Src/app_ui.c` 的 `k_routes`、`KK_UI_CustomOnEnter/OnLeave/OnInput/OnTick/OnDraw` 各有分支，新增 `draw_motor_page()`：车体+两条履带+选中侧 XOR 圆角框+右上角「返回」+底行左/右读数）。左/右各自用中键在 停→正→反→停 循环（`MOTOR_TEST_PWM 4000`），**离开页面不停电机**（删掉 `KK_UI_CustomOnLeave()` 里原来那句无条件 `Load(0, 0)`），方向存在 `s_motor_dir[2]` 跨页保留，进页面若速度环使能先 `SpeedControl_Stop()` 再 `motor_test_apply()`。读数口径按用户 m01700 改成「最近 20ms 窗口的计数之和」：新增 `int SpeedControl_WindowCounts(int wheel)`（`firmware/App/Svc/speed_control.c:312` 返回 `s_win_sum[wheel & 1]`；该求和在 `SpeedControl_Task()` 里位于 `if (!s_enabled) return;` **之前**，未使能也有值），满速 ≈100（`SPEED_FULL_COUNTS 25.0f × SPEED_AVG_TICKS 4` = 100），倒转为负；里程表 odometer 方案加过又全删。模块测试列表 `TEST_N 4→3` = 蜂鸣器/电机/返回，电机行尾显示 运行/停。验证：`make -j8` 过（text 82940 / data 228 / bss 14352，只剩已知 RWX 警告）；`make flash` 回读一致 83176 字节 firstDiff=none；J-Link 单次快照读到 `k_app.route_count=16`、`k_app.custom_page_count=8`、`k_app.int_binding_count=16`、`s_motor_sel=0`、`s_motor_dir={0,0}`、`s_motor_show={0,0}`，两次读 `uwTick` 12311→19388 证明板子仍在跑；`python tools/host/tests/run_all.py` 101 项全过；字模核对 `'左轮右轮电机测试返回停正反运行计数'` 只缺「轮」→ 屏上文案只用「左」「右」。`固件接口规格.md` 的测速口径小节已补这一条。
+未完成：屏上布局（车/履带/选中框）只有用户眼睛能验收；副作用：进 设置→保存 擦 Flash 会停 CPU 几十毫秒而 PWM 照转，属已知可接受。
+下一步：让用户上电走一遍：进 设置→模块测试→电机，左右各按 正/反，看轮子方向与屏上读数（4000 占空比约 ±40）；再退到电流页确认两轮还在转。
+
+> 更早的会话条目已归档到 270 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-30
+完成：回答了「菜单里 PID 速度环还是旧值」：前馈常数以前只是 firmware/App/Svc/speed_control.c 里的 static 变量（菜单和参数表里从来没有它们），菜单显示的 kp/ki/kd/限幅 我从未改过，所以当然是旧值。已把前馈做成参数：① firmware/App/Svc/host_link.h 加 HP_SPEED_FF_SLOPE 0x0605（默认 0.662，0..2）+ HP_SPEED_FF_FRIC 0x0606（默认 2327，0..5000），默认值做成 #ifndef 宏以便编译期 A/B；host_link.c 的 SPECS[] 加这两项（顺序紧跟 0x0604，指纹从 n=27/0x661D 变成 n=29/0x3886）。② speed_control.c 删掉 s_ff_slope/s_ff_fric，speed_pi_step() 新增 ff_slope/ff_fric 形参、由 SpeedControl_Task() 每拍从参数表取，Set/GetFeedforward 改走 host_param_set_local/host_param_get。③ app_ui.c 的 k_pid_speed_items 加「前馈斜率」（int binding 下标 14，decimals=3，所以 662 显示成 0.662）/「前馈摩擦」（下标 15），k_int_bindings 从 14 项变 16 项，push_pid_params/state_pull 都带上这两项。④ nvram.c payload 末尾追加这两个字段、version 1→2、v1 记录按 length 前缀迁移。验证（都是真跑过的）：make -j8 过（text 82112/data 228/bss 14344）；out/_param_crc_check.py 复算固件 SPECS 与上位机 protocol.PARAMS 逐项相同、crc16 都是 0x3886；python tools/host/tests/run_all.py 101 项全过；make flash 回读一致 82348 字节 firstDiff=none；用 stm32-dev.py read 做单次现场快照读到 g_cfg.speed_ff_slope_x1000=662、g_cfg.speed_ff_fric=2327、s_param[10]=0.662、s_param[11]=2327、k_app.int_binding_count=16 —— 即菜单里那两项确实指向控制环真正在读的那份值。
+未完成：两条新发现的坑：① make flash（tools/flash.ps1）是 CubeProgrammer **mass erase** + 编程，而 nvram 用的是 Flash 最后一页，所以**每次烧录后菜单设置和黑白标定都回到默认**（n 迁移只在非整片擦除的烧录路径下才真正被用到）——刚标定完别重烧。② firmware/App/Src/app_ui.c 的 k_app.int_binding_count / bool_binding_count 原来是字面量（14 / 4），加绑定忘了改就会让菜单项索引越界、编辑框打不开，已改成 APP_UI_ITEM_COUNT() 宏。
+下一步：请用户上菜单「PID→速度环」肉眼确认多出「前馈斜率 0.662 / 前馈摩擦 2327」两项，并当场改一个数看电机反应（1.5s 防抖后会自动存 Flash 最后一页）。
+
+> 更早的会话条目已归档到 269 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-30
 完成：速度环精度验收通过（口径：高速段 ≤2%，低速段不做要求）。生产默认前馈 `SPEED_FF_SLOPE 0.662` / `SPEED_FF_FRIC 2327` + kp 20 / ki 2.0 / ilim 3000，8s 长窗口 n=1400 拍、每点复跑一遍，实测最大偏差：1500 −1.7%；2000 0.9%；3000 0.8%；4000 0.3%；5000 0.1%；（低速）1250 +5.3%；1000 −8.4%。两遍复跑数字几乎逐位重现。依据 `out/bench_ff6.log`、`out/bench_ff9.log`，表格已写进 `固件接口规格.md` §3.1。正式固件已 `make flash` 烧回：`build-app/haixin-app.bin` 81868 B、回读一致。
 未完成：低速段（<1500）仍是静摩擦粘滑极限环，−8%~+5%，靠调参消不掉，靠上层限速规避。
 下一步：实车确认外环（角度环/循迹环）相位裕度；以及把 `SpeedControl_SetFeedforward()` 接到上位机参数表，方便换硬件后重标。

@@ -192,6 +192,44 @@
  * 副作用是发车也变成软启动（基准从 0 爬上去），与速度环自带的软启动叠加，符合预期。 */
 #define TRACE_BASE_TAU_S   0.10f   /* 基准一阶时间常数（s）：7000→0 约 0.3s 走到 95% */
 
+/* ★2026-10-06 找线 = **方向锁存 + 确定性来回扫**，掉头判据用**实际转角**（不是时间）。
+ *
+ * 为什么不能"猜一个方向赌到底"：实测 8s×3 趟逐段分析，5 次"丢线后转向"里 **4 次与"线往哪边跑"相反**，
+ * 错时幅度 −152.6°/−143.2°/+79.9° ⇒ 一猜反就整趟冲出赛道（用户原话"明明是左转，他右转"）。
+ * 为什么必须锁存：弯中车会反复瞥见原来那条腿 ⇒ 不锁的话方向被翻来翻去（实测 corr 换向 18 次/趟）。
+ * 为什么必须用**转角**而不是时间：原地对转实测只能到 ~121°/s（差速 6000），600ms 只等于 73°，
+ * **根本够不到 90° 外那条线** ⇒ 永远在 ±73° 里来回摆、线一直在全白区。用户 m 的原话正是这个：
+ * 「好几次过弯还没完全转到线上…全是白的，然后它就开始扫线，还是扫不到 —— 转弯可以设成 100°」。
+ * ⇒ 转够 TRACE_SWEEP_DEG 才掉头：不受电机/电压/摩擦快慢影响。110° 略大于 90°，留一点余量。
+ * 第一猜仍用"线最后偏在哪一侧"（短 EMA，抗噪 —— §4g 钉的就是这件事；**不要**用"丢线前的需求"：
+ * 那个量被 D 项主宰 ——36×25 格/s = 900 而 P 项才 30——它自己就是抖的，会把方向带歪）。*/
+#define TRACE_SWEEP_DEG  110.0f  /* 掉头判据：累计转角（°），见上 */
+#define TRACE_REACQ_MS   200U    /* 连续看见线多久才算"真的找回来了" */
+#define TRACE_SWEEP_MS   600U    /* 【已不用】旧的按时间掉头；保留只为说明为什么弃用 */
+
+/* ★2026-10-06 丢线后的**保持阶段**（用户 m 定案，方案 B）：丢线以后先**照上一拍走** —— 不原地对转、
+ * 不马上扫线，而是**保持丢线前的转向需求并继续推进目标航向** ⇒ 车**前进着持续转**。
+ * 为什么：原地对转时探头只在原地画个小圈，线稍远就永远进不了视场（用户实测"全是白的、扫不到"）；
+ * 而"前进着转"会让探头**扫过一段弧线**，自然压到新那条线（用户原话：「它还是前进着左转，所以这样
+ * 就容易找到线」）。速度时间线：前 TRACE_HOLD_FULL_MS 全速（保住动量和转弯半径），之后到
+ * TRACE_HOLD_MS 半速；**超过 TRACE_HOLD_MS 才进"找线扫描"**（原地对转 + 按转角掉头），再超时保护停车。
+ * ★累计转角夹子 TRACE_HOLD_MAX_DEG：用户 m 的例子——"0° 一直往前走、突然一个 180° 的大弯，
+ *   这个最多只能拐到 150°" ⇒ 到了就只保持转率、不再推进目标航向（否则会把 180° 也拐过去）。*/
+#define TRACE_HOLD_MS       1000U  /* 保持阶段总时长 */
+#define TRACE_HOLD_FULL_MS   250U  /* 保持阶段里"全速"的那一段 */
+#define TRACE_HOLD_MAX_DEG  150.0f /* 保持阶段累计最多转这么多度 */
+
+/* ★2026-10-06 "找线后压速"（实测：进弯 350mm/s 会冲过弯口出界）：只要**刚丢过线**，
+ *   接下来 TRACE_SLOW_AFTER_LOST_MS 内基准减半 —— 这样即使弯中零星瞥见线，也是慢慢把车头带回，
+ *   不会全速冲过弯口。（真正找线那段仍是 base=0 原地对转，不受影响。）
+ *   ★两个都试过的坏写法，别再走：
+ *     ① **不压速** ⇒ 进弯 350mm/s、线瞬到探头最右、猛打也拉不住 ⇒ 整趟丢线 2.6s 停在线外；
+ *     ② **绑到 `s_sweep_dir`（锁存）压 1/3** ⇒ 丢线率反而从 19~22% 涨到 34.7%/45.0%：
+ *        压速 ⇒ 车慢 ⇒ **横向纠偏 ∝ v×ω 跟着掉** ⇒ 回不了线 ⇒ 又丢线 ⇒ 压速还在 = **正反馈**
+ *        （而弯中"零星看见"根本凑不满 REACQ 的 200ms ⇒ 锁存一直不解除）。
+ *     ⇒ 所以必须**按计时**、且**温和**（当前 200ms / 减半）。 */
+#define TRACE_SLOW_AFTER_LOST_MS 200U
+
 #define TRACE_EDGE_SAT       0.9f    /* 最外一路黑度 ≥ 0.9×最黑 = 黑带被阵边界切掉（外推的唯一入口）*/
 #define TRACE_BARW_INIT      3.0f    /* 黑带宽度初值（格=传感器间距），前面几帧就会自己收敛 */
 #define TRACE_BARW_TAU       0.02f   /* 宽度跟踪系数（50Hz -> 约 1s 时间常数）*/
@@ -205,6 +243,13 @@ static uint8_t s_lost_stop       = 0;   /* 丢线停车已经执行过（每次�
 static int8_t  s_search_dir      = 0;   /* 最后一次看到线时它偏在哪一侧：+1 右 / -1 左（丢线找线用）*/
 static float   s_err_dir         = 0.0f;/* err 的短 EMA（τ≈80ms@50Hz）：丢线找线判方向用，见 TRACE_SEARCH_DIR_LPF */
 static float   s_base_f          = 0.0f;/* 基准速度的一阶平滑值（PWM 刻度），见 TRACE_BASE_TAU_S */
+static int8_t  s_sweep_dir       = 0;   /* 找线扫描方向 ±1；0 = 没在扫（见 TRACE_SWEEP_DEG 注释） */
+static float   s_sweep_yaw0      = 0.0f;/* 本次扫描方向起点的偏航角 —— 掉头按**累计转角**判，不按时间 */
+static float   s_hold_rate       = 0.0f;/* 丢线瞬间"上一拍"的转向需求（°/s，>0=向左）—— 保持阶段用它 */
+static float   s_hold_yaw0       = 0.0f;/* 丢线瞬间的偏航角（TRACE_HOLD_MAX_DEG 的参照） */
+static uint8_t s_hold_on         = 0U;  /* 是否在"保持阶段"（丢线后先照上一拍走，见 TRACE_HOLD_MS） */
+static uint32_t s_see_since      = 0;   /* 连续看见线的起点；0 = 没在连续看见（用于 TRACE_REACQ_MS） */
+static uint32_t s_lost_recent_at = 0;   /* 最近一次"丢线"的时刻（用于 TRACE_SLOW_AFTER_LOST_MS） */
 static float   last_pid_output  = 0.0f;
 
 /* 外环微分项（阻尼）的状态：重心变化率 ė（格/s），只在新的灰度帧上更新 */
@@ -657,11 +702,23 @@ void motor_tracing_cascade(int base_speed)
         d = rate_cmd * TRACE_CASCADE_DT_S;
         GyroControl_AimRelative(d);
 
-        /* 记住"线持续偏在哪一侧"，丢线找线要用（见 TRACE_SEARCH_DIR_LPF 的注释：
-         * 原来直接取最后一帧符号、死区 0.05 格，方向会被重心噪声随机翻向）。 */
+        /* 记住"线持续偏在哪一侧"（现在只当起扫的兜底用）。 */
         s_err_dir += (err - s_err_dir) * TRACE_SEARCH_DIR_LPF;
         if (s_err_dir >  TRACE_SEARCH_DIR_DEAD) s_search_dir =  1;
         if (s_err_dir < -TRACE_SEARCH_DIR_DEAD) s_search_dir = -1;
+
+        /* ★2026-10-06 记下"上一拍"的转向需求（丢线后的保持阶段要用，见 TRACE_HOLD_MS）；
+         *   并且看到线 ⇒ 保持阶段结束。 */
+        s_hold_rate = rate_cmd;
+        s_hold_on   = 0U;
+
+        /* ★2026-10-06 一个细节：**连续**看见线够久才算真的找回来，才允许清掉扫描方向
+         * （零星看见不算 —— 直角处车会反复瞥见原来那条腿，正是它把方向翻来翻去）。 */
+        if (s_see_since == 0U) {
+            s_see_since = HAL_GetTick();
+        } else if ((uint32_t)(HAL_GetTick() - s_see_since) >= TRACE_REACQ_MS) {
+            s_sweep_dir = 0;
+        }
     }
 
     /* ★2026-10-06 路口减速：**不管丢没丢线**。
@@ -673,6 +730,12 @@ void motor_tracing_cascade(int base_speed)
 
     if (all_sensors_lost && s_lost_since != 0U) {
         uint32_t lost_ms = (uint32_t)(HAL_GetTick() - s_lost_since);
+
+        s_see_since = 0U;   /* 丢线：连续看见的计时作废（要重新连续看见才算出弯） */
+        if (!s_hold_on) {   /* ★刚丢线：记下"上一拍"和当时的航向（保持阶段要用，见 TRACE_HOLD_MS） */
+            s_hold_on   = 1U;
+            s_hold_yaw0 = Yaw;
+        }
 
         if (lost_ms > TRACE_LOST_STOP_MS) {
             /* 丢线丢到这个份上（传感器死了/车被拿走/真的完全没线）：停车，别再闷头直冲
@@ -695,20 +758,49 @@ void motor_tracing_cascade(int base_speed)
          *      = **原地对转**，正好是已经调好的 pivot 工况（base=0 ⇒ cap = corr_limit = 3000、
          *      差速 6000、实测 ~121°/s）。既拿到了"内侧轮变负"，又不用放着大 cap 去污染
          *      看见线时的环路；`corr_ref` 也就可以退回 3000。 */
-        if (lost_ms > TRACE_SEARCH_DELAY_MS) base_speed = 0;  /* 开始找线 ⇒ 原地对转（pivot 工况） */
+        /* ★2026-10-06 速度时间线（用户 m 定）：丢线后先"照上一拍走" —— 前 TRACE_HOLD_FULL_MS 全速
+         *   （保住动量和转弯半径），之后到 TRACE_HOLD_MS 半速；**超过 TRACE_HOLD_MS 才进找线扫描**，
+         *   那时才把基准打成 0（原地对转，pivot 工况；见下面那段"速度策略"的历史注释）。 */
+        if (lost_ms < TRACE_HOLD_FULL_MS) {
+            /* 全速：保持上一拍的动量 */
+        } else if (lost_ms <= TRACE_HOLD_MS) {
+            base_speed = base_speed / 2;    /* 半速：还前进着转，但更容易被拉回来 */
+        } else {
+            base_speed = 0;                 /* 进找线扫描 ⇒ 原地对转（pivot 工况） */
+        }
 
         /* 找线：还在丢就朝"线最后偏在哪一侧"持续转（见 TRACE_SEARCH_DELAY_MS 注释）。
          * 直角弯就靠这一下拐过去 —— 目标航向冻住的话车会直着冲出赛道。
          * ★方向不再只靠 s_search_dir：它可能整趟都没被置过（车一直很正）⇒ 退化成按
          * err 短 EMA 的符号挑一边，总比"不动等着被停车"强。 */
         {
-            int8_t dir = s_search_dir;
-            if (dir == 0) dir = (s_err_dir >= 0.0f) ? 1 : -1;
-
-            if (lost_ms > TRACE_SEARCH_DELAY_MS) {
+            if (lost_ms <= TRACE_HOLD_MS) {
+                /* ★"照上一拍走"（用户 m 的方案 B）：保持丢线前的转向需求，并**继续推进目标航向**
+                 *   ⇒ 车**前进着持续转**（而不是原地对转）。这样探头会扫过一段**弧线**，比原地画小圈
+                 *   更容易压到新那条线（用户原话：「它还是前进着左转，所以这样就容易找到线」）。
+                 *   ★累计转角**最多 TRACE_HOLD_MAX_DEG**：用户 m 的例子——"0° 一直往前走、突然一个
+                 *   180° 的大弯，最多只能拐到 150°" ⇒ 到了就只保持转率、不再推进目标航向。*/
+                if (fabsf(NormalizeAngle(Yaw - s_hold_yaw0)) < TRACE_HOLD_MAX_DEG) {
+                    GyroControl_AimRelative(s_hold_rate * TRACE_CASCADE_DT_S);
+                }
+                GyroControl_SetTraceRate(s_hold_rate);
+            } else {
                 float rate  = TRACE_SEARCH_RATE;
                 float rate_max = ((s_trace_rate_max > 0.0f) ? s_trace_rate_max : TRACE_RATE_MAX_DEFAULT);
-                float rate_cmd = -(float)dir * rate;  /* >0 = 向左 */
+                float rate_cmd;
+
+                /* ★确定性来回扫（见 TRACE_SWEEP_DEG 注释）：第一猜 = "线最后偏在哪一侧"（= 那个方向的
+                 * 短 EMA，抗噪）；**转够 TRACE_SWEEP_DEG 才掉头**（用陀螺实际转角判，不按时间）。 */
+                if (s_sweep_dir == 0) {
+                    s_sweep_dir = (s_search_dir != 0) ? s_search_dir
+                                                      : ((s_err_dir >= 0.0f) ? 1 : -1);
+                    s_sweep_yaw0 = Yaw;
+                } else if (fabsf(NormalizeAngle(Yaw - s_sweep_yaw0)) >= TRACE_SWEEP_DEG) {
+                    s_sweep_dir = (int8_t)(-s_sweep_dir);                        /* 转够了还找不到 ⇒ 掉头 */
+                    s_sweep_yaw0 = Yaw;
+                }
+
+                rate_cmd = -(float)s_sweep_dir * rate;  /* >0 = 向左 */
 
                 if (rate_cmd >  rate_max) rate_cmd =  rate_max;
                 if (rate_cmd < -rate_max) rate_cmd = -rate_max;
@@ -753,6 +845,11 @@ void motor_tracing_reset_cascade(void)
     s_search_dir    = 0;
     s_err_dir       = 0.0f;
     s_base_f        = -1.0f;  /* 哨兵：本趟第一拍直接吸附到目标基准（不做软启动） */
+    s_sweep_dir     = 0;      /* 找线扫描方向：新一趟重新猜 */
+    s_sweep_yaw0    = 0.0f;
+    s_hold_on       = 0U;     /* 保持阶段：下一趟重新开始 */
+    s_hold_rate     = 0.0f;
+    s_hold_yaw0     = 0.0f;
     last_pid_output = 0.0f;
     s_lost_since    = 0U;
     s_lost_stop     = 0U;
