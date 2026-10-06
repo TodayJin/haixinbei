@@ -29,7 +29,7 @@ export const PAGES: PageDef[] = [
   { id: 'drive', title: '操控', desc: '键盘 WASD 驾驶' },
   { id: 'imu', title: 'IMU', desc: '姿态仪表与曲线' },
   { id: 'sensors', title: '传感器', desc: '8 路灰度与循迹' },
-  { id: 'servo', title: '舵机与动作', desc: '14 个动作的角度' },
+  { id: 'servo', title: '舵机与动作', desc: '20 个动作的角度' },
   { id: 'params', title: '调参', desc: '三环参数与下发' },
   { id: 'tasks', title: '任务', desc: '状态机拖拽编程' },
   { id: 'scope', title: '波形', desc: '多通道独立量程' },

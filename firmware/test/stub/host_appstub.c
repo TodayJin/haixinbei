@@ -11,6 +11,7 @@
 #include <math.h>
 #include <string.h>
 
+#include "app_ui.h"        /* app_settings_t g_cfg + AppUi_Beep（task_run.c 的「过点蜂鸣」）*/
 #include "gyro_control.h"
 #include "motion.h"
 #include "nvram.h"
@@ -35,6 +36,14 @@ int      stub_servo_dev[3];
 float    stub_servo_angle[3];
 int      stub_nvram_touch;
 uint8_t  stub_nvram_state;
+
+/* ---- 设置 / 界面（app_ui.c 的替身）的观测点 ----
+ * task_run.c 切状态时会 `if (g_cfg.beep_marker) AppUi_Beep(20);`（★2026-10-07
+ * 把「过点蜂鸣」这个孤儿开关接回），这几个观测点让主机测试能断言"响了没有/响了几次"、
+ * 以及 CAL_SET 块到底切到了哪一套标定。 */
+int      stub_beep_n;               /* AppUi_Beep 被调了几次 */
+int      stub_beep_ms;              /* 最近一次的蜂鸣时长（ms） */
+int      stub_cal_set;              /* 最近一次 trace_cal_select_set() 的套号（0/1） */
 
 /* ---- 任务解释器（t_task.c）要的可变观测点 ----
  * 默认值与原来自成一体的常量完全一致（4.25f / 1.25f / 0 / idx*10+5），
@@ -172,6 +181,58 @@ void  Servo_SetAngle(int x, float a)
 float Servo_GetAngle(int x) { return (x >= 1 && x <= 2) ? stub_servo_angle[x] : 0.0f; }
 #endif /* !HOST_PIPE_REAL_SERVO */
 
+/* ---- app_ui（设置表 g_cfg + 蜂鸣接口）----
+ * task_run.c 现在要读 `g_cfg.beep_marker`（「过点蜂鸣」）并在切状态时调 AppUi_Beep()，
+ * 但 app_ui.c（KK_UI 那一整套界面）从来不在主机测试的源码列表里 ⇒ 这两样得在这里补。
+ *
+ * 带 `-DHOST_PIPE_REAL_NVRAM` 时（firmware/test/pipe_hostlink.c 的构建）**g_cfg 由
+ * host_pipestub.c 定义** —— 那边链的是真 nvram.c，g_cfg 是它 snapshot/apply 的落点，
+ * 必须只有一份 ⇒ 这里让位（与下面 trace_cal_level / trace_cal_channel 同一个套路，
+ * 否则 `multiple definition of 'g_cfg'`）。AppUi_Beep 没有这个顾虑：全工程只有 app_ui.c
+ * 定义它，而 app_ui.c 不在任何主机测试里。 */
+#ifndef HOST_PIPE_REAL_NVRAM
+
+/* 逐项照抄 App/Src/app_ui.c 的 g_cfg 初值（2026-10-07 对齐）。
+ * 为什么要一致而不是留 0：主机测试要的是"与真机同样的默认开/关" —— 比如
+ * `beep_marker` 真机默认 **true**，桩里若留 false，「过点蜂鸣」那条分支在测试里
+ * 永远走不到，接回开关的回归就没网了。改 app_ui.c 的默认值要连这里一起改。
+ * （主机侧目前只有 task_run.c 读这个结构，它用的是 beep_marker 一项。） */
+app_settings_t g_cfg = {
+    .trace_speed  = 6480,
+    .speed_kp_x100 = 2000,
+    .speed_ki_x100 = 200,
+    .speed_kd_x100 = 0,
+    .speed_ilim    = 3000,
+    .speed_ff_slope_x1000 = 662,
+    .speed_ff_fric        = 2327,
+    .line_kp_x100 = 270000,
+    .line_ki_x100 = 1080,
+    .line_kd_x100 = 3600,
+    .line_ilim    = 50,
+    .gyro_kp_x100 = 15000,
+    .gyro_ki_x100 = 0,
+    .gyro_kd_x100 = 1500,
+    .gyro_ilim    = 1000,
+    .use_gyro     = true,
+    .beep_key     = false,
+    .beep_marker  = true,          /* ★task_run.c 唯一读的那一项（「过点蜂鸣」）*/
+    .trace_invert = false,
+    .trace_adapt  = true,
+    .trace_corner = 0,
+    .gray_mode    = TRACE_MODE_AUTO,
+    .trace_cal_set = 0
+};
+
+#endif /* !HOST_PIPE_REAL_NVRAM */
+
+/* 空实现 + 计数器：主机上没有蜂鸣器，能验的只有"该响的时候调了、时长是多少"。
+ * 不动生产代码（app_ui.c 里那份才是真驱动 GPIO 的实现）。 */
+void AppUi_Beep(uint16_t ms)
+{
+    stub_beep_n++;
+    stub_beep_ms = (int)ms;
+}
+
 /* ---- nvram ---- */
 /* 带 `-DHOST_PIPE_REAL_NVRAM` 时改用真 App/Svc/nvram.c（管道对拍要验"固化→掉电→重启"），
  * 这两个假桩必须让位，否则符号冲突。`stub_nvram_touch/stub_nvram_state` 观测变量保持无条件
@@ -182,9 +243,31 @@ uint8_t nvram_state(void) { return stub_nvram_state; }
 #endif /* !HOST_PIPE_REAL_NVRAM */
 
 /* ---- trace_cal / PID_tracing ---- */
-/* trace_cal_level() 真 trace_cal.c 里也有（`-DHOST_PIPE_REAL_NVRAM` 会链它）⇒ 同样要让位 */
+/* trace_cal_level() / trace_cal_channel() / trace_cal_select_set() 真 trace_cal.c 里也有
+ *（`-DHOST_PIPE_REAL_NVRAM` 会链它）⇒ 同样要让位 */
 #ifndef HOST_PIPE_REAL_NVRAM
 uint8_t trace_cal_level(uint8_t idx) { return (idx < 8u) ? stub_gray[idx] : 0u; }
+
+/* 「这一路压黑线吗」：给 task_run.c 的 TASK_C_CH_BLACK / TASK_C_CH_WHITE 逐路取位
+ *（`ch_black()` 优先用它，回 -1 才回落 trace_cal_level）。
+ *
+ * 口径与 t_cascade.c 里那份同类桩一致（同一份柱高的**半高判定**）：拿 stub_gray[]
+ * 当柱高、`>= 128` 算压黑。★t_cascade.c **另有自己的一份**：那个测试不链本文件，
+ * 它的注入点是模拟帧 g_w[]（`trace_cal_frame()` 填），判据同样是"柱高比半高大"，
+ * 所以两处不会互相打架，也不存在重复定义（`run_tests.ps1` 的 t_cascade 只链
+ * PID_tracing.c + t_cascade.c 自己）。本文件的注入点就是 stub_gray[] ——
+ * 默认 {5,15,25,35,45,55,65,75} 全在半高以下 ⇒ **恒 0（没压线）**，是确定值。
+ * 越界路返回 0（照 t_cascade 的口径；任务块的掩码只有 8 位，走不到这里）。 */
+int trace_cal_channel(uint8_t idx)
+{
+    if (idx >= 8u) return 0;
+    return (stub_gray[idx] >= 128u) ? 1 : 0;
+}
+
+/* 切标定套（TASK_OP_CAL_SET：0 = 普通 / 1 = 亚克力）：只**记录最后一次的值**供断言，
+ * 不搬任何标定数据（真 trace_cal.c 那一套两套数据在主机测试里没有对应物）。
+ * 夹取口径照真实现（trace_cal.c:997 `(set != 0) ? 1 : 0`）——越界值不许记成非法套号。 */
+void trace_cal_select_set(uint8_t set) { stub_cal_set = (set != 0u) ? 1 : 0; }
 #endif
 float   PID_Tracing_TracePos(void) { return stub_trace_pos; }
 float   PID_Tracing_PidOutput(void) { return -123.0f; }

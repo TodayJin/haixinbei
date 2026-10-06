@@ -34,6 +34,16 @@ MODE_NAMES = {0: "空闲", 1: "陀螺", 2: "循迹", 3: "串级"}
 NVRAM_NAMES = {0: "空闲", 1: "待保存", 2: "保存中", 3: "已保存", 4: "失败"}
 ST_NAMES = {0x00: "OK", 0x02: "未知类型", 0x03: "参数错", 0x04: "超范围",
             0x05: "未就绪", 0x06: "命令错", 0x07: "忙", 0x08: "不支持"}
+# 车上拒绝任务操作时，"下一步该干什么"（用户 m 2026-10-07 要求：红字要能指向动作，
+# 不许只丢一个术语/状态码 —— 页面那边 `lib/store.ts` 的 humanizeTaskError() 还会再过一遍）
+TASK_STATUS_HINT = {
+    pr.ST_BAD_PARAM: "车说这包参数不对（多半是任务名超长，或长度/校验对不上）—— 再烧一次；反复出现就把这句话发我",
+    pr.ST_OUT_OF_RANGE: "槽号或偏移超出车的范围（车上程序区一共 6 KB）—— 换一个 0~7 里的空槽",
+    pr.ST_NOT_READY: "车上这个槽是空的 —— 先按「烧写到车」把它写进去",
+    pr.ST_BAD_CMD: "车不认这条命令 —— 多半是车上固件版本旧了",
+    pr.ST_BUSY: "车上正在跑任务或车在动 —— 先在「任务」页按「停车」，再试",
+    pr.ST_UNSUPPORTED: "车上固件没有这个功能 —— 先给它烧一份新固件",
+}
 # ACK 事件里给前端看的"这是哪个请求的应答"（契约 §4 `ack.req`）
 REQ_NAMES = {
     pr.T_PARAM_SET: "params.set", pr.T_PARAM_GET: "params.push", pr.T_PARAM_SAVE: "params.save",
@@ -576,15 +586,28 @@ class Console:
             return bool(getattr(self, attr))
 
     def task_list(self, timeout: float = 1.5) -> dict:
-        """`T_TASK_LIST` → 车上一条任务一帧地回 `T_TASK_LIST_R`，空载荷收尾。"""
+        """`T_TASK_LIST` → 车上一条任务一帧地回 `T_TASK_LIST_R`，空载荷收尾。
+
+        ★2026-10-07：目录也是**多帧回包**，收尾帧丢一次就整条失败；而页面"烧到哪个槽"
+        （同名覆盖 / 第一个空槽 / 8 个满了不烧）全靠这份目录算 ⇒ 跟 `task_get` 一样整条重发。
+        重发是幂等的（车会重头再 dump 一遍）。链路根本没在收帧时不再多等，免得白等两倍超时。
+        """
         g = self._cap_guard()
         if g:
             return g
-        with self.cv:
-            self._task_list_items = []
-            self._task_list_done = False
-        self.send(pr.T_TASK_LIST, b"", req="tasks.list")
-        done = self._wait_flag("_task_list_done", timeout)
+        done = False
+        for _attempt in range(3):
+            with self.cv:
+                self._task_list_items = []
+                self._task_list_done = False
+            self.send(pr.T_TASK_LIST, b"", req="tasks.list")
+            if self._wait_flag("_task_list_done", timeout):
+                done = True
+                break
+            link = self.link_payload()
+            age = link.get("last_rx_ms")
+            if not link.get("connected") or age is None or age > 1500:
+                break                                   # 车根本没在发帧：重发也只是让用户多等
         with self.cv:
             items = [dict(it) for it in self._task_list_items]
         if not done:
@@ -649,6 +672,11 @@ class Console:
         见那边的注释：不补的话页面只剩一句 "HTTP 200"）；这里再把"没人应答"按链路实况
         说细一点（用户 2026-10-04 报的提示就是混成了一句话）：
         链路没开 / 链路开着但收不到车帧 / 链路正常在收帧却没这条 ACK。
+
+        ★2026-10-07 改文案：这里原来在"链路正常、只是这一帧没回"时写
+        「多半是固件不带任务功能（HELLO 的 HOST_CAP_TASK 未置位）」—— 被用户当成结论
+        照着查了半天固件能力位，而实际只是**丢帧**（能力位一直是好的，见 memory/DECISIONS.md）。
+        任务功能有没有能力，`_cap_guard()` 早就单独判过了，这里只谈"这一帧"。
         """
         if r.get("ok"):
             return {**r, "supported": True}
@@ -656,16 +684,18 @@ class Console:
             link = self.link_payload()
             age = link.get("last_rx_ms")
             if not link.get("connected"):
-                why = "链路没打开（车没连上/没上电）"
+                why = "链路没打开（车没连上/没上电）—— 去「设置」页连上串口再试"
             elif age is None or age > 1500:
-                why = f"链路开着但 {age if age is not None else '一直'}ms 没收到车的帧（车没在发）"
+                why = (f"链路开着但 {age if age is not None else '一直'}ms 没收到车的帧（车没在发）"
+                       "—— 看「概览」页的链路那一栏，正常了再试")
             else:
-                why = ("链路正常（刚 {0}ms 前还收到车帧），但这条没等到 ACK —— "
-                       "多半是固件不带任务功能（HELLO 的 HOST_CAP_TASK 未置位），"
-                       "也可能只是这一帧丢了，再试一次").format(age)
+                why = ("链路正常（刚 {0}ms 前还收到车帧），只是这一帧没等到回话 —— "
+                       "直接再试一次；反复失败说明丢帧严重，看「概览」页的丢帧计数").format(age)
             return {**r, "ok": False, "supported": True, "error": f"{what}没人应答：{why}"}
+        st = r.get("status")
+        hint = TASK_STATUS_HINT.get(st, "再试一次；反复出现就把这句话发我")
         return {**r, "ok": False, "supported": True,
-                "error": f"{what}被车拒绝：{r.get('status_name', '?')}（status={r.get('status')}）"}
+                "error": f"{what}被车拒绝：{r.get('status_name', '?')}（status={st}）—— {hint}"}
 
     def task_put(self, tid: int, off: int, data: bytes) -> dict:
         g = self._cap_guard()

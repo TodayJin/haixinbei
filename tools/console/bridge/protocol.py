@@ -11,6 +11,11 @@ from __future__ import annotations
 import struct
 from dataclasses import dataclass, field
 
+# 动作表项数的**唯一真值**在 params.py（= 固件 servo.h 的 SERVO_ACTION_N 的镜像，现在 20）。
+# 协议层不再写死数字，只回导给 `pr.ACTION_COUNT`（老代码/测试还在引用这个名字）；
+# 详细说明见下方常量区 ACTION_COUNT 原来所在的位置。params 不反向依赖本模块，无循环导入。
+from .params import ACTION_COUNT  # noqa: F401
+
 # ---------------------------------------------------------------- 常量
 
 SOF0 = 0xA5
@@ -126,7 +131,11 @@ TELEM2_LEN = 64
 NVRAM_NAMES = {0: "空闲", 1: "待保存", 2: "保存中", 3: "已保存", 4: "失败"}
 MODE_NAMES = {0: "空闲", 1: "陀螺", 2: "循迹", 3: "串级"}
 
-ACTION_COUNT = 14
+# ★动作表项数**不在协议层写死**（2026-10-07）：唯一真值是 params.py 的 ACTION_COUNT
+#   （= 固件 firmware/App/Bsp/servo.h 的 SERVO_ACTION_N 的镜像，现在 20）。这里曾经
+#   写死过 `ACTION_COUNT = 14`，固件扩到 20 之后它就成了会静默骗人的常量（桥自己
+#   一处都不用，只有测试引用它）⇒ 已删，改由文件头从 params 回导（pr.ACTION_COUNT）。
+#   **别再在本文件里写动作表长度的字面量。**
 DRIVE_OFF, DRIVE_WHEELS, DRIVE_BASE_TURN, DRIVE_TRACE = 0, 1, 2, 3
 
 

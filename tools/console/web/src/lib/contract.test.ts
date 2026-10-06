@@ -79,15 +79,19 @@ describe.skipIf(!OPT_IN)('契约自检（需要 mock 桥：设 CONSOLE_BASE）',
     expect(typeof body.code).toBe('string')
   })
 
-  it('14 个动作的名字/角度与固件一致（抽查 1/5/9/14）', async () => {
+  it('20 个动作的名字/角度与固件一致（抽查 1/5/9/14 + 15..20 空位）', async () => {
     if (!live) return
     const { body } = await getJson('/api/actions')
-    expect(body.items.length).toBe(14)
+    expect(body.items.length).toBe(20)
     const by = Object.fromEntries(body.items.map((a: { n: number }) => [a.n, a]))
     expect([by[1].name, by[1].a1, by[1].a2]).toEqual(['收回', 0, 0])
     expect([by[5].name, by[5].a1, by[5].a2]).toEqual(['台阶2收回', 80, 170])
     expect([by[9].name, by[9].a1, by[9].a2]).toEqual(['三级3打', 100, 80])
     expect([by[14].name, by[14].a1, by[14].a2]).toEqual(['打下准备(另一路)', 30, 60])
+    // 15..20 是空位：名字「动作15..动作20」、两路角度 0/0（固件 servo.c 的 k_action_default 尾部）
+    for (let n = 15; n <= 20; n++) {
+      expect([n, by[n]?.name, by[n]?.a1, by[n]?.a2]).toEqual([n, `动作${n}`, 0, 0])
+    }
     expect(by[5].compound).toBe(true)
     expect(by[9].compound).toBe(true)
   })

@@ -16,8 +16,17 @@ import {
   X,
 } from 'lucide-react'
 import { Badge, Card, NumberField, Stat, Toggle } from '../components/ui'
-import { store } from '../lib/store'
-import { MODE, OP, decodeTask, encodeTask, type TaskBlock, type TaskProgram } from '../lib/task'
+import {
+  CAR_NAME_MAX,
+  carNameKey,
+  describeSlotPlan,
+  fitCarName,
+  humanizeTaskError,
+  planTaskSlot,
+  store,
+  type SlotPlan,
+} from '../lib/store'
+import { COND, MODE, OP, decodeTask, encodeTask, waitCondJumpTarget, withWaitCondJumpTarget, type TaskBlock, type TaskProgram } from '../lib/task'
 import {
   COND_SPECS,
   DRAG_MIME,
@@ -35,6 +44,7 @@ import {
   dropPayload,
   encodeDrag,
   fieldHint,
+  fieldLabel,
   fieldLegend,
   importTaskFile,
   insertBlock,
@@ -54,6 +64,7 @@ import {
   stateLabel,
   duplicateBlock,
   updateBlock,
+  type FieldKey,
   type FieldSpec,
   type SeqName,
   type TaskDef,
@@ -113,10 +124,16 @@ function FieldEditor({
   const spec = OP_BY_CODE.get(b.op)
   if (!spec) return <div className="text-[12px] text-neon-rose">这个块网页不认识（编号 {b.op}），固件会当非法程序拒收</div>
 
-  const setField = (key: 'p0' | 'p1' | 'p2' | 'p3', v: number) => {
+  const setField = (key: FieldKey, v: number) => {
     // 两轮直给要同时点亮 flags.bit0（固件靠它区分"模式 4"与"模式 0"）
     if (b.op === OP.SET_MODE && key === 'p0') {
       onChange({ p0: v, flags: v === MODE.WHEELS ? b.flags | 1 : b.flags & ~1 })
+      return
+    }
+    /* 「等条件」的「满足后」：下拉给的是**状态号**（或 0xFFFF = 继续往下），
+       要翻译成 flags 的 bit7 + 低 7 位再存 —— 见 lib/task.ts 的 withWaitCondJumpTarget。 */
+    if (b.op === OP.WAIT_COND && key === 'flags') {
+      onChange({ flags: withWaitCondJumpTarget(b.flags, v) })
       return
     }
     onChange({ [key]: v } as Partial<TaskBlock>)
@@ -127,7 +144,7 @@ function FieldEditor({
   const fieldRow = (f: FieldSpec, control: React.ReactNode) => (
     <div key={f.key} className="grid gap-0.5">
       <label className="flex items-center gap-2 text-[12px] text-slate-400" title={f.hint}>
-        <span className="w-14 shrink-0 cursor-help border-b border-dotted border-slate-500/50">{f.label}</span>
+        <span className="w-14 shrink-0 cursor-help border-b border-dotted border-slate-500/50">{fieldLabel(f, b)}</span>
         {control}
       </label>
       <div className="pl-16 text-[11px] leading-snug text-slate-400">{fieldHint(f, b)}</div>
@@ -153,9 +170,78 @@ function FieldEditor({
         />
       )}
       {spec.fields
-        .filter((f) => !f.showIf || f.showIf(b))
+        .filter((f) => {
+          if (f.showIf && !f.showIf(b)) return false
+          /* 「等条件」选中「指定哪几路是黑的 / 白的」时，**阈值那一格换成下面那组多选框**
+             （两个字段填的是同一个 p1：一个是门槛、一个是 8 位掩码，不能同时出现）。 */
+          if (b.op === OP.WAIT_COND && (b.p0 === COND.CH_BLACK || b.p0 === COND.CH_WHITE) && f.key === 'p1' && f.kind === 'int') return false
+          return true
+        })
         .map((f) => {
           const v = b[f.key]
+          if (f.kind === 'condjump') {
+            const cur = waitCondJumpTarget(b[f.key])
+            return fieldRow(
+              f,
+              <select
+                className="field flex-1"
+                value={cur}
+                title={fieldLegend(f, b, stateCount, stateNames)}
+                onChange={(e) => setField(f.key, Number(e.target.value))}
+              >
+                {stateChoices(cur, stateCount, !!f.allowNoState, stateNames).map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>,
+            )
+          }
+          if (f.kind === 'chmask') {
+            /* 8 个多选框 = 8 路探头（bit0 = 第 1 路）。**不套 fieldRow**：fieldRow 的外壳是个
+               <label>，里面再放 <label> 是嵌套 label（点标题会误勾第一个框）。
+               同一个控件伺候两条镜像条件（黑 / 白）：标题与方块提示都跟着 b.p0 改口。 */
+            const mask = b[f.key] & 0xff
+            const white = b.p0 === COND.CH_WHITE
+            return (
+              <div key={f.key} className="grid gap-0.5">
+                <div className="flex items-center gap-2 text-[12px] text-slate-400">
+                  <span className="w-14 shrink-0 cursor-help border-b border-dotted border-slate-500/50" title={f.hint}>
+                    {fieldLabel(f, b)}
+                  </span>
+                  <div className="flex flex-1 flex-wrap items-center gap-1" title={fieldLegend(f, b, stateCount, stateNames)}>
+                    {Array.from({ length: 8 }, (_, i) => {
+                      const on = (mask & (1 << i)) !== 0
+                      return (
+                        <label
+                          key={i}
+                          className={`flex cursor-pointer select-none items-center gap-0.5 rounded border px-1 py-0.5 text-[11px] ${
+                            on ? 'border-neon-cyan/60 bg-neon-cyan/10 text-neon-cyan' : 'border-white/10 text-slate-500 hover:border-white/25'
+                          }`}
+                          title={`第 ${i + 1} 路：${
+                            on
+                              ? white
+                                ? '勾着 —— 它现在必须不压黑线（全白）'
+                                : '勾着 —— 它现在必须压着黑线'
+                              : '没勾 —— 它是黑是白都不管'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            className="h-3 w-3 accent-neon-cyan"
+                            checked={on}
+                            onChange={(e) => setField(f.key, e.target.checked ? mask | (1 << i) : mask & ~(1 << i))}
+                          />
+                          {i + 1}
+                        </label>
+                      )
+                    })}
+                  </div>
+                </div>
+                <div className="pl-16 text-[11px] leading-snug text-slate-400">{fieldHint(f, b)}</div>
+              </div>
+            )
+          }
           if (f.kind === 'mode') {
             return fieldRow(
               f,
@@ -436,6 +522,8 @@ export function TasksPage() {
   const [status, setStatus] = React.useState<TaskStatus | null>(null)
   const [monitor, setMonitor] = React.useState(false)
   const [busy, setBusy] = React.useState('')
+  /** 编辑器任务编号 → 刚烧进去的车上槽号（读完目录之前用它兜底，见 carSlotOf） */
+  const [burned, setBurned] = React.useState<Record<number, number>>({})
   const fileRef = React.useRef<HTMLInputElement | null>(null)
 
   React.useEffect(() => {
@@ -512,58 +600,118 @@ export function TasksPage() {
     void refreshRemote(true)
   }, [])
 
+  /* ---- 烧到哪个槽：规则与文案都在 lib/store.ts 的 planTaskSlot / describeSlotPlan 里 ----
+     编辑器里那条任务的编号（`task.id`，0..7）**不是**车上槽号 —— 老代码拿它当槽号烧，
+     车上目录没人看，换一条任务就可能悄悄盖掉车上同槽位的**别人的**任务。
+     现在：同名 ⇒ 覆盖它那个槽；没同名 ⇒ 第一个空槽；8 个满了 ⇒ 拦下来不烧。 */
+  const carItems = remote?.items ?? []
+  /** 这条任务现在对应车上哪个槽；null = 车上还没有它（刚烧过的用记住的槽兜底） */
+  const carSlotOf = (t: TaskDef): number | null => {
+    const p = planTaskSlot(carItems, t.name)
+    if (p.kind === 'same-name') return p.slot
+    return burned[t.id] ?? null
+  }
+  const plan: SlotPlan = planTaskSlot(carItems, task.name)
+  const carSlot = carSlotOf(task)
+  /** 名字超过车上存得下的字节数时提醒一句（超出部分车上存不下来，桥也会按字节砍） */
+  const nameOver = nameBytes(task.name) > CAR_NAME_MAX
+  /** 编辑器里有几条同名（>1 时它们按"同名"规则会烧到**同一个槽**，得说清楚是谁覆盖谁） */
+  const sameNameInEditor = carNameKey(task.name)
+    ? file.tasks.filter((t) => carNameKey(t.name) === carNameKey(task.name)).length
+    : 0
+
   const doBurn = async () => {
     if (info.errors.length) {
       store.toast('err', '有校验错误，先修好再烧')
       return
     }
     setBusy('烧写')
+    /* 先读一次车上目录再决定烧哪个槽 —— 这是"同名覆盖 / 空槽 / 满"三条规则的唯一依据。
+       不读就烧 = 老行为（拿编辑器编号当槽号），会悄悄盖掉车上别人的任务。 */
+    const dir = await taskApi.list()
+    if (!dir.ok) {
+      setBusy('')
+      setRemote({ supported: dir.supported, items: [] })
+      store.toast('err', `为了不覆盖错槽位，这次没烧（先读车上目录就失败了）：${humanizeTaskError(dir.error)}`)
+      console.warn('[tasks] 读目录失败：', dir.error)
+      return
+    }
+    setRemote(dir.data)
+    const p = planTaskSlot(dir.data.items, task.name)
+    if (p.kind === 'full') {
+      setBusy('')
+      store.toast('err', p.error)
+      return
+    }
+    const slot = p.slot
     if (status?.running) {
       // 解释器跑着时固件对 COMMIT 回「忙」——先停车再烧，别让用户对着红字发呆
       const s = await taskApi.stop()
       if (!s.ok) {
         setBusy('')
-        store.toast('err', `车上有任务在跑（#${status.id}），先停车又失败：${s.error}`)
+        store.toast('err', `车上有任务在跑（#${status.id}），先停车又失败了：${humanizeTaskError(s.error)}`)
+        console.warn('[tasks] 停车失败：', s.error)
         return
       }
       store.toast('info', `车上有任务在跑（#${status.id}），已先停车再烧写`)
     }
-    const r = await taskApi.burn(task.id, bytes, info.len, info.crc16, task.name)
+    store.toast('info', describeSlotPlan(p, task.name))
+    // 名字按车上存得下的 30 字节、在字符边界上截好再发（桥与固件都按字节砍，砍半个汉字很难看）
+    const r = await taskApi.burn(slot, bytes, info.len, info.crc16, fitCarName(task.name))
     if (!r.ok) {
       setBusy('')
-      store.toast('err', r.error)
+      store.toast('err', `烧写到车上 #${slot} 失败：${humanizeTaskError(r.error)}`)
+      console.warn('[tasks] 烧写失败：', r.error)
       return
     }
-    const back = await taskApi.get(task.id)
+    const back = await taskApi.get(slot)
     setBusy('')
     if (!back.ok) {
-      store.toast('info', `写进去了但回读失败：${back.error}`)
+      store.toast('info', `已经写进车上 #${slot}，但回读校验没读完 —— ${humanizeTaskError(back.error)}`)
+      console.warn('[tasks] 回读失败：', back.error)
+      void refreshRemote()
       return
     }
     const same = back.data.length === bytes.length && back.data.every((v, i) => v === bytes[i])
-    if (same) store.toast('ok', `任务 ${task.id}「${task.name}」烧写并回读校验一致（${r.data.chunks} 片）`)
-    else store.toast('err', `回读不一致（车上 ${back.data.length} B / 本地 ${bytes.length} B）—— 别让车跑这个任务`)
+    if (same) {
+      setBurned((m) => ({ ...m, [task.id]: slot }))
+      store.toast('ok', p.kind === 'same-name'
+        ? `已覆盖车上同名的 #${slot}「${p.carName || task.name}」，回读一致（${r.data.chunks} 片）`
+        : `已烧到空槽 #${slot}（${r.data.chunks} 片），回读一致`)
+    } else {
+      store.toast('err', `回读不一致（车上 ${back.data.length} B / 本地 ${bytes.length} B）—— 车上 #${slot} 这条别让它跑，重烧一次。`)
+    }
     void refreshRemote()
   }
 
   const doRun = async () => {
+    /* 跑的是**车上那个槽**，不是编辑器里的编号：名字对不上就成了"按了开始却跑了别的任务"。
+       车上没有这条就直说，别去跑一个碰巧同号的槽。 */
+    const slot = carSlot
+    if (slot === null) {
+      store.toast('err', `车上没有叫「${carNameKey(task.name) || '（这条没名字）'}」的任务 —— 先按「烧写到车」把它写进车上。`)
+      return
+    }
     setBusy('启动')
-    if (status?.running && status.id !== task.id) {
+    if (status?.running && status.id !== slot) {
       // 车上一次只许一个任务占着电机，换任务跑得先停车（host_link.c:1013）
       const s = await taskApi.stop()
       if (!s.ok) {
         setBusy('')
-        store.toast('err', `车上 #${status.id} 在跑，先停车又失败：${s.error}`)
+        store.toast('err', `车上 #${status.id} 在跑，先停车又失败了：${humanizeTaskError(s.error)}`)
         return
       }
       store.toast('info', `已先停掉正在跑的 #${status.id}`)
     }
-    const r = await taskApi.run(task.id)
+    const r = await taskApi.run(slot)
     setBusy('')
     if (r.ok) {
-      store.toast('ok', `已启动任务 ${task.id}`)
+      store.toast('ok', `已启动车上 #${slot}`)
       setMonitor(true)
-    } else store.toast('err', r.error)
+    } else {
+      store.toast('err', `没启动起来：${humanizeTaskError(r.error)}`)
+      console.warn('[tasks] 启动失败：', r.error)
+    }
   }
 
   const doStop = async () => {
@@ -683,12 +831,18 @@ export function TasksPage() {
                 }}
               >
                 <div className="flex items-center gap-1.5">
-                  <span className="num text-[10px] text-slate-500">#{t.id}</span>
+                  <span className="num text-[10px] text-slate-500" title="编辑器里的编号（不是车上的槽号；烧到车上哪个槽看下面那行）">#{t.id}</span>
                   <span className="min-w-0 flex-1 truncate text-[12px] text-slate-200">{t.name}</span>
-                  {status?.running && status.id === t.id && <Badge tone="mint">跑着</Badge>}
+                  {status?.running && status.id === carSlotOf(t) && <Badge tone="mint">跑着</Badge>}
                 </div>
                 <div className="text-[10px] text-slate-600">
                   {t.prog.states.length} 状态 · {blockCount(t.prog)} 块 · {encodeTask(t.prog).bytes.length} B
+                  {' · '}
+                  {carSlotOf(t) === null ? (
+                    <span title="车上还没有这条任务：烧写会写进第一个空槽">车上没有</span>
+                  ) : (
+                    <span className="text-neon-cyan/70" title="这条任务在车上的槽号（同名再烧就是覆盖它）">车上 #{carSlotOf(t)}</span>
+                  )}
                 </div>
               </button>
             ))}
@@ -799,10 +953,26 @@ export function TasksPage() {
           title="编译与烧写"
           right={
             <div className="flex flex-wrap items-center gap-1">
-              <button className="btn-primary !px-2 !py-0.5 text-[11px]" onClick={() => void doBurn()} disabled={!!busy || info.errors.length > 0 || !supported} title={info.errors.length ? '先修校验错误' : '写进车的 Flash'}>
-                <Save size={12} /> 烧写到车
+              <button
+                className="btn-primary !px-2 !py-0.5 text-[11px]"
+                onClick={() => void doBurn()}
+                disabled={!!busy || info.errors.length > 0 || !supported || plan.kind === 'full'}
+                title={
+                  info.errors.length
+                    ? '先修校验错误'
+                    : plan.kind === 'full'
+                      ? plan.error
+                      : `${describeSlotPlan(plan, task.name)}（点下去会先重读一次车上目录再定槽位）`
+                }
+              >
+                <Save size={12} /> 烧写到车{plan.kind === 'full' ? '' : ` #${plan.slot}`}
               </button>
-              <button className="btn !px-2 !py-0.5 text-[11px]" onClick={() => void doRun()} disabled={!!busy || !supported}>
+              <button
+                className="btn !px-2 !py-0.5 text-[11px]"
+                onClick={() => void doRun()}
+                disabled={!!busy || !supported}
+                title={carSlot === null ? '车上还没有这条任务 —— 先烧写' : `跑车上的 #${carSlot}`}
+              >
                 <Play size={12} /> 开始
               </button>
               <button className="btn-ghost !px-2 !py-0.5 text-[11px]" onClick={() => void doStop()} disabled={!!busy || !supported}>
@@ -816,8 +986,49 @@ export function TasksPage() {
             <Stat label="镜像长度" value={String(info.len)} unit="B" hint={`车上程序区 6 KB 里占 ${info.budgetPct}%`} />
             <Stat label="校验和" value={`0x${info.crc16.toString(16).toUpperCase().padStart(4, '0')}`} hint="从头 12 字节之后算起，烧完和车上回读的对比" />
             <Stat label="状态 / 块" value={`${prog.states.length} / ${blockCount(prog)}`} hint={`主页（任务从这里开始）= ${stateLabel(prog.main, stateNames)}`} />
-            <Stat label="任务编号" value={`#${task.id}`} hint="车上的槽位号，0~7" />
+            <Stat
+              label="烧到哪个槽"
+              value={plan.kind === 'full' ? '没空槽' : `#${plan.slot}${plan.kind === 'same-name' ? ' 覆盖' : ' 空槽'}`}
+              tone={plan.kind === 'full' ? 'rose' : plan.kind === 'same-name' ? 'amber' : 'slate'}
+              hint={
+                plan.kind === 'full'
+                  ? '车上 8 个槽都满了，先删一个'
+                  : plan.kind === 'same-name'
+                    ? '车上有同名任务：烧写=覆盖它'
+                    : '车上没有同名任务：写进第一个空槽'
+              }
+              title={describeSlotPlan(plan, task.name)}
+            />
           </div>
+
+          {supported && (
+            <div
+              className={`mt-2 rounded-lg p-2 text-[11px] leading-relaxed ${
+                plan.kind === 'full'
+                  ? 'bg-neon-rose/10 text-neon-rose'
+                  : plan.kind === 'same-name'
+                    ? 'bg-neon-amber/10 text-neon-amber'
+                    : 'bg-white/[0.03] text-slate-400'
+              }`}
+            >
+              {describeSlotPlan(plan, task.name)}
+              {sameNameInEditor > 1 && (
+                <>
+                  {' '}
+                  <b>编辑器里有 {sameNameInEditor} 条同名任务</b> —— 它们都算"同一个任务"、都烧到这个槽，
+                  后烧的覆盖先烧的。
+                </>
+              )}
+              {nameOver && (
+                <>
+                  {' '}
+                  名字有 {nameBytes(task.name)} 字节，车上目录页只存得下 {CAR_NAME_MAX} 字节 —— 会存成「
+                  {fitCarName(task.name)}」。
+                </>
+              )}
+              {plan.kind !== 'full' && <span className="text-slate-500">（点「烧写到车」会先重读一次车上目录再定槽位。）</span>}
+            </div>
+          )}
 
           {status?.running && (
             <div className="mt-2 rounded-lg bg-neon-mint/10 p-2 text-[11px] text-neon-mint">
@@ -854,7 +1065,10 @@ export function TasksPage() {
           <div className="mt-2 text-[10px] leading-relaxed text-slate-600">
             车上只认二进制。任务名随 COMMIT 帧一起下发、存在车上目录页里（见 docs/任务编程.md §5）；
             烧写后会立刻回读比对，不一致会红字报出来。
-            跑任务：车上按任务页中键（离线），或这里按「开始」。
+            <br />
+            烧到哪个槽的规则：车上有<b>同名</b>任务就覆盖它那个槽（不会多出一条副本）；没有同名就写进
+            <b>第一个空槽</b>；8 个槽全满又没有同名会被拦下来，先删一个再烧。
+            跑任务：车上按任务页中键（离线），或这里按「开始」跑车上那个槽。
           </div>
         </Card>
 

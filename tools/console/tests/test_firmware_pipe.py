@@ -258,7 +258,11 @@ def test_action_table_equals_the_firmware_source_defaults(pipe):
     f = _first(frames, pr.T_ACTIONS)
     assert f is not None, "真固件没回动作表"
     acts = pr.decode_actions(f.payload)
-    assert len(acts) == pr.ACTION_COUNT == 14
+    # 项数只跟桥自己那份镜像比（动作表长度的真值在 servo.h 的 SERVO_ACTION_N，
+    # 由 `_firmware_defaults()` 解析出来、下面按内容逐项对拍）—— 这里**不写字面量**：
+    # 14 就是上一轮扩表（14→20）漏下来的那处陈旧断言。
+    assert len(acts) == pr.ACTION_COUNT, \
+        f"真固件发的动作表有 {len(acts)} 项，桥的 ACTION_COUNT 是 {pr.ACTION_COUNT}"
     # 编译进可执行文件里的运行值 == servo.c 的 k_action_default（源码解析见 test_actions_spec）
     fw = [tuple(x) for x in _firmware_defaults()]
     assert acts == fw, f"固件运行时的动作表与 k_action_default 不一致：{acts} vs {fw}"
@@ -536,8 +540,9 @@ def test_task_run_refused_while_host_is_driving(pipe, task_image):
 
 
 # ---------------------------------------------------------------------
-#  旧内置比赛流程（已删的 `renwu.c`，12 个障碍）转出来的**长任务**：
-#  `web/src/lib/tasks/renwu-lap.json`（15 状态 / 190 块 / 2127 字节）。
+#  旧内置比赛流程（已删的 `renwu.c`，赛道 11 个障碍）转出来的**长任务**：
+#  `web/src/lib/tasks/renwu-lap.json`（15 状态 / 208 块 / 2434 字节；2026-10-07 第二版，
+#  换算基准 HP_TASK_SPEED=7000；原来那份 2127 B 的留在 renwu-lap.json.bak）。
 #  这是"用户真会去烧的那一份"，所以也放进真固件里走一遍：
 #  ① Python 独立编一遍码（与 task.ts 逐字段对齐）⇒ 长度/CRC 两边必须一致；
 #  ② 真 `host_link.c` + 真 `task_store.c` 必须**收下**它（旧的 2048 上限会拒收，
@@ -547,7 +552,7 @@ def test_task_run_refused_while_host_is_driving(pipe, task_image):
 
 LAP_JSON = os.path.join(HERE, "..", "web", "src", "lib", "tasks", "renwu-lap.json")
 TASK_HDR_LEN, TASK_STATE_LEN, TASK_BLOCK_LEN = 12, 8, 10   # 与 firmware/App/Svc/task_prog.h 同口径
-LAP_LEN = 2127                     # 与 `renwu-lap.test.ts` 里钉的字节数一致
+LAP_LEN = 2434                     # 与 `renwu-lap.test.ts` 里钉的字节数一致
 
 
 def _encode_prog(prog: dict) -> bytes:
@@ -623,17 +628,17 @@ def lap_image() -> bytes:
 
 
 def test_lap_program_is_accepted_by_the_real_firmware(pipe, lap_image):
-    """用户那份 2127 B 的全程任务：真固件必须收下、列得出来、回读一致。"""
+    """用户那份 2434 B 的全程任务：真固件必须收下、列得出来、回读一致。"""
     img = lap_image
     crc = pr.crc16_ccitt(img[12:])
-    name = "旧全程·12障碍"
+    name = "旧全程11障碍(基准7000)"
     up, puts, commit_seq = _upload(img, name=name)
     frames = pipe(*up, pr.frame_task_list(50), pr.frame_task_get(51, 0), pad=400)
 
     ack = _acks(frames)
     assert all(ack.get(s) == pr.ST_OK for s in puts), f"有 PUT 片被真固件拒了：{ack}"
     assert ack.get(commit_seq) == pr.ST_OK, \
-        f"真固件拒收这条长任务（2127B/15 状态/4096 上限）——COMMIT 状态码 {ack.get(commit_seq)}：{ack}"
+        f"真固件拒收这条长任务（2434B/15 状态/4096 上限）——COMMIT 状态码 {ack.get(commit_seq)}：{ack}"
 
     items = [pr.decode_task_list_r(f.payload) for f in frames if f.type == pr.T_TASK_LIST_R]
     assert items and items[0] is not None, f"目录里没列出刚烧的任务：{items}"
@@ -653,4 +658,4 @@ def test_lap_program_is_accepted_by_the_real_firmware(pipe, lap_image):
         assert off == len(got), f"回读分片顺序不对：off={off} 期望 {len(got)}"
         got += data
     assert end == len(img), f"回读没收尾（end={end}，期望 {len(img)}）"
-    assert bytes(got) == img, "2127 B 的长任务回读不一致"
+    assert bytes(got) == img, "2434 B 的长任务回读不一致"

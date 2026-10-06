@@ -35,7 +35,8 @@ enum {
     TASK_OP_TURN_DEG    = 0x03,  /* p1 = 相对角（度）；p2 = 容差（0.1°，0→1.0°）；p0 = 超时 ms */
     TASK_OP_ACTION      = 0x04,  /* p0 = 动作号 1..14；p2 = 动作后等待 ms */
     TASK_OP_WAIT_MS     = 0x05,  /* p0 = 毫秒 */
-    TASK_OP_WAIT_COND   = 0x06,  /* p0 = 条件号；p1 = 阈值；p2 = 超时 ms（0=无限）；p3 = 超时后跳的状态（0xFFFF=继续） */
+    TASK_OP_WAIT_COND   = 0x06,  /* p0 = 条件号；p1 = 阈值；p2 = 超时 ms（0=无限）；p3 = 超时后跳的状态（0xFFFF=继续）；
+                                  * flags.bit7 = **满足后**跳到低 7 位的状态号（0 = 满足后继续往下；见 TASK_WAIT_COND_JUMP） */
     TASK_OP_GOTO        = 0x07,  /* p0 = 目标状态号 */
     TASK_OP_END         = 0x08,  /* 停车、任务结束 */
     TASK_OP_SET_SERVO   = 0x09,  /* p0 = 通道 1/2；p1 = 角度 0..180 */
@@ -54,6 +55,14 @@ enum {
     TASK_MODE_WHEELS     = 4,   /* 两轮速度直给：p1=左 p2=右（PWM 刻度） */
 };
 
+/* ---- TASK_OP_WAIT_COND 的 flags（2026-10-07 用户 m 要求）----
+ * 4 个参数位 p0..p3 已被"条件/阈值/超时/超时后跳"占满，第 5 个参数只能用那个一直空着的
+ * flags 字节。语义：**满足后**去哪 —— 与"超时后跳 p3"是两条互不影响的出路。
+ *   老任务（含 renwu-lap.json 与所有既有镜像）的 flags 全是 0 ⇒ bit7 = 0 ⇒ **行为完全不变**。
+ * 注意别和 TASK_OP_SET_MODE 的 flags.bit0（两轮直给）搞混：那是另一个 op 的位。 */
+#define TASK_WAIT_COND_JUMP     0x80u  /* bit7 = 1：条件满足后跳到 TASK_WAIT_COND_TGT_MSK 那个状态 */
+#define TASK_WAIT_COND_TGT_MSK  0x7Fu  /* 低 7 位 = 目标状态号（状态最多 16 个，够用） */
+
 /* ---- TASK_OP_WAIT_COND 的条件号 ---- */
 enum {
     TASK_C_LINE_CENTER = 1,  /* |循迹重心-4.5| ≤ p1/10（p1=0 → 0.5） */
@@ -65,6 +74,14 @@ enum {
     TASK_C_DIST_MM     = 7,  /* 里程 ≥ p1 毫米 */
     TASK_C_FAULT       = 8,  /* Motion_GetFault() != 0 */
     TASK_C_ALWAYS      = 9,  /* 恒真（配合超时 = 纯等待） */
+    TASK_C_CH_BLACK    = 10, /* ★「指定哪几路是黑的」（用户 m 2026-10-07）：**p1 当 8 位掩码**
+                              *   （bit0..bit7 = 第 1..8 路），判据 = 勾中的那几路**当前全是黑的**
+                              *   （其余通道不管）。掩码 = 0 ⇒ **恒不满足**（见 task_run.c 与文档）。
+                              *   取"黑"用 trace_cal_channel(i)，判不出来时按"没压黑"保守处理。 */
+    TASK_C_CH_WHITE    = 11, /* ★「指定哪几路是白的」（用户 m 2026-10-07）：上面那条的**镜像**。
+                              *   同一个 8 位掩码，判据 = 勾中的那几路**当前一路都不黑**（其余不管）。
+                              *   掩码 = 0 ⇒ **恒不满足**（与条件 10 口径一致；理由见 task_run.c）。
+                              *   旧内置流程 renwu.c 有 5 段入口就是"指定那几路是白的"。 */
 };
 
 /* ---- 校验错误码（>=0 都是"没通过"的原因，负数是 TaskRun_Load 的返回值） ---- */

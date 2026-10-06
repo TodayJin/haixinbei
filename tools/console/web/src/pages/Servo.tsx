@@ -134,7 +134,7 @@ export function ServoPage() {
 
       <div className="grid gap-3">
         <Card
-          title="动作表（14 个动作）"
+          title="动作表（20 个动作）"
           right={
             <div className="flex items-center gap-1">
               {dirty > 0 && <Badge tone="rose">{dirty} 项改了</Badge>}

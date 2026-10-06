@@ -71,12 +71,13 @@ const where = (state: number, seq: 'enter' | 'body', index: number): Where => ({
 const ops = (list: TaskBlock[]) => list.map((b) => b.op);
 
 describe('块库元数据', () => {
-  it('10 个块每个都有说明和默认值，且默认值落在声明范围内', () => {
+  it('11 个块每个都有说明和默认值，且默认值落在声明范围内', () => {
     expect(OP_SPECS.map((s) => s.op)).toEqual([
       OP.SET_SPEED,
       OP.SET_MODE,
       OP.TURN_DEG,
       OP.ACTION,
+      OP.CAL_SET,
       OP.SET_SERVO,
       OP.WAIT_MS,
       OP.WAIT_COND,
@@ -98,10 +99,12 @@ describe('块库元数据', () => {
     }
   });
 
-  it('条件表与固件条件号 1..9 一一对应，模式下拉 = 停车/角度环/循迹/两轮直给', () => {
-    expect(COND_SPECS.map((c) => c.cond)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+  it('条件表与固件条件号 1..11 一一对应，模式下拉 = 停车/角度环/循迹/两轮直给', () => {
+    expect(COND_SPECS.map((c) => c.cond)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     expect(COND_SPECS[0].cond).toBe(COND.LINE_CENTER);
     expect(COND_SPECS[8].cond).toBe(COND.ALWAYS);
+    expect(COND_SPECS[9].cond).toBe(COND.CH_BLACK);
+    expect(COND_SPECS[10].cond).toBe(COND.CH_WHITE);
     expect(MODE_OPTIONS.map((m) => m.value)).toEqual([MODE.IDLE, MODE.GYRO, MODE.TRACE_GYRO, MODE.WHEELS]);
   });
 

@@ -641,3 +641,160 @@ export function useHotSelect<T extends Scalar>(select: (s: ConsoleSnapshot) => T
   const get = useCallback(() => fnRef.current(store.getSnapshot()), [])
   return useSyncExternalStore(store.subscribe, get, get)
 }
+
+/* ------------------------------------------------- 任务上传：到底烧到哪个槽
+ *
+ * 车上的任务**按槽存**：固件 `firmware/App/Svc/task_store.c` 最多 8 条（槽 0..7），
+ * `TaskStore_Commit(slot,…)` 就是"写进那个槽"—— 往一个占用的槽再提交 = **覆盖它**，
+ * 目录里不会多出一条（目录解析遇到重复 id 还会跳过）。
+ *
+ * 上位机原来的做法（`pages/Tasks.tsx` 的 `doBurn()` 直接 `taskApi.burn(task.id, …)`）：
+ * 拿**编辑器里那条任务自己的编号**（`taskedit.ts` 的 0..7，`nextTaskId()` 给的是编辑器
+ * 列表里的空位）当槽号烧，**从不看车上目录** ⇒ 编辑器里新加一条任务再烧，就会悄悄盖掉
+ * 车上同槽位的**别人的**任务（用户 m 问的"同一个任务都是同一个地方的，会覆盖吗？"
+ * 就是这个：同一个任务会覆盖，但换一条任务也可能覆盖，且界面上一句提示都没有）。
+ *
+ * 现在定的规则（用户 m 2026-10-07 要求）：
+ *   ① 车上有**同名**任务 ⇒ 用**它那个槽**（覆盖它，界面上明确写"将覆盖车上同名的 #N"）；
+ *   ② 没有同名 ⇒ 用**第一个空槽**（0..7 里最小的空闲）；
+ *   ③ 8 个槽全满又没有同名 ⇒ **不烧**，给人话提示（绝不悄悄覆盖别人的任务）。
+ *
+ * 纯函数放这里（不在页面里）是为了让规则可以被单独复核：输入 = 车上目录 + 编辑器里的名字。
+ */
+
+/** 车上目录最多 8 条（`firmware/App/Svc/task_store.h` 的 `TASK_STORE_SLOTS`） */
+export const TASK_SLOT_COUNT = 8
+
+/**
+ * 车上目录页里名字的字节上限（固件 `TASK_STORE_NAME_MAX = 30`）。
+ *
+ * 超出部分**两端都会砍**：桥 `bridge/protocol.py` 的 `payload_task_commit()` 按 30 字节切，
+ * 固件 `task_store.c` 的 `store_build()` 也按 30 字节收。所以发 COMMIT 之前先在
+ * **字符边界**上截好（`fitCarName()`），免得车上存半个汉字。
+ */
+export const CAR_NAME_MAX = 30
+
+/** 按 UTF-8 字节截断、不切坏字符（超出返回前若干个完整字符）。发给车的任务名用它。 */
+export function fitCarName(s: string, max: number = CAR_NAME_MAX): string {
+  const t = (s ?? '').trim()
+  const enc = new TextEncoder()
+  if (enc.encode(t).length <= max) return t
+  let out = ''
+  let used = 0
+  for (const ch of t) {
+    const n = enc.encode(ch).length
+    if (used + n > max) break
+    out += ch
+    used += n
+  }
+  return out
+}
+
+/**
+ * "同名"的比较键：车上只存得下前 30 字节 ⇒ 比同名必须拿**车上真正存下来的那 30 字节**去比，
+ * 否则名字长的任务再烧一次就认不出车上那条是自己，会当成新任务又占一个空槽（凭空多出副本）。
+ *
+ * 半个汉字被砍掉的尾巴在两端都会解码成 U+FFFD（Python `errors="replace"` / JS `TextDecoder`），
+ * 这里一律削掉，好让"老代码按字节切出来的名字"也认得出。
+ */
+export function carNameKey(s: string): string {
+  const t = (s ?? '').trim()
+  if (!t) return ''
+  const bytes = new TextEncoder().encode(t)
+  const cut = bytes.length <= CAR_NAME_MAX ? bytes : bytes.subarray(0, CAR_NAME_MAX)
+  return new TextDecoder().decode(cut).replace(/\uFFFD+$/, '')
+}
+
+/** 车上目录里的一条（只用到这三个字段；形状与 `taskapi.ts` 的 `RemoteTaskInfo` 兼容） */
+export interface CarTaskItem {
+  id: number
+  name?: string
+  len?: number
+}
+
+export type SlotPlan =
+  /** 车上有同名 ⇒ 烧进它那个槽（覆盖） */
+  | { kind: 'same-name'; slot: number; carName: string; carLen: number }
+  /** 车上没同名 ⇒ 烧进第一个空槽 */
+  | { kind: 'free'; slot: number }
+  /** 8 个槽全满且没同名 ⇒ 不烧，`error` 就是给用户看的那句话 */
+  | { kind: 'full'; error: string }
+
+/** 规则本体：车上目录 + 编辑器里的任务名 ⇒ 烧到哪个槽（或为什么不烧）。 */
+export function planTaskSlot(car: CarTaskItem[], name: string): SlotPlan {
+  const items = Array.isArray(car) ? car : []
+  const want = carNameKey(name)
+  if (want) {
+    const hits = items
+      .filter((it) => carNameKey(it.name ?? '') === want)
+      .sort((a, b) => Number(a.id) - Number(b.id))
+    if (hits.length) {
+      return {
+        kind: 'same-name',
+        slot: Number(hits[0].id),
+        carName: (hits[0].name ?? '').trim(),
+        carLen: Number(hits[0].len ?? 0),
+      }
+    }
+  }
+  const used = new Set(items.map((it) => Number(it.id)))
+  for (let i = 0; i < TASK_SLOT_COUNT; i += 1) {
+    if (!used.has(i)) return { kind: 'free', slot: i }
+  }
+  const slots = `#0~#${TASK_SLOT_COUNT - 1}`
+  return {
+    kind: 'full',
+    error: want
+      ? `车上 ${TASK_SLOT_COUNT} 个槽（${slots}）都占着，也没有叫「${want}」的任务可以覆盖 —— 先在左边「车上现有」里删掉一个不用的，再烧写。`
+      : `车上 ${TASK_SLOT_COUNT} 个槽（${slots}）都占着，这条任务又没名字（认不出哪个是它）—— 先给它起个名字、或删掉一个不用的，再烧写。`,
+  }
+}
+
+/** 计划 → 界面上那句人话（烧写前提示、烧写后回执共用同一份文案，省得两处说法不一样）。 */
+export function describeSlotPlan(plan: SlotPlan, name: string): string {
+  if (plan.kind === 'same-name') {
+    return `车上已经有同名的 #${plan.slot}「${plan.carName || carNameKey(name)}」—— 这次是覆盖它，不会多出一条副本。`
+  }
+  if (plan.kind === 'free') return `车上没有同名任务 —— 会烧到第一个空槽 #${plan.slot}。`
+  return plan.error
+}
+
+/**
+ * 底层报错 → 指向下一步动作的人话（用户 m 2026-10-07 要求：界面上的红字要能告诉人
+ * "再试一次 / 先删一个任务 / 链路没连上"，不许只丢一堆术语）。
+ *
+ * 认不出来的原样返回：那种情况宁可让用户把原文发过来，也不要把线索藏掉
+ * （调用方另外 `console.warn` 一份原文，方便查）。
+ */
+export function humanizeTaskError(raw: string): string {
+  const s = (raw ?? '').trim()
+  if (!s) return '这次没成功，桥也没说原因 —— 再按一次；反复失败就重启一下桥。'
+  if (/连不上桥/.test(s)) {
+    return '连不上上位机后端 —— 确认启动窗口里那个 python 还在跑，再刷新这个页面。'
+  }
+  if (/HOST_CAP_TASK|不支持任务功能/.test(s)) {
+    return '车上这份固件不带任务功能 —— 先给它烧一份带任务功能的新固件。'
+  }
+  if (/链路没打开|没连上|车没上电/.test(s)) {
+    return '链路没连上（串口没插 / 车没上电）—— 去「设置」页连上串口，再按一次「烧写到车」。'
+  }
+  if (/没收到车的帧|车没在发/.test(s)) {
+    return '连上了但收不到车的帧 —— 车可能没上电、或没跑这份固件；去「概览」页看链路那一栏，正常了再烧。'
+  }
+  if (/忙|正在跑/.test(s)) {
+    return '车上正在跑任务（跑着的时候车上不收烧写和删除）—— 先按「停车」，再烧写。'
+  }
+  if (/数据块?不连续|收尾帧|没等到数据/.test(s)) {
+    return '读目录 / 回读的时候丢了一片 —— 再按一次「读目录」或「烧写到车」（桥自己会重读几遍，还不行就重启一下桥）。'
+  }
+  if (/没人应答|没应答|没等到 ACK|超时/.test(s)) {
+    return '这一帧没等到车的回话 —— 多半只是丢了，直接再按一次「烧写到车」；连着失败就重启一下桥。'
+  }
+  if (/槽号是空的|车上没有任务/.test(s)) {
+    return '车上这个槽是空的（这条任务还没写进去）—— 先按「烧写到车」。'
+  }
+  if (/一片最多|十六进制|不是 JSON|HTTP \d/.test(s)) {
+    return `上位机内部没对上（${s}）—— 把这句话原样发我。`
+  }
+  return s
+}

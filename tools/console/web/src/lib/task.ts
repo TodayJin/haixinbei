@@ -26,6 +26,7 @@ export const OP = {
   ACTION: 0x04, // p0 = 动作号 1..14；p2 = 动作后等待 ms
   WAIT_MS: 0x05, // p0 = 毫秒
   WAIT_COND: 0x06, // p0 = 条件号；p1 = 阈值；p2 = 超时 ms；p3 = 超时后跳的状态（0xffff = 继续）
+  //                  flags.bit7 = 满足后跳到低 7 位的状态号（0 = 满足后继续往下；见 WAIT_COND_JUMP_ON）
   GOTO: 0x07, // p0 = 目标状态号
   END: 0x08, // 停车、任务结束
   SET_SERVO: 0x09, // p0 = 通道 1/2；p1 = 角度 0..180
@@ -51,9 +52,29 @@ export const COND = {
   DIST_MM: 7, // 累计里程 ≥ p1 毫米
   FAULT: 8, // 运动模块报故障
   ALWAYS: 9, // 恒真
+  CH_BLACK: 10, // ★p1 = 8 位掩码（bit0..bit7 = 第 1..8 路）：勾中的那几路**全是黑的**（其余不管）；掩码 0 = 恒不满足
+  CH_WHITE: 11, // ★上面那条的镜像：p1 = 同一个 8 位掩码，勾中的那几路**一路都不黑**（其余不管）；掩码 0 = 恒不满足
 } as const;
 
 export const NO_STATE = 0xffff; // WAIT_COND 的 p3：超时后继续往下走
+
+/** 「等条件」的 flags.bit7：置 1 = **条件满足后**跳到低 7 位的状态号；0 = 满足后继续往下走。
+ *  与固件 `task_prog.h` 的 `TASK_WAIT_COND_JUMP` 一一对应。老任务/老镜像的 flags 全是 0。 */
+export const WAIT_COND_JUMP_ON = 0x80;
+/** flags 里存目标状态号的那几位（状态最多 16 个，低 7 位够用） */
+export const WAIT_COND_TGT_MASK = 0x7f;
+
+/** 「等条件」满足后去哪：状态号，或 `NO_STATE` = 继续往下跑（= flags 的 bit7 为 0） */
+export function waitCondJumpTarget(flags: number): number {
+  return (flags & WAIT_COND_JUMP_ON) !== 0 ? flags & WAIT_COND_TGT_MASK : NO_STATE;
+}
+
+/** 改「等条件」满足后的去处（`NO_STATE` = 继续往下，顺手清掉跳转位与目标位）。 */
+export function withWaitCondJumpTarget(flags: number, target: number): number {
+  const rest = flags & ~0xff; // flags 上还没有别的位；真要有了也不会被这里悄悄抹掉
+  if (target === NO_STATE) return rest;
+  return rest | WAIT_COND_JUMP_ON | (target & WAIT_COND_TGT_MASK);
+}
 
 export interface TaskBlock {
   op: number;
@@ -105,7 +126,12 @@ export function crc16Ccitt(data: Uint8Array): number {
 
 const utf8 = (s: string): Uint8Array => new TextEncoder().encode(s);
 
-/** 一个块能改变执行流吗（能收尾 body 序列） */
+/** 一个块能改变执行流吗（能收尾 body 序列）
+ *
+ *  ⚠ 判据**只认 p3**（"超时后跳"）：固件 `task_prog.c` 的 `tail_ok()` 就是这么写的，
+ *  它不看 flags.bit7 的"满足后跳"。所以一个只写了"满足后跳到 X"、超时那栏留「继续往下跑」
+ *  的「等条件」**仍然收不了尾**（放末尾 = 固件回 TASK_E_TAIL 拒收）。这里保持同一口径，
+ *  免得编辑器放行、车却拒收。想在末尾用它，就给超时配一个真状态。 */
 export function isTailBlock(b: TaskBlock): boolean {
   if (b.op === OP.GOTO || b.op === OP.END) return true;
   return b.op === OP.WAIT_COND && b.p3 !== NO_STATE;
@@ -142,12 +168,24 @@ export function validateTask(p: TaskProgram): ValidateResult {
 
   p.states.forEach((st, i) => {
     const tag = `状态 ${i}${st.name ? `「${st.name}」` : ''}`;
+    const last = st.body[st.body.length - 1];
     [...st.enter, ...st.body].forEach((b) => {
       if (b.op === OP.GOTO && !(b.p0 < p.states.length)) {
         errors.push(`${tag}：跳到状态 ${b.p0}，但没有这个状态`);
       }
       if (b.op === OP.WAIT_COND && b.p3 !== NO_STATE && !(b.p3 < p.states.length)) {
         errors.push(`${tag}：超时改道到状态 ${b.p3}，但没有这个状态`);
+      }
+      if (b.op === OP.WAIT_COND && (b.flags & WAIT_COND_JUMP_ON) !== 0) {
+        const tgt = b.flags & WAIT_COND_TGT_MASK;
+        if (!(tgt < p.states.length)) {
+          errors.push(`${tag}：条件满足后跳到状态 ${tgt}，但没有这个状态`);
+        }
+        /* 末尾这块"满足就跳走、等不到又没出路"：固件 tail_ok 只看 p3 ⇒ 会回 TASK_E_TAIL 拒收。
+           给一条更具体的提示（原来的通用错误也还在，两句话说的是同一件事的两面）。 */
+        if (b === last && b.p3 === NO_STATE) {
+          warnings.push(`${tag}：最后一块「等条件」写的是「满足后跳走」，而超时那栏是「继续往下跑」—— 万一条件一直不满足，这个状态就没有出路（固件也会因为末尾块不能改变执行流而拒收这个程序）。给它配一个超时后跳的状态，或在后面再放一块。`);
+        }
       }
       if (b.op === OP.SET_MODE && b.p0 === MODE.WHEELS && (b.p1 > 7200 || b.p2 > 7200)) {
         errors.push(`${tag}：两轮速度超出 ±7200`);

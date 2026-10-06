@@ -2,8 +2,8 @@
  * @file  t_nvram.c
  * @brief 真 nvram.c 的主机测试：固化 -> 掉电 -> 重启后参数/标定/动作表回来
  *
- * 为什么值得单独测：nvram.c 是全工程**唯一会擦写 Flash 的模块**，存的是 v5
- * payload（g_cfg + trace_cal 两套标定 + 13 个控制环标定量 + 14 个动作角度）。
+ * 为什么值得单独测：nvram.c 是全工程**唯一会擦写 Flash 的模块**，存的是当前 payload
+ * （g_cfg + trace_cal 两套标定 + 13 个控制环标定量 + SERVO_ACTION_N 个动作角度）。
  * 既有测试只到"排了一次保存队列"这一层（t_hostext 看假 nvram_touch 计数、
  * t_hostlink:535 看 ACK），真落盘 + 重启恢复这条链一直没人跑过。
  *
@@ -32,6 +32,13 @@ extern int      host_flash_uses_real_addr(void);
 /* nvram 记录头：magic(4) + version(2) + length(2) + crc32(4) */
 #define REC_HDR 12
 
+/* ⑦ 用的"老记录"长度：只保留 payload 开头 4 字节（第一个字段 trace_speed）。
+ * ★故意不用 `当前长度 - N` 那种差值写法：N = "自那个老版本以来往末尾又追加了多少字节"，
+ *   每加一批字段就变一次（v6 +8、v7/v8 又 +8），而且加到后来差值里已经把新字段包进去了，
+ *   "末尾新字段保持当前值"就再也测不到。取一个比任何真实历史记录都短的固定前缀，
+ *   判据与真实升级路径逐字一致，以后再追加字段也不用回来改这里。 */
+#define OLD_REC_LEN 4u
+
 /* ---------------- 被 nvram.c 依赖的最小替身 ---------------- */
 
 app_settings_t g_cfg;
@@ -53,7 +60,7 @@ Motion_Mode Motion_GetMode(void) { return s_motion; }
 uint8_t     SpeedControl_IsEnabled(void) { return s_speed_en; }
 uint8_t     GyroControl_IsEnabled(void) { return s_gyro_en; }
 
-/* 动作表替身：14 项，nvram 只通过 ActionPose/SetActionPose 读写 */
+/* 动作表替身：SERVO_ACTION_N 项，nvram 只通过 ActionPose/SetActionPose 读写 */
 static int s_pose[SERVO_ACTION_N][2];
 
 void Servo_ActionPose(int x, int *a1, int *a2)
@@ -192,6 +199,10 @@ static int page_all_ff(uint32_t page)
 int main(void)
 {
     int i;
+    /* 页里那条记录自称的版本号 / payload 长度（= 固件写下来的，见 ⑥ 开头）。
+     * ⑥⑦ 两块共用 —— 不写死数字，否则每次往 payload 末尾加字段都要回来改测试。 */
+    uint16_t fw_ver = 0u;
+    uint16_t fw_len = 0u;
 
     host_flash_reset();                 /* 上电是 0x00，先抹成"已擦除"的 0xFF */
 
@@ -328,6 +339,22 @@ int main(void)
     /* ---------- ⑥ 记录被改坏 -> CRC 兜底，按"没存过"处理 ---------- */
     {
         uint8_t *pg = host_flash_page(63);
+        uint16_t bad_ver;
+
+        /* ★版本号 / payload 长度都从**固件刚写下的那条记录**里读回来（写端是唯一真值
+         * 来源），⑥⑦ 两块共用。这里不写死数字：往 payload 末尾加字段就必须升
+         * NVRAM_VERSION、长度也跟着变，写死的话"改一次固件 = 坏一次测试"，而且会
+         * **静默失效** —— 写死的那个数一旦不再等于当前版本，下面"短记录标成当前版本
+         * 必须判坏"就变成在测一条无关的分支了。 */
+        CHECK_EQ_I(pg[0], 0x48);       /* magic "HXB1"：先确认页里真有一条记录 */
+        CHECK_EQ_I(pg[1], 0x58);
+        CHECK_EQ_I(pg[2], 0x42);
+        CHECK_EQ_I(pg[3], 0x31);
+        fw_ver = (uint16_t)((uint16_t)pg[4] | ((uint16_t)pg[5] << 8));
+        fw_len = (uint16_t)((uint16_t)pg[6] | ((uint16_t)pg[7] << 8));
+        CHECK(fw_ver >= 2u);           /* ⑦ 要拿 fw_ver-1 当"老版本"，至少得减出 1 */
+        CHECK(fw_len > OLD_REC_LEN);   /* 当前 payload 必须比 ⑦ 那条短记录长 */
+
         pg[REC_HDR + 5] ^= 0xFFu;      /* payload 里翻一位 */
         power_off();
         g_cfg.trace_speed = 1;
@@ -336,49 +363,57 @@ int main(void)
         CHECK_EQ_I(g_cfg.trace_speed, 1);              /* 没被坏记录盖 */
         CHECK_EQ_I(s_settings_loaded_calls, 0);
 
-        /* 版本号越界也算坏记录 */
+        /* 版本号越界也算坏记录（fw_ver + 1 = 比当前版本还新） */
         pg[REC_HDR + 5] ^= 0xFFu;      /* 先还原 */
-        pg[4] = 9u;                    /* version = 9 > NVRAM_VERSION(6) */
+        bad_ver = (uint16_t)(fw_ver + 1u);
+        pg[4] = (uint8_t)(bad_ver & 0xFFu);
+        pg[5] = (uint8_t)(bad_ver >> 8);
         nvram_init();
         CHECK_EQ_I(nvram_loaded(), 0);
     }
 
-    /* ---------- ⑦ 老版本(v5)记录升级：新加的 gyro_corr_ref 不许被打回 0 ----------
-     * v6 在 payload 末尾追加了 gyro_corr_ref（差速随速放大参考）。老记录的 length
-     * 比现在短 8 字节 ⇒ 走 nvram_init() 里"先按当前值 snapshot、再 memcpy 前缀"那一支：
-     * 记录里有的字段原样保留，记录里没有的新字段保持参数表当前值（出厂 3000）。
-     * 这里把页里那条记录改扮成 v5 再读回来验证这条路径 —— 要是哪天有人把新字段塞进
-     * 老的 pad 区（pad 是 0），升级后放大就被静默关成 0，用户满速又转不动了。 */
+    /* ---------- ⑦ 老记录的短 length：必须能升级读回，末尾新字段不许被打回 0 ----------
+     * payload 每往末尾追加字段（v6 的 gyro_corr_ref、v7/v8 的 trace_corner…），老记录的
+     * length 就更短 ⇒ nvram_init() 走"先按当前值 snapshot、再 memcpy 记录前缀"那一支：
+     * **记录里有的字段原样保留，记录里没有的字段保持参数表当前值**。
+     * 这条判据不能写成 `fw_len - 8`（见 OLD_REC_LEN 的注释），所以这里用一条"只保留开头
+     * 4 字节"的老记录：既验证前缀被原样读回，又验证记录里没有的末尾字段（gyro_corr_ref）
+     * 保持参数表当前值，而不是被旧存档里的字节/pad 区的 0 静默关掉。 */
     {
         uint8_t *pg = host_flash_page(63);
-        uint16_t cur_len = (uint16_t)((uint16_t)pg[6] | ((uint16_t)pg[7] << 8));
-        uint16_t v5_len  = (uint16_t)(cur_len - 8U);
+        uint16_t old_ver = (uint16_t)(fw_ver - 1u);   /* 比当前版本老 ⇒ 走升级那一支 */
         uint32_t c;
 
-        pg[4] = 5u;                                    /* version = 5 (< NVRAM_VERSION) */
-        pg[5] = 0u;
-        pg[6] = (uint8_t)(v5_len & 0xFFu);
-        pg[7] = (uint8_t)((v5_len >> 8) & 0xFFu);
-        c = t_crc32(&pg[REC_HDR], v5_len);
+        pg[REC_HDR + 0] = 0x11u;                       /* trace_speed = 0x44332211（小端）*/
+        pg[REC_HDR + 1] = 0x22u;
+        pg[REC_HDR + 2] = 0x33u;
+        pg[REC_HDR + 3] = 0x44u;
+        pg[4] = (uint8_t)(old_ver & 0xFFu);
+        pg[5] = (uint8_t)(old_ver >> 8);
+        pg[6] = (uint8_t)(OLD_REC_LEN & 0xFFu);
+        pg[7] = (uint8_t)((OLD_REC_LEN >> 8) & 0xFFu);
+        c = t_crc32(&pg[REC_HDR], OLD_REC_LEN);
         pg[8]  = (uint8_t)(c & 0xFFu);
         pg[9]  = (uint8_t)((c >> 8) & 0xFFu);
         pg[10] = (uint8_t)((c >> 16) & 0xFFu);
         pg[11] = (uint8_t)((c >> 24) & 0xFFu);
 
-        /* 同一份短 length 如果标成 v6：长度和结构对不上 -> 必须判坏。
-         * （这正是"往 payload 末尾加字段就必须升 NVRAM_VERSION"的原因） */
-        pg[4] = 6u;
+        power_off();                                   /* 掉电：RAM 全清 */
+        host_param_set_local(HP_GYRO_CORR_REF, 9999.0f);  /* 参数表里放一个可辨认的当前值 */
+        nvram_init();
+        CHECK_EQ_I(nvram_loaded(), 1);                 /* 老记录（短 length）要能升级读回 */
+        CHECK_EQ_I(s_settings_loaded_calls, 1);        /* 确实 apply() 进去了 */
+        CHECK_EQ_I(g_cfg.trace_speed, 0x44332211);     /* 记录里有的字段原样保留 */
+        CHECK(near(host_param_get(HP_GYRO_CORR_REF, -1.0f), 9999.0f));  /* 没有的保持当前值 */
+
+        /* 同一条短 length 如果标成**当前版本**：长度和结构对不上 -> 必须判坏。
+         * （这正是"往 payload 末尾加字段就必须升 NVRAM_VERSION"的守门人） */
+        pg[4] = (uint8_t)(fw_ver & 0xFFu);
+        pg[5] = (uint8_t)(fw_ver >> 8);
         power_off();
         nvram_init();
         CHECK_EQ_I(nvram_loaded(), 0);
-
-        /* 改回 v5：老记录，前缀读。参数表里先放一个可辨认的当前值 */
-        pg[4] = 5u;
-        host_param_set_local(HP_GYRO_CORR_REF, 9999.0f);
-        nvram_init();
-        CHECK_EQ_I(nvram_loaded(), 1);
-        CHECK_EQ_I(s_settings_loaded_calls, 1);        /* 确实 apply() 进去了 */
-        CHECK(near(host_param_get(HP_GYRO_CORR_REF, -1.0f), 9999.0f));
+        CHECK_EQ_I(s_settings_loaded_calls, 0);        /* 坏记录不许 apply() */
     }
 
     return T_SUMMARY();

@@ -16,6 +16,9 @@
 /* 任务帧（T_TASK_*）：常量取自真头文件，实现用 host_taskstub.c 的 RAM 替身 */
 #include "task_run.h"
 #include "task_store.h"
+/* SERVO_ACTION_N：动作表帧长（= N×2）从固件真值来，不在这边写死数字
+ *（14→20 那次扩容把这里的 28 落下了，见下面 19) 的注释） */
+#include "servo.h"
 
 extern void host_dl_feed(const uint8_t *data, uint16_t len);
 extern void host_dl_reset(void);
@@ -585,7 +588,9 @@ int main(void)
     stubx_mmps_l = 0;
     stubx_mmps_r = 0;
 
-    /* 19) 动作表：GET → 28 字节；SET → ACK + 立刻下发 + 回读整表 */
+    /* 19) 动作表：GET → SERVO_ACTION_N × 2 字节（20 个动作 ⇒ 40 字节，与
+     *        host_link.c 的 `uint8_t p[SERVO_ACTION_N * 2u]` 同一个式子）；
+     *        SET → ACK + 立刻下发 + 回读整表 */
     host_dl_tx_clear();
     build(f, 0x16, 66, NULL, 0);
     feed_and_poll(f, 7);
@@ -593,7 +598,7 @@ int main(void)
         uint8_t l = 0;
         const uint8_t *r = find_frame(0x17, 66, &l);
         CHECK(r != NULL);
-        CHECK_EQ_I(l, 28);
+        CHECK_EQ_I(l, SERVO_ACTION_N * 2);
         if (r) {
             CHECK_EQ_I(r[5u + 0u], 0);      /* 动作1 舵1 */
             CHECK_EQ_I(r[5u + 1u], 0);

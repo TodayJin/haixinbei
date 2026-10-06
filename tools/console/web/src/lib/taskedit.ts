@@ -20,6 +20,7 @@ import {
   crc16Ccitt,
   encodeTask,
   validateTask,
+  waitCondJumpTarget,
   type TaskBlock,
   type TaskProgram,
   type TaskState,
@@ -42,8 +43,16 @@ export interface TaskFileJSON {
 
 /* ------------------------------------------------------- 块库元数据（界面用） */
 
-export type FieldKey = 'p0' | 'p1' | 'p2' | 'p3'
-export type FieldKind = 'int' | 'mode' | 'cond' | 'state' | 'servo'
+export type FieldKey = 'p0' | 'p1' | 'p2' | 'p3' | 'flags'
+/** 字段的控件类型：
+ *  - `int`      数字框
+ *  - `mode`     控制模式下拉
+ *  - `cond`     条件下拉
+ *  - `state`    状态下拉
+ *  - `servo`    舵机通道下拉
+ *  - `chmask`   ★8 个多选框（「指定哪几路是黑的」(10) / 「指定哪几路是白的」(11) 共用的掩码，存 `p1`）
+ *  - `condjump` ★「等条件」满足后去哪（存 `flags` 的 bit7 + 低 7 位；见 task.ts 的 WAIT_COND_JUMP_ON） */
+export type FieldKind = 'int' | 'mode' | 'cond' | 'state' | 'servo' | 'chmask' | 'condjump'
 
 export interface FieldSpec {
   key: FieldKey
@@ -135,10 +144,30 @@ export const OP_SPECS: OpSpec[] = [
     group: '等待',
     doc: '等到某个情况出现再往下走',
     fields: [
-      { key: 'p0', label: '条件', hint: '要等的那个情况（车底下发生什么才算等到）。', kind: 'cond', lo: 1, hi: 9 },
-      { key: 'p1', label: '阈值', hint: '这个条件的门槛，含义跟着上面的条件变（看选中那条的说明）；填 0 = 用固件默认（全白 60、回到线中间 5、转到指定角度 10）。压到横线 / 立即 / 车出故障 这三条用不到它。', kind: 'int', lo: -32768, hi: 32767 },
+      { key: 'p0', label: '条件', hint: '要等的那个情况（车底下发生什么才算等到）。', kind: 'cond', lo: 1, hi: 11 },
+      { key: 'p1', label: '阈值', hint: '这个条件的门槛，含义跟着上面的条件变（看选中那条的说明）；填 0 = 用固件默认（全白 60、回到线中间 5、转到指定角度 10）。压到横线 / 立即 / 车出故障 这三条用不到它；选「指定哪几路是黑的」或「指定哪几路是白的」时这一格会换成 8 个多选框。', kind: 'int', lo: -32768, hi: 32767 },
+      {
+        key: 'p1',
+        /* 静态兜底文案：真正的标题随条件变（黑 / 白），由 fieldLabel() 现取 —— 这里保留一个中性说法，
+           供「可设置：…」这类拿不到块的清单用。 */
+        label: '哪几路',
+        hint: '勾中的那几路必须同时满足才算等到（是黑还是白，看上面选的是哪条条件）；没勾的那几路一律不管。一路都没勾 = 这个条件永远不会满足。',
+        kind: 'chmask',
+        lo: 0,
+        hi: 255,
+        showIf: (b) => b.p0 === COND.CH_BLACK || b.p0 === COND.CH_WHITE,
+      },
       { key: 'p2', label: '超时', hint: '最多等多久。填 0 = 一直等（这时「超时后」那一栏完全不起作用）。', kind: 'int', lo: 0, hi: 60000, unit: 'ms' },
       { key: 'p3', label: '超时后', hint: '等超时了改跳到哪个状态；选「继续往下跑」就等于没超时，接着执行这一块的下一行。', kind: 'state', lo: 0, hi: 0xffff, allowNoState: true },
+      {
+        key: 'flags',
+        label: '满足后',
+        hint: '条件满足之后接着做什么：选「继续往下跑」就执行这一块的下一行（默认，也是所有老任务的样子）；选某个状态就立刻跳过去，新状态从它的「进门」序列重新开始。它和上面「超时后」是两条各管各的出路。',
+        kind: 'condjump',
+        lo: 0,
+        hi: 0xff,
+        allowNoState: true,
+      },
     ],
   },
   { op: OP.CROSS_CLEAR, name: 'CROSS_CLEAR', label: '清横线', group: '等待', doc: '把"压过几条横线"的计数清零', fields: [] },
@@ -164,6 +193,8 @@ export const COND_SPECS: CondSpec[] = [
   { cond: COND.DIST_MM, label: '走够距离', hint: '两个轮子转过的距离加起来够数了。阈值 = 编码器计数（不是毫米）。' },
   { cond: COND.FAULT, label: '车出故障', hint: '控制环报错停机了（电机 / 编码器异常那种），一般放在收尾里保命。' },
   { cond: COND.ALWAYS, label: '马上通过', hint: '立刻就算等到，不等任何东西；给它配一个「超时」就成了一个纯等待。' },
+  { cond: COND.CH_BLACK, label: '指定哪几路是黑的', hint: '8 个探头里，你勾中的那几路必须同时压着黑线才算等到 —— 没勾的那几路一律不管（黑也好白也好都不影响）。用来判「车正压在某条特定的线 / 某个位置上」这类形状（比如只有左半边压线、只有中间两路压线）。注意：一路都不勾 = 这个条件永远不会满足，会一直等到超时。' },
+  { cond: COND.CH_WHITE, label: '指定哪几路是白的', hint: '8 个探头里，你勾中的那几路必须同时**不压黑线**（都是白的）才算等到 —— 没勾的那几路一律不管（黑也好白也好都不影响）。它是「指定哪几路是黑的」的镜像，用来判「车已经离开某条线 / 某几路出了黑区」（旧比赛流程里有 5 段入口等的就是这个）。注意：一路都不勾 = 这个条件永远不会满足，会一直等到超时（与黑色那条同一个口径）。' },
 ]
 
 export const COND_BY_CODE = new Map<number, CondSpec>(COND_SPECS.map((c) => [c.cond, c]))
@@ -281,8 +312,10 @@ export function describeBlock(b: TaskBlock, stateCount: number, names?: string[]
       return `${b.p0} 号舵机 → ${b.p1}°`
     case OP.WAIT_MS:
       return `等 ${b.p0}ms${b.p0 >= 1000 ? `（${(b.p0 / 1000).toFixed(2).replace(/\.?0+$/, '')} 秒）` : ''}`
-    case OP.WAIT_COND:
-      return `等「${COND_BY_CODE.get(b.p0)?.label ?? `条件 ${b.p0}`}」${b.p2 ? `最多 ${b.p2}ms` : '不限时'}${b.p3 !== NO_STATE ? `，超时后跳到 ${st(b.p3)}` : ''}`
+    case OP.WAIT_COND: {
+      const jt = waitCondJumpTarget(b.flags)
+      return `等「${COND_BY_CODE.get(b.p0)?.label ?? `条件 ${b.p0}`}」${b.p2 ? `最多 ${b.p2}ms` : '不限时'}${jt !== NO_STATE ? `，满足后跳到 ${st(jt)}` : ''}${b.p3 !== NO_STATE ? `，超时后跳到 ${st(b.p3)}` : ''}`
+    }
     case OP.CROSS_CLEAR:
       return '把横线计数清零'
     case OP.GOTO:
@@ -294,10 +327,29 @@ export function describeBlock(b: TaskBlock, stateCount: number, names?: string[]
   }
 }
 
+/** 一个字段**当前值**的标题：默认就是 `f.label`；只有随条件改口的那个（`chmask`：
+ *  「哪几路是黑的」/「哪几路是白的」）从 `b.p0` 现取，做法同 `fieldHint()`/`fieldLegend()`。
+ *  `FieldSpec.label` 是不带块的静态兜底（给「可设置：…」这类拿不到块的清单用）。 */
+export function fieldLabel(f: FieldSpec, b: TaskBlock): string {
+  if (f.kind === 'chmask') return b.p0 === COND.CH_WHITE ? '哪几路是白的' : '哪几路是黑的'
+  return f.label
+}
+
 /** 一个字段**当前值**的人话解释：下拉项跟着选中的那一项走（用户 m25776 要的就是这个） */
 export function fieldHint(f: FieldSpec, b: TaskBlock): string {
   if (f.kind === 'cond') return condHint(b[f.key]) || f.hint
   if (f.kind === 'mode') return modeHint(b[f.key]) || f.hint
+  if (f.kind === 'chmask') {
+    const on = [0, 1, 2, 3, 4, 5, 6, 7].filter((i) => (b[f.key] & (1 << i)) !== 0).map((i) => i + 1)
+    if (!on.length) return '一路都没勾 —— 这个条件永远不会满足，会一直等到超时。点一下方块就是勾上/取消。'
+    return b.p0 === COND.CH_WHITE
+      ? `已勾第 ${on.join('、')} 路：这几路现在必须一路都不压着黑线（全白）才算等到，其余几路不管。`
+      : `已勾第 ${on.join('、')} 路：这几路现在必须全是黑的才算等到，其余几路不管。`
+  }
+  if (f.kind === 'condjump') {
+    const t = waitCondJumpTarget(b[f.key])
+    return t === NO_STATE ? '满足后接着执行这一块的下一行（默认，也是所有老任务的样子）。' : `满足后立刻跳到状态 ${t}，它从自己的「进门」序列重新开始。`
+  }
   return f.hint
 }
 
@@ -305,10 +357,24 @@ export function fieldHint(f: FieldSpec, b: TaskBlock): string {
 export function fieldLegend(f: FieldSpec, b: TaskBlock, stateCount: number, names?: string[]): string {
   if (f.kind === 'cond') return COND_SPECS.map((c) => `${c.label}：${c.hint}`).join('\n')
   if (f.kind === 'mode') return modeChoices(b[f.key]).map((m) => `${m.label}：${m.hint}`).join('\n')
-  if (f.kind === 'state') {
-    const rows = stateChoices(b[f.key], stateCount, !!f.allowNoState, names).map((o) => o.label)
-    rows.push(f.allowNoState ? '「继续往下跑」= 超时也不改道，接着执行下一行' : '只能选真实状态')
+  if (f.kind === 'state' || f.kind === 'condjump') {
+    /* condjump 存的是 flags（bit7 + 低 7 位），下拉要的是**解出来的状态号** —— 不能直接把
+       flags 喂给 stateChoices，否则 0x81 会被当成"状态 129（不存在）"补进列表里。 */
+    const cur = f.kind === 'condjump' ? waitCondJumpTarget(b[f.key]) : b[f.key]
+    const rows = stateChoices(cur, stateCount, !!f.allowNoState, names).map((o) => o.label)
+    rows.push(
+      f.kind === 'condjump'
+        ? '「继续往下跑」= 满足后接着执行下一行；选状态 = 满足后立刻跳过去'
+        : f.allowNoState
+          ? '「继续往下跑」= 超时也不改道，接着执行下一行'
+          : '只能选真实状态',
+    )
     return rows.join('\n')
+  }
+  if (f.kind === 'chmask') {
+    return b.p0 === COND.CH_WHITE
+      ? '8 个方块 = 车底下从左到右的 8 路探头。勾中的那几路必须同时**不压黑线**（都是白的）才算等到；没勾的一律不管。'
+      : '8 个方块 = 车底下从左到右的 8 路探头。勾中的那几路必须同时压着黑线才算等到；没勾的一律不管。'
   }
   if (f.kind === 'servo') return '1 号 / 2 号：车上那两路舵机通道'
   return f.hint

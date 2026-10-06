@@ -101,6 +101,22 @@ static float angle_tol(int16_t p2)
     return ((p2 == 0) ? (float)ANGLE_TOL_DEFAULT : (float)p2) / 10.0f;
 }
 
+/* 「这一路压黑线吗」—— 给 TASK_C_CH_BLACK 逐路取位。
+ * 真值优先用 trace_cal_channel()（1 = 压黑线 / 0 = 没压）；它回 **-1** 表示"这一路现在
+ * 给不出真值"（没标定 / 这一路标定无效 / 用户显式选了数字口模式要调用者回落），
+ * 这时退回同一份柱高的半高判定（= 界面上那个 0/1 的口径，数字口模式下是 0/255 真值）。
+ * 仍判不出来就当**没压黑**：方向必须是保守的 —— 判不出来若当成"黑"，标定一坏这个条件
+ * 会立刻满足、车提前动作；当成"不黑"最多是卡在等待里，还有超时兜底。 */
+static uint8_t ch_black(uint8_t i)
+{
+    int r = trace_cal_channel(i);
+
+    if (r >= 0) {
+        return (uint8_t)r;
+    }
+    return (trace_cal_level(i) >= 128u) ? 1u : 0u;
+}
+
 static int cond_ok(uint16_t c, int16_t thr)
 {
     uint8_t i;
@@ -136,6 +152,42 @@ static int cond_ok(uint16_t c, int16_t thr)
         return (Motion_GetFault() != 0u) ? 1 : 0;
     case TASK_C_ALWAYS:
         return 1;
+    case TASK_C_CH_BLACK: {
+        /* ★「指定哪几路是黑的」（用户 m 2026-10-07）：thr = **8 位掩码**（bit0..bit7 = 第 1..8 路），
+         *   判据 = **勾中的那几路当前全是黑的**（没勾的通道一律不管）。
+         *   掩码 = 0 ⇒ **恒不满足**（显式定的语义）：0 路"全黑"是空真，会让这个条件永远立刻
+         *   通过 —— 那是陷阱不是本意。掩码只取低 8 位（界面只给 0..255）。 */
+        uint16_t m = (uint16_t)thr & 0xFFu;
+
+        if (m == 0u) {
+            return 0;
+        }
+        for (i = 0u; i < 8u; i++) {
+            if ((m & (uint16_t)(1u << i)) != 0u && ch_black(i) == 0u) {
+                return 0;                       /* 勾中的某一路没压黑线 ⇒ 不满足 */
+            }
+        }
+        return 1;
+    }
+    case TASK_C_CH_WHITE: {
+        /* ★「指定哪几路是白的」= 上面那条件的镜像：同一个掩码，判据 = **勾中的那几路一路都不黑**
+         *   （没勾的通道一律不管）。旧内置流程 renwu.c 有 5 段入口就是这个意思（data[0..4]==0 等）。
+         *   掩码 = 0 ⇒ **恒不满足**，与条件 10 一字不差：0 路的"全白"同样是空真，会让这个条件
+         *   永远立刻通过（把状态机瞬间推过去），那是陷阱不是本意。
+         *   复用的是同一个 ch_black()（含它的回落与"判不出来当没压黑"），所以两个条件对同一份
+         *   灰度数据永远给出一致的判断，不会出现"一路既算黑又算白"的中间态。 */
+        uint16_t m = (uint16_t)thr & 0xFFu;
+
+        if (m == 0u) {
+            return 0;
+        }
+        for (i = 0u; i < 8u; i++) {
+            if ((m & (uint16_t)(1u << i)) != 0u && ch_black(i) != 0u) {
+                return 0;                       /* 勾中的某一路压着黑线 ⇒ 不满足 */
+            }
+        }
+        return 1;
+    }
     default:
         return 0;                               /* 不认识的条件：永不满足（靠超时脱身） */
     }
@@ -151,14 +203,19 @@ static int block_step(const task_block_t *b)
 {
     switch (b->op) {
     case TASK_OP_SET_SPEED:
-        Motion_SetSpeed((int)b->p0);
+        /* ★p0 是 u16 ⇒ 按 i16 符号扩展（否则负基准速度表达不出来；
+         *   旧全程「超级大坡」段要 RW(-900) 那种倒车段。向后兼容：现网速度都 <32768）。 */
+        Motion_SetSpeed((int)(int16_t)b->p0);
         return 1;
 
     case TASK_OP_SET_MODE:
         if ((b->flags & 0x01u) || b->p0 == (uint16_t)TASK_MODE_WHEELS) {
             /* 两轮速度直给：走速度环，关掉循迹/角度环接管 */
             Motion_SetMode(MOTION_IDLE);
-            SpeedControl_SetTarget((int)b->p1, (int)b->p2);
+            /* ★p2 是 u16 ⇒ 按 i16 符号扩展：否则「两轮直给 −3600」编码成 61936，
+             *   车上变成"左轮倒转 + 右轮顶到 +7200" = **原地打转，不是倒车**（已实锤）。
+             *   向后兼容：现网所有任务速度都 <32768。 */
+            SpeedControl_SetTarget((int)b->p1, (int)(int16_t)b->p2);
             SpeedControl_Enable(1u);
         } else {
             /* **只有真的要换模式才先停速度环**（用户 m28949：跑循迹"根本就不动"）。
@@ -217,6 +274,18 @@ static int block_step(const task_block_t *b)
         if (cond_ok(b->p0, b->p1)) {
             if (b->p0 == (uint16_t)TASK_C_CROSS) {
                 tracing_cross_clear();
+            }
+            /* ★flags.bit7（用户 m 2026-10-07）：「满足后」去哪。
+             *   bit7 = 1 ⇒ 跳到低 7 位的状态号（和 p3 的"超时后跳"是两条独立出路）；
+             *   bit7 = 0 ⇒ **满足后继续往下走一块**（老任务 flags 全是 0 ⇒ 行为一字不变）。 */
+            if ((b->flags & TASK_WAIT_COND_JUMP) != 0u) {
+                uint8_t tgt = (uint8_t)(b->flags & TASK_WAIT_COND_TGT_MSK);
+
+                if (tgt < s_n_states) {
+                    seq_begin(tgt);
+                    return 2;
+                }
+                /* 目标状态越界（程序被改过）：当"继续往下"处理 —— 绝不越界跳 */
             }
             return 1;
         }

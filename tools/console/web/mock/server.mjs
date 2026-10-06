@@ -7,7 +7,8 @@
  *   PORT=9000 node mock/server.mjs
  *
  * 数据全是合成的：yaw 缓慢漂移、pitch/roll 抖动、8 路灰度扫过一条"线"、
- * 电压 12V 缓降、电流跟着 PWM 走、偶尔丢线。动作表用固件里 14 个动作的真实默认角度。
+ * 电压 12V 缓降、电流跟着 PWM 走、偶尔丢线。动作表用固件里 20 个动作的真实默认角度
+ * （前 14 项 = `firmware/App/Bsp/servo.c` 的出厂角度，15..20 是空位 0/0）。
  */
 
 import http from 'node:http'
@@ -80,6 +81,14 @@ const ACTION_DEFAULTS = [
   [12, '收回2', 40, 0],
   [13, '打下1(另一路)', 90, 60],
   [14, '打下准备(另一路)', 30, 60],
+  // 15..20 = 固件 servo.h 的 SERVO_ACTION_N=20 多出来的空位（角度由舵机页/任务编排下发）；
+  // 名字与角度逐项对齐 bridge/params.py 的 ACTION_NAMES/ACTION_FACTORY。
+  [15, '动作15', 0, 0],
+  [16, '动作16', 0, 0],
+  [17, '动作17', 0, 0],
+  [18, '动作18', 0, 0],
+  [19, '动作19', 0, 0],
+  [20, '动作20', 0, 0],
 ]
 
 let actions = ACTION_DEFAULTS.map(([n, name, a1, a2, steps]) => ({
@@ -463,7 +472,7 @@ const server = http.createServer(async (req, res) => {
     if (path === '/api/actions/set' && req.method === 'POST') {
       const body = (await readBody(req)) || {}
       const item = actions.find((a) => a.n === body.n)
-      if (!item) return fail(res, 404, `动作 ${body.n} 不存在（1..14）`, 'not_found')
+      if (!item) return fail(res, 404, `动作 ${body.n} 不存在（1..${actions.length}）`, 'not_found')
       for (const [k, v] of [['a1', body.a1], ['a2', body.a2]]) {
         if (v !== undefined && (!Number.isFinite(v) || v < 0 || v > 180)) {
           return fail(res, 400, `${item.name} 的 ${k} 必须在 0..180`, 'out_of_range')
