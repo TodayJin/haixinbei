@@ -215,14 +215,16 @@
  * TRACE_HOLD_MS 半速；**超过 TRACE_HOLD_MS 才进"找线扫描"**（原地对转 + 按转角掉头），再超时保护停车。
  * ★累计转角夹子 TRACE_HOLD_MAX_DEG：用户 m 的例子——"0° 一直往前走、突然一个 180° 的大弯，
  *   这个最多只能拐到 150°" ⇒ 到了就只保持转率、不再推进目标航向（否则会把 180° 也拐过去）。*/
-#define TRACE_HOLD_MS       150U   /* 保持阶段总时长。★2026-10-06 从 1000ms 砍到 150ms：
+#define TRACE_LOST_HOLD_MS  150U   /* 保持阶段总时长（**换个名字：trace_cal.h 已有一个 TRACE_HOLD_MS**，
+                                    * 原来重名会吃一条编译警告）。★2026-10-06 从 1000ms 砍到 150ms：
                                     *   真车日志取证（146 事件、按版本）表明**“保持 = 继承丢线前那一拍的转向需求”
                                     *   正是新版方向判错的主要来源** —— 旧版 sx（≈120ms 就交给确定性扫描）
                                     *   真反向 0/13，而带 1000ms 保持的 hold/comp/dir 是 16.7%/18.8%/20.8%，
                                     *   且 14 次真反向里 12 次“丢线第一拍 rate_ref 已是负的”（方向判错）。
                                     *   保持还把长丢线占比从 7% 抬到 21% ⇒ 错就错满一秒。
                                     *   ⇒ 只留很短一段（150ms），马上让扫描接管方向。*/
-#define TRACE_HOLD_FULL_MS   250U  /* 保持阶段里"全速"的那一段 */
+#define TRACE_HOLD_FULL_MS  150U   /* 保持阶段里"全速"的那一段（= 保持总时长 ⇒ 保持段全程全速，
+                                    * 半速那一档留给"万一以后把保持调长"的用法）*/
 #define TRACE_HOLD_MAX_DEG  150.0f /* 保持阶段累计最多转这么多度 */
 
 /* ★2026-10-06 方向判据的补偿常数（见下面"最后一个已知缺口"整段）。
@@ -271,7 +273,6 @@ static float   s_yaw_rate        = 0.0f;/* 车自己的偏航角速度（°/s，
 static float   s_hold_dir        = 0.0f;/* ★丢线那一拍**锁死**的转向符号（−1=向右 / +1=向左）*/
 static uint8_t s_hold_on         = 0U;  /* 是否在"保持阶段"（丢线后先照上一拍走，见 TRACE_HOLD_MS） */
 static uint32_t s_see_since      = 0;   /* 连续看见线的起点；0 = 没在连续看见（用于 TRACE_REACQ_MS） */
-static uint32_t s_lost_recent_at = 0;   /* 最近一次"丢线"的时刻（用于 TRACE_SLOW_AFTER_LOST_MS） */
 static float   last_pid_output  = 0.0f;
 
 /* 外环微分项（阻尼）的状态：重心变化率 ė（格/s），只在新的灰度帧上更新 */
@@ -762,9 +763,7 @@ void motor_tracing_cascade(int base_speed)
         uint32_t lost_ms = (uint32_t)(HAL_GetTick() - s_lost_since);
 
         s_see_since = 0U;   /* 丢线：连续看见的计时作废（要重新连续看见才算出弯） */
-        /* ★方向判据：comp = 去掉"车自己转"那一份之后的横向速度（格/s）。**只在丢线那一拍算一次**，
-         *   之后用锁死的 `s_hold_dir`（见上面 `if (!s_hold_on)` 那段与 Gyro_Z 那段注释）。 */
-        float comp = s_pos_rate - s_yaw_rate * TRACE_SENSOR_LEVER;
+        /* 方向判据：**在丢线那一拍用 `s_err_dir`（见上面 `if (!s_hold_on)` 那段）**。 */
         if (!s_hold_on) {   /* ★刚丢线：锁方向、消掉存量领先、记下"上一拍"和当时的航向 */
             s_hold_on   = 1U;
             s_hold_yaw0 = Yaw;
@@ -808,7 +807,7 @@ void motor_tracing_cascade(int base_speed)
          *   那时才把基准打成 0（原地对转，pivot 工况；见下面那段"速度策略"的历史注释）。 */
         if (lost_ms < TRACE_HOLD_FULL_MS) {
             /* 全速：保持上一拍的动量 */
-        } else if (lost_ms <= TRACE_HOLD_MS) {
+        } else if (lost_ms <= TRACE_LOST_HOLD_MS) {
             base_speed = base_speed / 2;    /* 半速：还前进着转，但更容易被拉回来 */
         } else {
             base_speed = 0;                 /* 进找线扫描 ⇒ 原地对转（pivot 工况） */
@@ -819,7 +818,7 @@ void motor_tracing_cascade(int base_speed)
          * ★方向不再只靠 s_search_dir：它可能整趟都没被置过（车一直很正）⇒ 退化成按
          * err 短 EMA 的符号挑一边，总比"不动等着被停车"强。 */
         {
-            if (lost_ms <= TRACE_HOLD_MS) {
+            if (lost_ms <= TRACE_LOST_HOLD_MS) {
                 /* ★"照上一拍走"（用户 m 的方案 B）：保持丢线前的转向需求，并**继续推进目标航向**
                  *   ⇒ 车**前进着持续转**（而不是原地对转）。这样探头会扫过一段**弧线**，比原地画小圈
                  *   更容易压到新那条线（用户原话：「它还是前进着左转，所以这样就容易找到线」）。

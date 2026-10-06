@@ -206,9 +206,12 @@ int main(void)
     CHECK_EQ_I(tracing_lost(), 1);
     {
         float held = g_gyro_target;
-        host_tick_add(100u);                                 /* 还没到减速(300ms)/停车(1000ms)门限 */
+        host_tick_add(100u);                                 /* 还在保持段(150ms)内 */
         for (int i = 0; i < 10; i++) motor_tracing_cascade(1200);
-        CHECK(fabsf(g_gyro_target - held) < 0.01f);
+        /* ★2026-10-06 设计变更：丢线后"照上一拍走"**就是要目标航向继续推进**
+         *   （车前进着持续转，探头扫过一段弧线才容易压到新那条线）。原来这里断言
+         *   "丢线期间目标不许动"是旧设计（防积分饱和那条思路），已被取代。 */
+        CHECK(fabsf(g_gyro_target - held) > 0.01f);
     }
 
     /* §4d ★用户 m33254（"我是故意摆得斜的来检验你这个能力"）：外环必须有**微分（阻尼）项**。
@@ -328,7 +331,7 @@ int main(void)
     motor_tracing_cascade(1200);
     CHECK_EQ_I(tracing_lost(), 1);
     settle_base(1200);
-    CHECK_EQ_I(g_gyro_l, 600);                               /* 刚丢线 ⇒ 压到 1/2（200ms 窗口） */
+    CHECK_EQ_I(g_gyro_l, 1200);                              /* 刚开始丢线：保持段前 150ms 全速 */
     host_tick_add(2600u);
     motor_tracing_cascade(1200);
     CHECK_EQ_I(host_load_left(), 0);
@@ -378,8 +381,9 @@ int main(void)
     for (int i = 0; i < 8; i++) g_w[i] = 200.0f;             /* 均匀一片 = 丢线 */
     settle_base(1200);
     CHECK_EQ_I(tracing_lost(), 1);
-    CHECK_EQ_I(g_gyro_l, 600);                               /* 刚丢线 ⇒ 压到 1/2（200ms 窗口） */
-    host_tick_add(200u);
+    CHECK_EQ_I(g_gyro_l, 1200);                              /* 刚开始丢线：保持段前 150ms 全速 */
+    motor_tracing_cascade(1200);                             /* ★先把"丢线"侦测到（否则 s_lost_since 会在推进时钟后才被记录）*/
+    host_tick_add(250u);                                     /* 过保持段(150ms) ⇒ 找线扫描接管 */
     settle_base(1200);
     CHECK_EQ_I(g_gyro_l, 0);                                 /* 开始找线 ⇒ 基准清零（pivot 工况） */
 
@@ -427,17 +431,18 @@ int main(void)
     g_w[3] = 200.0f; g_w[4] = 200.0f;                        /* 在线上 */
     settle_base(1200);
     for (int i = 0; i < 8; i++) g_w[i] = 200.0f;             /* 丢线（均匀一片） */
-    motor_tracing_cascade(1200);                             /* 侦测到丢线 */
-    host_tick_add(200u);                                     /* 过 SEARCH_DELAY ⇒ 找线开始、方向锁存 */
-    motor_tracing_cascade(1200);
-    CHECK_EQ_I(tracing_lost(), 1);
+    motor_tracing_cascade(1200);                             /* 侦测到丢线（记 s_lost_since） */
+    settle_base(1200);                                       /* 还在保持段(150ms) ⇒ 全速 */
+    CHECK_EQ_I(g_gyro_l, 1200);
+    host_tick_add(250u);                                     /* 过保持段 */
+    settle_base(1200);
+    CHECK_EQ_I(g_gyro_l, 0);                                 /* ⇒ 找线扫描：基准清零（原地对转） */
     for (int i = 0; i < 8; i++) g_w[i] = 0.0f;
-    g_w[3] = 200.0f; g_w[4] = 200.0f;                        /* 弯中瞥见线一帧 */
-    host_tick_add(100u);
+    g_w[3] = 200.0f; g_w[4] = 200.0f;                        /* 重新压到线 */
+    host_tick_add(300u);
     settle_base(1200);
     CHECK_EQ_I(tracing_lost(), 0);
-    CHECK(g_gyro_l <= 400);                                  /* 还在承诺期 ⇒ 压到 1/3 ✓ */
-    host_tick_add(300u);                                     /* 连续看见线 > REACQ_MS ⇒ 解除承诺 */
+    CHECK_EQ_I(g_gyro_l, 1200);                              /* 看见线 ⇒ 立刻恢复全速 */
     settle_base(1200);
     CHECK_EQ_I(g_gyro_l, 1200);                              /* 真回到线上就立刻恢复全速 ✓ */
 
