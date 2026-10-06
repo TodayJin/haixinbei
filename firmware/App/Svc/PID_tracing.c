@@ -215,9 +215,21 @@
  * TRACE_HOLD_MS 半速；**超过 TRACE_HOLD_MS 才进"找线扫描"**（原地对转 + 按转角掉头），再超时保护停车。
  * ★累计转角夹子 TRACE_HOLD_MAX_DEG：用户 m 的例子——"0° 一直往前走、突然一个 180° 的大弯，
  *   这个最多只能拐到 150°" ⇒ 到了就只保持转率、不再推进目标航向（否则会把 180° 也拐过去）。*/
-#define TRACE_HOLD_MS       1000U  /* 保持阶段总时长 */
+#define TRACE_HOLD_MS       1000U  /* 保持阶段总时长。★用户 m 实测反馈："他这次拐得挺好的，但是就是容易
+                                    * 找不到这个弯、拐错了，这个概率还很大" ⇒ 转弯本身对了，所以**保持 1000ms
+                                    * 不要缩短**（曾试 300ms 的想法被这条反馈否掉）。剩下的是**丢线时方向选错**
+                                    * —— 见下面 TRACE_HOLD_MAX_DEG 注释里"最后一个已知缺口"那段。 */
 #define TRACE_HOLD_FULL_MS   250U  /* 保持阶段里"全速"的那一段 */
 #define TRACE_HOLD_MAX_DEG  150.0f /* 保持阶段累计最多转这么多度 */
+/* ★2026-10-06 最后一个已知缺口：**丢线那一刻的方向选错**（用户 m："容易找不到这个弯、拐错了，
+ *   这个概率还很大"）。现在方向取 `s_err_dir`（err 的短 EMA）= "**线最后偏在哪一侧**"，可是在直角处
+ *   这一条**不等于转弯方向**：
+ *     · 车压在弯口上丢线时，探头底下可能还压着**来路那条腿** ⇒ "最后偏在哪侧"指向的是**旧腿**，
+ *       而真正的弯在另一侧 ⇒ 一拐就反（实测 5 次里 4 次与"线往哪边跑"相反）；
+ *     · 用"线的横向速度 ė"也不行：ė 里混着**车自己转动**造成的表观运动（探头杆在前方，车一转它就横移）。
+ *   ⇒ 下一个该试的办法（**尚未实现**）：把 ė 里"车自己转"那一份**减掉**再取方向 ——
+ *       `comp = ė_测 + ω_陀螺 × 探头杆到旋转中心的力臂(格/°)`，`comp` 才是"线在世界系里往哪边跑"，
+ *       而那条线拐弯时是往弯里跑的。力臂那个常数要现场标一次（当前未知）。*/
 
 /* ★2026-10-06 "找线后压速"（实测：进弯 350mm/s 会冲过弯口出界）：只要**刚丢过线**，
  *   接下来 TRACE_SLOW_AFTER_LOST_MS 内基准减半 —— 这样即使弯中零星瞥见线，也是慢慢把车头带回，
@@ -780,10 +792,17 @@ void motor_tracing_cascade(int base_speed)
                  *   更容易压到新那条线（用户原话：「它还是前进着左转，所以这样就容易找到线」）。
                  *   ★累计转角**最多 TRACE_HOLD_MAX_DEG**：用户 m 的例子——"0° 一直往前走、突然一个
                  *   180° 的大弯，最多只能拐到 150°" ⇒ 到了就只保持转率、不再推进目标航向。*/
+                /* ★方向与幅度**拆开取**（用户 m 问"转弯方向是不是搞反了"引出的）：
+                 *   丢线那一拍的 `rate_cmd = −(30×err + 36×ė)` 里 **D 项主宰**（ė 常 ±25 格/s ⇒ 36×25=900，
+                 *   而 P 项 30×3.5 只有 105）⇒ 直接拿它的符号当方向，等于"按最后一拍的抖动决定转向"
+                 *   ⇒ 看起来就是方向反了。所以：
+                 *     · **方向**取抗噪的那个 —— `s_err_dir`（err 的短 EMA，不含 D 项）；
+                 *     · **幅度**取保持下来的 |rate_cmd|。 */
+                float hold = ((s_err_dir >= 0.0f) ? -1.0f : 1.0f) * fabsf(s_hold_rate);
                 if (fabsf(NormalizeAngle(Yaw - s_hold_yaw0)) < TRACE_HOLD_MAX_DEG) {
-                    GyroControl_AimRelative(s_hold_rate * TRACE_CASCADE_DT_S);
+                    GyroControl_AimRelative(hold * TRACE_CASCADE_DT_S);
                 }
-                GyroControl_SetTraceRate(s_hold_rate);
+                GyroControl_SetTraceRate(hold);
             } else {
                 float rate  = TRACE_SEARCH_RATE;
                 float rate_max = ((s_trace_rate_max > 0.0f) ? s_trace_rate_max : TRACE_RATE_MAX_DEFAULT);
