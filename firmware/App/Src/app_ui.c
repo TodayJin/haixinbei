@@ -2983,6 +2983,7 @@ void app_ui_tick(uint32_t now_ms)
     if (s_corner_applied != (uint8_t)(g_cfg.trace_corner ? 1U : 0U)) {
         s_corner_applied = (uint8_t)(g_cfg.trace_corner ? 1U : 0U);
         host_param_set_local(HP_TRACE_CORNER, s_corner_applied ? 1.0f : 0.0f);
+        nvram_touch();   /* ★立刻安排落盘（NVRAM 存的是参数表镜像；"正在保存/保存成功"由 nvram_poll 弹）*/
     }
 
     /* 设置里的「连续判线」（连续插值 / 纯 0/1）跟随生效。
