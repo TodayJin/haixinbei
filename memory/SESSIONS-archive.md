@@ -1,4 +1,10 @@
 ## 2026-09-30
+完成：把 SVD 换成 CLT 自带版（G4 v3.0）并验证：stm32-dev.py doctor 退出 0；svd TIM8.TIM8_CNT --all 读到 0x00001a18 @0x40013424；随后 RTT 3 s 抓到 77 行、HOST tx 从 1719 涨到 32827（目标未被挂住）。寄存器名不一定带前缀（I2C1=CR1，TIM8=TIM8_CNT）；svd 子命令读寄存器会因 JLinkGDBServer 不支持 detach 而让退出码为 1，属已知无害噪声。
+下一步：无。
+
+> 更早的会话条目已归档到 262 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-30
 完成：复核补丁后复测：不设 STM32_PROGRAMMER_CLI、PATH 里没有 SEGGER 的情况下 make flash 仍能找到 CLI（D:\APP\ST\STM32CubeCLT_1.22.0\STM32CubeProgrammer\bin\STM32_Programmer_CLI.exe）→ CLI 段 NVM size : 128 KBytes + Download verified successfully → J-Link 段 "Skipped. Contents already match" → 回读 81612 字节 firstDiff=none → 退出码 0。中途发现 tools.edit 丢 BOM 导致 .ps1 报错，已补回并复测通过。
 下一步：继续别的目标；编辑 .ps1 后记得补 BOM。
 
