@@ -806,7 +806,7 @@ void motor_tracing_cascade(int base_speed)
         uint8_t l = 0U, r = 0U, i;
         for (i = 0U; i < 4U; i++) if (trace_cal_channel(i) == 1) l++;
         for (i = 4U; i < 8U; i++) if (trace_cal_channel(i) == 1) r++;
-        if (TRACE_CORNER_ENABLE && !s_corner_on && !all_sensors_lost &&
+        if ((host_param_get(HP_TRACE_CORNER, 0.0f) >= 0.5f) && !s_corner_on && !all_sensors_lost &&
             (l >= TRACE_CORNER_HALF_MIN || r >= TRACE_CORNER_HALF_MIN) &&
             (uint32_t)(HAL_GetTick() - s_corner_at) > TRACE_CORNER_REFRACT_MS) {
             s_corner_on  = 1U;

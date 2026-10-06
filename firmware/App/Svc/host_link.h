@@ -76,6 +76,10 @@
 #define HP_TRACE_ANGLE_PER_UNIT 0x0205u /* 串级外环：重心误差 -> 转率 (°/s)/格（用户 m32880 改口径） */
 #define HP_TRACE_ANGLE_MAX   0x0206u  /* 串级外环：目标航向相对**当前**航向的前置量上限 °（防积分饱和） */
 #define HP_TRACE_RATE_MAX    0x020Au  /* 串级：**循迹时**的期望角速度上限 °/s（pivot 仍用 HP_GYRO_RATE_MAX） */
+#define HP_TRACE_CORNER      0x020Bu  /* ★直角主动转弯开关：0 = 关（默认，纯循迹）/ 1 = 开（自动转弯）。
+                                       *   实现就在 PID_tracing.c 的直角那段（`trace_cal_channel` 半边 4 路检测
+                                       *   + 一次转 100° + 原地对转 + 1.5s 防重触发）—— **一行没删**，只由这个
+                                       *   参数挡住；在网页「设置/参数」页改成 1 再 push 即可打开。*/
 #define HP_PIVOT_KP          0x0207u  /* 原地 pivot（base=0）循迹 PID：比例 */
 #define HP_PIVOT_KI          0x0208u  /* 原地 pivot：积分（实测 0 最好，防 windup） */
 #define HP_PIVOT_KD          0x0209u  /* 原地 pivot：微分 */

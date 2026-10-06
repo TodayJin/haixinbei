@@ -99,6 +99,7 @@ static const param_spec_t SPECS[] = {
    * 300：两轮反向对转的物理上限约 240 °/s，留一点余量；它同时是 PID_tracing.c 外环自己的
    * 速率夹子（那边原来借的就是 HP_GYRO_RATE_MAX）。 */
   { HP_TRACE_RATE_MAX,    300.0f,    10.0f,      300.0f },
+  { HP_TRACE_CORNER,        0.0f,     0.0f,        1.0f },   /* ★直角主动转弯开关（0=关＝默认纯循迹，1=开）*/
   { HP_BASE_SPEED,       6480.0f,     0.0f,     7200.0f },
   { HP_BASE_SPEED_SLOW,  2500.0f,     0.0f,     7200.0f },
   /* 任务解释器启动时的基准速度（`task_run.c:305` 用它 `Motion_SetSpeed` 一次，之后串级循迹
