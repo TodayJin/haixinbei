@@ -74,7 +74,7 @@ app_settings_t g_cfg = {
     .beep_marker  = true,
     .trace_invert = false,
     .trace_adapt  = true,    /* 「连续判线」默认开 = 连续插值口径（见 trace_cal.h「判线口径」） */
-    .trace_corner = false,   /* ★「直角转弯」默认关 = 纯循迹（打开 = 探头半边 4 路压线就主动转弯） */
+    .trace_corner = 0,       /* ★「直角转弯」默认关 = 纯循迹（打开 = 探头半边 4 路压线就主动转弯） */
     .gray_mode    = TRACE_MODE_AUTO,
     .trace_cal_set = 0       /* 默认用第 0 套（普通路面） */
 };
