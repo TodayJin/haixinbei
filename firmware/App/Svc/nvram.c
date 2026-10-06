@@ -21,7 +21,10 @@
 #include <stddef.h>
 
 #define NVRAM_MAGIC      0x31425848UL   /* "HXB1"（小端存下来是 48 58 42 31） */
-#define NVRAM_VERSION    6U             /* v6：角度环差速天花板参考（v5：控制环标定量 + 舵机动作表） */
+#define NVRAM_VERSION    7U             /* v7：直角转弯开关（v6：角度环差速天花板参考；v5：控制环标定量 + 舵机动作表）。
+                                         * ★铁律：**payload 长大就必须升这个版本号** —— 判据是
+                                         *   `version == NVRAM_VERSION` 时要求 `length == sizeof(payload)`，
+                                         *   只加字段不升版本 ⇒ 旧存档被判不合格 ⇒ **用户所有设置回默认**。 */
 #define NVRAM_VERSION_MIN 1U            /* 能读的最老版本（靠"字段只往末尾追加"兼容升级：
                                          * 比当前版本短的记录，缺的那些字段取当前默认值）*/
 
@@ -91,6 +94,13 @@ typedef struct {
      * 那一支，新字段拿到的是当前默认值（3000），而不是原 pad 区的 0（= 把放大功能关掉）。 */
     int32_t  gyro_corr_ref;
     uint8_t  pad6[4];
+    /* ---- v7 新增：「直角转弯」开关（用户 m 2026-10-07：屏幕里能设置的都要保存）----
+     * 与 `trace_adapt` 同一套路：payload 里开专用字段、snapshot/apply 直接读写 `g_cfg`。
+     * 同样只往末尾加 + 留 pad：旧记录（length 更短）走 nvram_init 里"先 snapshot 铺默认值
+     * 再 memcpy 前缀"那一支 ⇒ 新字段拿到的是**当前默认值**（0 = 关），不是 pad 区的 0。 */
+    uint8_t  trace_corner;
+    uint8_t  pad7[7];                          /* ★必须凑满 8 字节：下面有编译期断言
+                                                *   `nvram_record_size_must_be_8x`，加 4 字节会当场编不过。 */
 } nvram_payload_t;
 
 typedef struct {
@@ -208,6 +218,7 @@ static void snapshot(nvram_payload_t *p)
 
     /* v3：「连续判线」口径（0 = 纯 0/1，1 = 连续插值）。存的是 g_cfg 里那一项（菜单直接改它） */
     p->trace_adapt = (uint8_t)(g_cfg.trace_adapt ? 1U : 0U);
+    p->trace_corner = (uint8_t)(g_cfg.trace_corner ? 1U : 0U);   /* ★v7：直角转弯开关 */
 
     /* v5：控制环标定量（参数表镜像）+ 舵机动作表 */
     p->gyro_ang_kp_x100    = snap_param_scaled(HP_GYRO_ANG_KP,        100.0f);
@@ -264,6 +275,7 @@ static void apply(const nvram_payload_t *p)
     /* v3：「连续判线」口径（0 = 纯 0/1，1 = 连续插值）。老记录里没有这一项时，nvram_init 已经把
      * 默认值先填进 up 了，所以这里无条件盖是安全的。 */
     g_cfg.trace_adapt  = (p->trace_adapt != 0U);
+    g_cfg.trace_corner = (p->trace_corner != 0U);   /* ★v7：直角转弯开关 */
 
     g_cfg.gray_mode = (int32_t)(p->gray_mode % TRACE_MODE_COUNT);
 
