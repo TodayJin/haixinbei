@@ -1,4 +1,11 @@
 ## 2026-09-30
+完成：2026-09-30 用 J-Link 把电机+编码器标定通过。① 新建 `make MOTOR_BENCH=1` 台架固件（`firmware/App/Bsp/motor_bench.c`，`#define BENCH_MODE` 0=完整台架/1=转向目视+起步脉宽/2=手推标定）；② 确认两轮编码器都工作、互不串扰、正反转对称；③ 手推标定 + 目视确认解出极性模型；④ 修 `motor.c`（`Load()` 第二路取负）与 `encoder.c`（左路取负）；⑤ 复测：`Load(+,+)` 两轮都朝车头（用户目视确认），速度环目标 1500–5000 跟到 ±5%；⑥ 结论写进 `固件接口规格.md` §3.1/§3.2；⑦ 烧回正式固件 `build-app/haixin-app.bin`（81612 B）。验证：RTT 日志 `out/bench_fix2.log`（CLOSE 分段实测）、`out/bench_dir4.log`（起步脉宽 + ±6000 计数）、`out/bench_spin.log`（手推累计符号）、`out/bench_probe2.log`（修前对照）。
+未完成：速度目标 <1500 的粘滑极限环只做了文档化，没做控制律补偿；`SPEED_MIN_ACTIVE 500` 与真实死区 2600 仍然不匹配。
+下一步：循迹（灰度）+ 舵机联调；上层给速度目标加 <1500 下限；补测五向键左/中。
+
+> 更早的会话条目已归档到 263 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-30
 完成：把 SVD 换成 CLT 自带版（G4 v3.0）并验证：stm32-dev.py doctor 退出 0；svd TIM8.TIM8_CNT --all 读到 0x00001a18 @0x40013424；随后 RTT 3 s 抓到 77 行、HOST tx 从 1719 涨到 32827（目标未被挂住）。寄存器名不一定带前缀（I2C1=CR1，TIM8=TIM8_CNT）；svd 子命令读寄存器会因 JLinkGDBServer 不支持 detach 而让退出码为 1，属已知无害噪声。
 下一步：无。
 
