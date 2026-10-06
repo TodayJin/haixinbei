@@ -125,6 +125,7 @@ export const OP_SPECS: OpSpec[] = [
     ],
   },
   { op: OP.ACTION, name: 'ACTION', label: '舵机动作', group: '动作', doc: '按**编号**播车上那套舵机动作；角度由「舵机与动作」页的动作表决定（不在这里填）', fields: [{ key: 'p0', label: '动作号', hint: '车上动作表里的第几套（**1~20**）。角度不在这儿填：第 N 号对应哪两路角度，去「舵机与动作」页看/改，改完写回车，这里跟着变。', kind: 'int', lo: 1, hi: 20 }, { key: 'p2', label: '之后等待', hint: '动作播完后先等这么久再往下走（舵机自己在动，程序不等它）。', kind: 'int', lo: 0, hi: 60000, unit: 'ms' }] },
+  { op: OP.CAL_SET, name: 'CAL_SET', label: '切换灰度标定套', group: '循迹', doc: '换用另一套 8 路黑白标定（同一个探头，两种地面/反光条件各标一套）', fields: [{ key: 'p0', label: '第几套', hint: '0 = 普通（宝丽布）；1 = 亚克力。两套标定要在车上分别标好（循迹页右键可预览另一套）。', kind: 'int', lo: 0, hi: 1 }] },
   { op: OP.SET_SERVO, name: 'SET_SERVO', label: '直接摆舵机', group: '动作', doc: '不经过动作表，直接给舵机一个角度', fields: [{ key: 'p0', label: '通道', hint: '车上的第 1 号或第 2 号舵机通道。', kind: 'servo', lo: 1, hi: 2 }, { key: 'p1', label: '角度', hint: '舵机摆到多少度（0~180），调试用。', kind: 'int', lo: 0, hi: 180, unit: '度' }] },
   { op: OP.WAIT_MS, name: 'WAIT_MS', label: '等待', group: '等待', doc: '死等一段时间，什么都不改', fields: [{ key: 'p0', label: '时间', hint: '等多久。1000 = 1 秒；等的时候车保持当前速度和模式继续跑。', kind: 'int', lo: 0, hi: 60000, unit: 'ms' }] },
   {

@@ -30,6 +30,7 @@ export const OP = {
   END: 0x08, // 停车、任务结束
   SET_SERVO: 0x09, // p0 = 通道 1/2；p1 = 角度 0..180
   CROSS_CLEAR: 0x0a, // 清横线/路口计数
+  CAL_SET: 0x0b, // ★p0 = 用第几套灰度标定：0 = 普通 / 1 = 亚克力
 } as const;
 
 export const MODE = {

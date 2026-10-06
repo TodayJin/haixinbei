@@ -248,6 +248,10 @@ static int block_step(const task_block_t *b)
         tracing_cross_clear();
         return 1;
 
+    case TASK_OP_CAL_SET:                        /* ★切灰度标定套：0 = 普通 / 1 = 亚克力 */
+        trace_cal_select_set((uint8_t)(b->p0 & 1));
+        return 1;
+
     default:
         return 1;                                /* 未知块：跳过（格式校验已拦，这里兜底） */
     }

@@ -40,6 +40,9 @@ enum {
     TASK_OP_END         = 0x08,  /* 停车、任务结束 */
     TASK_OP_SET_SERVO   = 0x09,  /* p0 = 通道 1/2；p1 = 角度 0..180 */
     TASK_OP_CROSS_CLEAR = 0x0A,  /* 清横线/路口计数 */
+    TASK_OP_CAL_SET     = 0x0B,  /* ★p0 = 用第几套灰度标定：0 = 普通 / 1 = 亚克力（用户 m 2026-10-07）。
+                                  *   对应 trace_cal_select_set(p0)。两套标定一直存在（cal / cal_b），
+                                  *   但在这块加出来之前，**跑任务时没有任何办法切换它**。 */
 };
 
 /* ---- TASK_OP_SET_MODE 的 p0 ---- */
