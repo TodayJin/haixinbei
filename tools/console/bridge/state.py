@@ -666,7 +666,7 @@ class Console:
                     "error": f"一片最多 {pr.TASK_PUT_MAX} 字节（收到 {len(data)}）"}
         return self._task_reply(
             self.send_wait(pr.T_TASK_PUT, pr.pack_u16(tid) + pr.pack_u16(off) + bytes(data),
-                           req="tasks.put"), "写分片")
+                           req="tasks.put", retries=2), "写分片")
 
     def task_commit(self, tid: int, length: int, crc: int, name: str = "",
                     flags: int = 0) -> dict:
@@ -676,7 +676,7 @@ class Console:
         return self._task_reply(
             self.send_wait(pr.T_TASK_COMMIT,
                            pr.payload_task_commit(tid, length, crc, name, flags),
-                           timeout=1.2, req="tasks.commit"), "提交任务")
+                           timeout=1.2, req="tasks.commit", retries=2), "提交任务")
 
     def task_delete(self, tid: int) -> dict:
         g = self._cap_guard()
