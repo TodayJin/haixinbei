@@ -215,16 +215,46 @@
  * TRACE_HOLD_MS 半速；**超过 TRACE_HOLD_MS 才进"找线扫描"**（原地对转 + 按转角掉头），再超时保护停车。
  * ★累计转角夹子 TRACE_HOLD_MAX_DEG：用户 m 的例子——"0° 一直往前走、突然一个 180° 的大弯，
  *   这个最多只能拐到 150°" ⇒ 到了就只保持转率、不再推进目标航向（否则会把 180° 也拐过去）。*/
-#define TRACE_LOST_HOLD_MS  150U   /* 保持阶段总时长（**换个名字：trace_cal.h 已有一个 TRACE_HOLD_MS**，
+#define TRACE_CORNER_DEG       100.0f  /* 直角弯一次转多少度（用户 m："直接用角度环转过去 100°"）*/
+#define TRACE_CORNER_ENABLE      0     /* ★暂时**关掉**直角主动转弯（2026-10-06 真车实测否掉第一版判据）：
+                                        *   ① "半边 4 路"在本赛道上**到处都是**（一趟原始触发 10~20 次；线宽 3.8cm、
+                                        *      每路跨 ~8.6mm ⇒ 4 路 = 3.4cm，普通斜着的宽线就够）；
+                                        *   ② 而且**一转就把自己又触发一次**：原地对转时线在探头下扫过 ⇒ 又是
+                                        *      "半边 4 路" ⇒ 车在原地打转（cz2：丢线 0.0% 却只走 0.1 圈、触发 20 次）。
+                                        *   关掉 = 回到实测最好那版（final：0/26 真反向、2.2/2.4 圈）。
+                                        *   ★重开的前提：拿到"真直角 vs 普通弯"的**可分辨**特征 —— 下一步把
+                                        *   左右半边压线路数（和 `cross`）记进遥测/日志，用真车数据找判据，
+                                        *   别再拍脑袋定阈值。*/
+#define TRACE_CORNER_HALF_MIN    4U    /* **半边**要压满几路才算直角（用户 m："左边4个或右边4个"）*/
+#define TRACE_CORNER_REFRACT_MS 1500U  /* 两次直角之间的最小间隔（离线统计：不加它时一次直角被当成 11 次，
+                                        * 误触发最小间隔只有 77ms ⇒ 车一直在转圈）*/
+#define TRACE_CORNER_MIN_DEG    60.0f  /* 至少转过这么多度之后，才允许"线回中间就停"（否则那一脚会被立刻取消）*/
+#define TRACE_CORNER_TIMEOUT_MS 2000U  /* 直角转弯兜底超时（转不到就放弃，交回普通循迹）*/
+#define TRACE_CORNER_DONE_BAND   0.8f  /* |err| 小于它就认为线回到中间了（结束转弯，继续巡线）*/
+
+/* ★2026-10-06 直角弯规格（用户 m 口述，取代"丢了线再扫"那套补救）：
+ *   ①**检测**：探头**半边 4 路压线**（= 现有 `s_cross`：≥4 路同时压线、连续 2 帧；遥测里有 `cross`）
+ *     ⇒ 认成直角。**方向不用另加通道**：半边压线时灰度重心必然偏向那一侧 ⇒ `err` 的符号就是方向。
+ *   ②**动作**：**一次把目标航向转过 ±100°**，让角度环自己转过去（它本来就是"转速伺服"）。
+ *   ③**退出**：转的过程中**线一回到中间**（|err| < TRACE_CORNER_DONE_BAND）或又丢了 ⇒ 立刻停转、
+ *     target = 当前车头、恢复普通循迹（用户原话："转的过程中，如果终点检测到线了，就直接停止，
+ *     然后以当前状态继续普通循迹"）。
+ *   ★必须同时绕过末尾那道 `aim_max = 35°` 的领先夹子：否则这一脚 100° 会被砍成 35°（这就是
+ *     "直接一次转过去"以前没生效的原因）。*/
+
+#define TRACE_LOST_HOLD_MS  150U   /* 保持阶段总时长（★换名：trace_cal.h 已有一个 TRACE_HOLD_MS，
                                     * 原来重名会吃一条编译警告）。★2026-10-06 从 1000ms 砍到 150ms：
-                                    *   真车日志取证（146 事件、按版本）表明**“保持 = 继承丢线前那一拍的转向需求”
-                                    *   正是新版方向判错的主要来源** —— 旧版 sx（≈120ms 就交给确定性扫描）
+                                    *   真车日志取证（146 事件、按版本）表明"保持 = 继承丢线前那一拍的转向需求"
+                                    *   正是新版方向判错的主要来源 —— 旧版 sx（≈120ms 就交给确定性扫描）
                                     *   真反向 0/13，而带 1000ms 保持的 hold/comp/dir 是 16.7%/18.8%/20.8%，
-                                    *   且 14 次真反向里 12 次“丢线第一拍 rate_ref 已是负的”（方向判错）。
+                                    *   且 14 次真反向里 12 次"丢线第一拍 rate_ref 已是负的"（方向判错）。
                                     *   保持还把长丢线占比从 7% 抬到 21% ⇒ 错就错满一秒。
                                     *   ⇒ 只留很短一段（150ms），马上让扫描接管方向。*/
-#define TRACE_HOLD_FULL_MS  150U   /* 保持阶段里"全速"的那一段（= 保持总时长 ⇒ 保持段全程全速，
-                                    * 半速那一档留给"万一以后把保持调长"的用法）*/
+#define TRACE_HOLD_FULL_MS  250U   /* 保持阶段里"全速"的那一段。★**不要再改成 150**：2026-10-06
+                                    *   把它从 250 改成 150（= 与保持总时长相等）后，真车两趟变成
+                                    *   **8/12 真反向（66.7%）+ 0.4/1.6 圈**，而改之前那版是 **0/26 + 2.2/2.4 圈**。
+                                    *   机理未完全查清（全速窗缩到 150ms ⇒ 进扫描那一刻速度更低、姿态更歪），
+                                    *   但**实测好就是好**，先锁回 250。*/
 #define TRACE_HOLD_MAX_DEG  150.0f /* 保持阶段累计最多转这么多度 */
 
 /* ★2026-10-06 方向判据的补偿常数（见下面"最后一个已知缺口"整段）。
@@ -271,6 +301,10 @@ static float   s_hold_rate       = 0.0f;/* 丢线瞬间"上一拍"的转向需�
 static float   s_hold_yaw0       = 0.0f;/* 丢线瞬间的偏航角（TRACE_HOLD_MAX_DEG 的参照） */
 static float   s_yaw_rate        = 0.0f;/* 车自己的偏航角速度（°/s，直接用 Gyro_Z）—— comp 补偿要用 */
 static float   s_hold_dir        = 0.0f;/* ★丢线那一拍**锁死**的转向符号（−1=向右 / +1=向左）*/
+static uint8_t s_corner_on       = 0U;  /* ★直角转弯进行中（见 TRACE_CORNER_DEG 那段规格）*/
+static float   s_corner_yaw      = 0.0f;/* ★直角转弯**钉住的目标航向**（起始 ±100°）*/
+static float   s_corner_yaw0     = 0.0f;/* ★直角转弯**起始车头**（用来算"已经转过多少度"）*/
+static uint32_t s_corner_at      = 0U;  /* ★直角转弯开始时刻（超时兜底）*/
 static uint8_t s_hold_on         = 0U;  /* 是否在"保持阶段"（丢线后先照上一拍走，见 TRACE_HOLD_MS） */
 static uint32_t s_see_since      = 0;   /* 连续看见线的起点；0 = 没在连续看见（用于 TRACE_REACQ_MS） */
 static float   last_pid_output  = 0.0f;
@@ -759,7 +793,49 @@ void motor_tracing_cascade(int base_speed)
      * （0.33m/s 下 120ms 的找线延迟里车已走 40mm，而探头杆总共才 ~60mm）。 */
     if (s_cross != 0U) base_speed = base_speed / 2;
 
-    if (all_sensors_lost && s_lost_since != 0U) {
+    /* ★2026-10-06 直角弯（用户 m 规格·第二版）：**左边 4 路**或**右边 4 路**压线 ⇒ 直角。
+     *   ① 检测：`trace_cal_channel(i)` 数左右半边各压了几路（idx 0..3 = 左半边，4..7 = 右半边）；
+     *   ② 动作：线压满哪半边 ⇒ 就**一次把目标航向转 ±TRACE_CORNER_DEG(100°)**，交给角度环转过去；
+     *   ③ 退出：**先转过 TRACE_CORNER_MIN_DEG(60°)**，之后线回到中间（|err| < 0.8）⇒ 立刻停转、
+     *      target = 当前车头、继续普通循迹；另有 TRACE_CORNER_TIMEOUT_MS 兜底。
+     *   ★第一版的两个错（都被真车数据抓住）：检测用"≥4 路压线、不分左右" ⇒ 线在中间但宽也触发
+     *     （实测每趟 8~13 次）；退出条件用了 `|err| < 0.8` **且没要求先转过角度** ⇒ 直角处线正好在
+     *     中间时**下一拍就把那 100° 取消了** ⇒ 用户看到的就是"很普通的直角它转不过来、直着走" ✗。
+     *     也不能拿 `all_sensors_lost` 当退出条件：真直角**本来就会丢线** ✗。 */
+    {
+        uint8_t l = 0U, r = 0U, i;
+        for (i = 0U; i < 4U; i++) if (trace_cal_channel(i) == 1) l++;
+        for (i = 4U; i < 8U; i++) if (trace_cal_channel(i) == 1) r++;
+        if (TRACE_CORNER_ENABLE && !s_corner_on && !all_sensors_lost &&
+            (l >= TRACE_CORNER_HALF_MIN || r >= TRACE_CORNER_HALF_MIN) &&
+            (uint32_t)(HAL_GetTick() - s_corner_at) > TRACE_CORNER_REFRACT_MS) {
+            s_corner_on  = 1U;
+            s_corner_yaw0 = Yaw;
+            s_corner_yaw = NormalizeAngle(Yaw + ((l >= TRACE_CORNER_HALF_MIN) ? TRACE_CORNER_DEG
+                                                                              : -TRACE_CORNER_DEG));
+            s_corner_at  = HAL_GetTick();
+            GyroControl_SetTargetAngle(s_corner_yaw);
+            base_speed   = 0;   /* ★原地对转（用户 m："这个角度转弯怎么半径这么大" ⇒ 只转目标航向、
+                                 *   基准还是全速/半速的话，半径 = v/ω 是个大弧，压不住直角）。
+                                 *   base=0 ⇒ left=−corr / right=+corr，差速 6000、实测 ~121°/s。*/
+        }
+    }
+    if (s_corner_on) {
+        float turned = fabsf(NormalizeAngle(Yaw - s_corner_yaw0));
+        uint8_t tmo  = ((uint32_t)(HAL_GetTick() - s_corner_at) > TRACE_CORNER_TIMEOUT_MS) ? 1U : 0U;
+        if ((turned >= TRACE_CORNER_MIN_DEG && fabsf(err) < TRACE_CORNER_DONE_BAND) || tmo) {
+            s_corner_on = 0U;                            /* 转够了 + 线回到中间 ⇒ 停转，接普通循迹 */
+            GyroControl_SetTargetAngle(NormalizeAngle(Yaw));
+        } else {
+            GyroControl_SetTargetAngle(s_corner_yaw);    /* 转弯进行中：目标钉住，不给它被改回去的机会 */
+            base_speed = 0;                              /* ★而且**原地对转**（半径≈0）——见触发处注释 */
+        }
+    }
+
+    if (all_sensors_lost && s_lost_since != 0U && !s_corner_on) {
+        /* ★`!s_corner_on`：**直角转弯期间不算"丢了线"** —— 直角本来就要转 90~100° 才能看到新那条腿，
+         *   中途线必然不在视场里。原来这里会走"保持→找线→2.5s 保护停车"，实测就是它在转弯中途开火：
+         *   cx2 那趟 t≈4s 原地对转、t≈6s 直接停住（vl=vr=0），用户看到的是"普通直角转不过来、直着走" ✗。*/
         uint32_t lost_ms = (uint32_t)(HAL_GetTick() - s_lost_since);
 
         s_see_since = 0U;   /* 丢线：连续看见的计时作废（要重新连续看见才算出弯） */
@@ -869,8 +945,11 @@ void motor_tracing_cascade(int base_speed)
         float aim_max = cascade_aim_max();
         float lead    = GyroControl_HeadingError();      /* 目标 - 当前，±180 */
 
-        if (lead >  aim_max) GyroControl_SetTargetAngle(NormalizeAngle(Yaw + aim_max));
-        if (lead < -aim_max) GyroControl_SetTargetAngle(NormalizeAngle(Yaw - aim_max));
+        /* ★直角转弯进行中**不许夹**：否则这一脚 100° 会被砍成 35°（"一次转过去"以前没生效的原因）*/
+        if (!s_corner_on) {
+            if (lead >  aim_max) GyroControl_SetTargetAngle(NormalizeAngle(Yaw + aim_max));
+            if (lead < -aim_max) GyroControl_SetTargetAngle(NormalizeAngle(Yaw - aim_max));
+        }
     }
 
     /* 外两层：目标航向 -> 角度环 -> 左右轮目标速度。
@@ -901,6 +980,10 @@ void motor_tracing_reset_cascade(void)
     s_hold_rate     = 0.0f;
     s_hold_yaw0     = 0.0f;
     s_hold_dir      = 0.0f;
+    s_corner_on     = 0U;
+    s_corner_yaw    = 0.0f;
+    s_corner_yaw0   = 0.0f;
+    s_corner_at     = 0U;
     s_yaw_rate      = 0.0f;
     last_pid_output = 0.0f;
     s_lost_since    = 0U;

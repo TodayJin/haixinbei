@@ -36,10 +36,17 @@ static trace_frame_t g_fr = TRACE_FRAME_OK;
 static float         g_w[TRACE_CAL_CH];
 uint8_t              trace_cal_mode = TRACE_MODE_AUTO;
 
+/* ★2026-10-06 补桩：PID_tracing.c 的直角检测要用 trace_cal_channel()（1 = 这一路压黑线）。
+ *   没有它 t_cascade 会 `undefined reference to 'trace_cal_channel'`（回归网编译失败）。 */
+int trace_cal_channel(uint8_t idx)
+{
+    if (idx >= (uint8_t)TRACE_CAL_CH) return 0;
+    return (g_w[idx] > 128.0f) ? 1 : 0;
+}
+
 trace_frame_t trace_cal_frame(float w[TRACE_CAL_CH])
 {
-    for (int i = 0; i < (int)TRACE_CAL_CH; i++) w[i] = g_w[i];
-    return g_fr;
+    for (int i = 0; i < (int)TRACE_CAL_CH; i++) w[i] = g_w[i];    return g_fr;
 }
 
 /* 数字口（只有 TRACE_MODE_DIGITAL 才该被当成真值） */
