@@ -14,6 +14,11 @@
 > 只写「完成」而没有验证，那是主张，不是记录。没验证的就写没验证。
 
 ## 2026-10-06 · 循迹调参
+完成：「直角转弯」开关端到端做完：①运行时参数 `HP_TRACE_CORNER`(0x020B)、②`app_ui.h` 的 `g_cfg.trace_corner`（NVRAM）、③`k_bool_bindings[]` + **`k_settings_items[]`（屏幕上那一行，下标 5）**、④`push/pull_pid_params()` 双向、⑤`params.py` 镜像（**46 项**）、⑥字模重生成补「弯」（缺字=0）；已烧 107220 B 回读一致。★发车前核对参数时**又抓到一个真 bug**：桥读回 `trace_corner = 0` —— 屏上那排布尔开关的绑定事件是 `EV_NONE`，**只有改数值型参数才调 `push_pid_params()`** ⇒ 屏幕上翻开关**根本不会写回参数表**，而直角逻辑读的是参数表 ⇒ 屏幕开关等于没翻（已按「连续判线」那条的写法修：每拍发现变了就 `host_param_set_local`）。
+未完成：① 上面那个“布尔开关推不进参数表”的修复**还没编/烧**（当前那趟 sw 跑的是开关=0 的纯循迹基线）；② 还需要真车复验：屏上翻到 1 后桥读回应为 1.0；③ 直角主动转弯即使开关生效，之前实测也是差的（cz：丢线 0.0% 却只走 0.1 圈、原始触发 20 次/趟 ⇒ “半边 4 路”判据在本赛道到处都是），用户已定：**只调普通循迹 PID**。
+下一步：等这趟基线跑完 → 编+烧“布尔开关推参数表”的修复 → 屏上翻到 1、桥读回 1.0 确认 → 再决定直角那套要不要动；否则转入**只调 PID**（基线 final：0/26 反向、2.2/2.4 圈）。
+
+## 2026-10-06 · 循迹调参
 完成：把直角主动转弯从编译宏改成**运行时参数** `HP_TRACE_CORNER`(0x020B, 默认 0=关)：①`host_link.h` 加 id；②`host_link.c` 的 SPECS 加 `{HP_TRACE_CORNER, 0.0f, 0.0f, 1.0f}`；③`PID_tracing.c` 的直角段判据改成 `host_param_get(HP_TRACE_CORNER,0.0f) >= 0.5f`（直角代码**一行没删**）；④`tools/console/bridge/params.py` 加了镜像行。已经编过、主机测试 15/15、烧录回读一致（107096 B）、提交 096c47e + 本次。
 未完成：① **还差“存 NVRAM + 上屏菜单”那三处**（用户 m 明确要求“屏幕里能设置的都要保存”）：`app_ui.c` 的 `g_cfg` 加 `trace_corner` 字段、`k_bool_bindings[]`（411-419 行，照着“陀螺仪闭环/循迹反转”那一排）加一行「直角转弯」、`push_pid_params()`(452-471) / `pull_pid_params()`(485-503) 双向同步；★改 `g_cfg` 会动 **NVRAM 存档布局** ⇒ 要确认存档版本/长度校验会不会因此丢用户设置。② 三处没同步时 `test_params_spec.py::test_bridge_table_has_no_extra_entries` 等着会红（本次已加 params.py 镜像）。
 下一步：在 `app_ui.c` 里把开关接到 NVRAM+屏上菜单（g_cfg 字段 + 布尔绑定 + 双向同步 + NVRAM 版本/迁移确认）→ 跑 `run_tests.ps1` 与 `pytest tools/console/tests -q` 全绿 → 烧 → 真车读回确认开关默认 0、翻到 1 能生效。之后按用户 m 定的：**只调普通循迹的 PID**（基线 = final 那版：0/26 真反向、2.2/2.4 圈）。
@@ -923,9 +928,4 @@
 未完成：firmware/App/Svc/renwu.c 的任务速度数值仍未重标（当前按现刻度跑不动车）。
 下一步：等用户拍板：firmware/App/Svc/renwu.c 里那串照抄旧板的 900/920/-700 在新刻度只有 12.5% 占空比（低于死区，任务流程推不动车），是把它按 7.2 倍重标，还是改成读「循迹速度」（HP_BASE_SPEED / g_cfg.trace_speed）参数。
 
-## 2026-09-30
-完成：电机测试页（PAGE_CUSTOM_MOTOR）按用户 m01975「界面有点丑」重画成两行卡片式仪表盘，见 firmware/App/Src/app_ui.c 的 draw_motor_page()：标题 y=1 + OLED_DrawHLine(0,14,128U) 分隔线（与陀螺仪页同款）；下面两行卡片 y0 = 16 / 39、行高 23，每行 = 履带图标（dir!=0 用 OLED_DrawRBox 实心表示在转、停用 DrawRFrame 空心，x=5,y0+6,18x10,r=4）+ 左/右（x=28,y0+5）+ 停/正/反（x=42,y0+5）+ 速度条（框 OLED_DrawRFrame(58+s_dx,y0+7,42,9,2)，填充 OLED_DrawRBox(59+s_dx,y0+8,mag*40/100,7,2)）+ 读数右对齐 126-bw（y0+5）；选中行用 XOR 空心圆角框 OLED_DrawRFrame(1+s_dx,y0-1,126,23,5)。同时把 MOTOR_TEST_PWM 4000 改成 6000（实测 4000 只有 2083/1900 计数每秒 = 满速 42%，读数就是 40；6000 约 3650 计数每秒 → 读数约 73），并在 KK_UI_CustomOnInput() 的模块测试页与电机页两处 OK 分支前加了 `if (event.action == KK_UI_INPUT_OK && event.source == KK_UI_INPUT_REPEAT) return;`（否则按住中键会把方向档 停→正→反→停 一路刷过去）。验证：make -j8 过（text 86144 / data 228 / bss 14352，只剩已知 RWX 链接警告）；make flash 回读一致 86380 字节 firstDiff=none；J-Link 单次读 uwTick=13123（CPU 停在 HAL_Delay 里，板子在跑）、s_motor_sel=0 / s_motor_dir={0,0} / s_motor_show={0,0}；python tools/host/tests/run_all.py 101 项全过；布局自查用 PIL 按同一套坐标画 128x64 示意图（out/motor_page_mock.py → out/motor_page_mock.png，逐元素核对无压字、无出界）。
-未完成：用户侧肉眼验收新版面与读数刻度。
-下一步：让用户上电走一遍：进 设置→模块测试→电机，看两行卡片版式、左/右按中键切 停/正/反、读数是否约 73（新占空比）、按住中键不再连刷、退出后电机继续转。
-
-> 更早的会话条目已归档到 273 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+> 更早的会话条目已归档到 274 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。

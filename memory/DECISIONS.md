@@ -12,6 +12,11 @@
 > 因为：逼出这个决定的约束
 > ```
 
+## 2026-10-06 — ★改固件屏上任何**中文文案**，必须重生成字模并在同一次改动里烧进去：`node tools/font/gen_font.mjs firmware/App/Fonts/kk_font_body.c wenquanyi_9pt 12 kk_font_body <新文案的字>`，再用 `check_charset.mjs <那个 .c>` 复核缺字=0。
+选择：★改固件屏上任何**中文文案**，必须重生成字模并在同一次改动里烧进去：`node tools/font/gen_font.mjs firmware/App/Fonts/kk_font_body.c wenquanyi_9pt 12 kk_font_body <新文案的字>`，再用 `check_charset.mjs <那个 .c>` 复核缺字=0。
+放弃：只改 `app_ui.c` 的菜单文案就编烧（以为字会自动出现）。
+因为：**KK_OLED 遇到子集外的字静默不画** —— 用户 m 实测反馈：“是不是没有“弯”这个字啊？你要不生成一下，现在只有直角转”（那一行只画出了前三个字）。重生成后：候选 1395 / 旧字模已有 580 / 实际提交 **593**、glyph_count=593、复核缺字=0，bin 107196→107220。★字体名与字号从字模文件头的注释读：`/* Font: wenquanyi_9pt; Size: 12 */`；旧文件会自动备份成 `.bak`。
+
 ## 2026-10-06 — ★在固件屏上**新增一个设置开关，必须改两个地方**：`k_bool_bindings[]`（定义绑定）+ **`k_settings_items[]`（屏幕上那一行，用绑定下标引用）**。
 选择：★在固件屏上**新增一个设置开关，必须改两个地方**：`k_bool_bindings[]`（定义绑定）+ **`k_settings_items[]`（屏幕上那一行，用绑定下标引用）**。
 放弃：只往 `k_bool_bindings[]` 里加一行（我干了这个，用户 m 当场问：“固件设置里边，为啥没看到这个设置项啊？”）。

@@ -190,6 +190,10 @@ static uint8_t s_gyro_axis_mode = 2U;
 static uint8_t s_nv_last;           /* 上一次看到的 Flash 保存状态（用于弹提示） */
 static uint8_t s_nv_lock;           /* 1 = "正在保存"已真的画上屏，按键才锁 */
 static uint8_t s_adapt_applied = 0xFFU;  /* 「连续判线」上一次推给 trace_cal 的值（0xFF = 还没推） */
+static uint8_t s_corner_applied = 0xFFU; /* ★「直角转弯」上一次推给参数表的值（0xFF = 还没推）。
+                                          *   为什么必须自己推：屏上那排布尔开关的绑定事件是 EV_NONE，
+                                          *   **只有改数值型参数才会调 push_pid_params()** ⇒ 布尔开关只改 g_cfg、
+                                          *   从不写回参数表；而直角逻辑读的是 HP_TRACE_CORNER ⇒ 屏幕上翻它等于没翻。*/
 
 /* ---- 屏幕故障自愈（用户 m26333：屏幕有时候特别卡、帧率特别低）----
  * KK_UI 只要 latch 一次显示错误（OLED 传输报错，或者一次传输拖过
@@ -2975,6 +2979,11 @@ void app_ui_tick(uint32_t now_ms)
 
     /* 循迹传感器极性：菜单里的「循迹反转」跟随生效（第五代模块默认压黑线=高） */
     trace_invert = g_cfg.trace_invert ? 1U : 0U;
+    /* ★「直角转弯」开关跟随生效（见 s_corner_applied 的注释）：屏上翻一下就推给参数表 */
+    if (s_corner_applied != (uint8_t)(g_cfg.trace_corner ? 1U : 0U)) {
+        s_corner_applied = (uint8_t)(g_cfg.trace_corner ? 1U : 0U);
+        host_param_set_local(HP_TRACE_CORNER, s_corner_applied ? 1.0f : 0.0f);
+    }
 
     /* 设置里的「连续判线」（连续插值 / 纯 0/1）跟随生效。
      * 只在变化时调（口径切换没有残留状态，但没必要每拍都写）。 */

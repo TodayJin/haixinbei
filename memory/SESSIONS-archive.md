@@ -1,4 +1,11 @@
 ## 2026-09-30
+完成：电机测试页（PAGE_CUSTOM_MOTOR）按用户 m01975「界面有点丑」重画成两行卡片式仪表盘，见 firmware/App/Src/app_ui.c 的 draw_motor_page()：标题 y=1 + OLED_DrawHLine(0,14,128U) 分隔线（与陀螺仪页同款）；下面两行卡片 y0 = 16 / 39、行高 23，每行 = 履带图标（dir!=0 用 OLED_DrawRBox 实心表示在转、停用 DrawRFrame 空心，x=5,y0+6,18x10,r=4）+ 左/右（x=28,y0+5）+ 停/正/反（x=42,y0+5）+ 速度条（框 OLED_DrawRFrame(58+s_dx,y0+7,42,9,2)，填充 OLED_DrawRBox(59+s_dx,y0+8,mag*40/100,7,2)）+ 读数右对齐 126-bw（y0+5）；选中行用 XOR 空心圆角框 OLED_DrawRFrame(1+s_dx,y0-1,126,23,5)。同时把 MOTOR_TEST_PWM 4000 改成 6000（实测 4000 只有 2083/1900 计数每秒 = 满速 42%，读数就是 40；6000 约 3650 计数每秒 → 读数约 73），并在 KK_UI_CustomOnInput() 的模块测试页与电机页两处 OK 分支前加了 `if (event.action == KK_UI_INPUT_OK && event.source == KK_UI_INPUT_REPEAT) return;`（否则按住中键会把方向档 停→正→反→停 一路刷过去）。验证：make -j8 过（text 86144 / data 228 / bss 14352，只剩已知 RWX 链接警告）；make flash 回读一致 86380 字节 firstDiff=none；J-Link 单次读 uwTick=13123（CPU 停在 HAL_Delay 里，板子在跑）、s_motor_sel=0 / s_motor_dir={0,0} / s_motor_show={0,0}；python tools/host/tests/run_all.py 101 项全过；布局自查用 PIL 按同一套坐标画 128x64 示意图（out/motor_page_mock.py → out/motor_page_mock.png，逐元素核对无压字、无出界）。
+未完成：用户侧肉眼验收新版面与读数刻度。
+下一步：让用户上电走一遍：进 设置→模块测试→电机，看两行卡片版式、左/右按中键切 停/正/反、读数是否约 73（新占空比）、按住中键不再连刷、退出后电机继续转。
+
+> 更早的会话条目已归档到 273 条（`SESSIONS-archive.md`，不自动注入；需要时用 `memory_read` 读取）。
+
+## 2026-09-30
 完成：修好「模块测试页按中键进不去电机测试页」：根因是 kk_ui 的导航策略在 firmware/Middlewares/kk_ui/src/kk_ui_nav.c:104-109 直接 `return KK_UI_NOT_ALLOWED` 拦掉「自定义页→自定义页」压栈，而 firmware/App/Src/app_ui.c 的中键处理写的是 `(void)KK_UI_NavigateTo(PAGE_CUSTOM_MOTOR, HAL_GetTick())` —— 返回值被丢掉，所以按键完全没有反应（屏不换、电机也不转），比报错更难查。改法：删掉那 5 行守卫并写明理由（应用确有两级自定义流程；框架已有 leave_custom 回调 + 类型无关弹栈）。验证：make -j8 过（text 86016 / data 228 / bss 14352，只剩已知 RWX 链接警告）、make flash 回读一致 86252 字节 firstDiff=none、J-Link 单次快照 uwTick=29107（在跑）且 kk_ui.transition.active=0 / blocked_keys=0 / keys[].stable=0 且 armed=1（无卡键）/ stack_count=0 / error.code=KK_UI_OK / current.page=10（PAGE_SPLASH，刚烧完重启）。
 未完成：用户上电复测：设置→模块测试→选「电机」按中键应能进入电机测试页（并确认页内左/右 正/反/返回 与编码器读数）。
 下一步：若在模块测试页按键仍无反应，用 J-Link 快照 kk_ui.keys[].pressed_at 与 kk_ui.current.page 区分「按键没进来」还是「页面状态卡住」——kk_ui 是全局符号（0x200010c8，size 0x1a4），可直接读。
