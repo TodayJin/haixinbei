@@ -600,13 +600,19 @@ class Console:
         g = self._cap_guard()
         if g:
             return g
-        with self.cv:
-            self._task_data_chunks = []
-            self._task_data_done = False
-            self._task_data_id = 0xFFFF
-            self._task_get_status = None
-        self.send(pr.T_TASK_GET, pr.pack_u16(tid), req="tasks.get")
-        done = self._wait_flag("_task_data_done", timeout)
+        # ★2026-10-07 读回重发：`T_TASK_GET` 回的是一串 `T_TASK_DATA`，**收尾帧丢一次就整条失败**
+        #   （用户 m 实测：“写进去了但回读失败：没等到数据收尾帧”）。重发是幂等的（车会重头再 dump）。
+        done = False
+        for _attempt in range(3):
+            with self.cv:
+                self._task_data_chunks = []
+                self._task_data_done = False
+                self._task_data_id = 0xFFFF
+                self._task_get_status = None
+            self.send(pr.T_TASK_GET, pr.pack_u16(tid), req="tasks.get")
+            if self._wait_flag("_task_data_done", timeout):
+                done = True
+                break
         with self.cv:
             chunks = list(self._task_data_chunks)
             got_id = self._task_data_id
