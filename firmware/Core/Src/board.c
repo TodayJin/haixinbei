@@ -483,7 +483,11 @@ static uint8_t  s_rx_byte;
  * 发改成"DMA 槽位队列"（board_dl_send 只拷贝+排队就返回，不阻塞主循环）。
  *   DL_RX_DMA_SZ 必须是 2 的幂：主循环按 DMA 的 CNDTR 反推写指针，用掩码绕圈取模。 */
 #define DL_RX_DMA_SZ     2048u     /* 921600 下约 22ms 的缓冲余量 */
-#define DL_TX_SLOTS      8u        /* 一帧最大 7 + MAX_PAYLOAD(124) = 131 B */
+#define DL_TX_SLOTS      24u       /* ★8 → 24（2026-10-07）：任务 dump 每拍推 8 帧，而队列正好 8 槽
+                                    * ⇒ **每批的第 8 帧被挤掉**（`s_dl_tx_drop++`），上位机看到的是
+                                    * “数据块不连续（off=512/已有448B）”，步长恒为 448B = 7×64。
+                                    * 加深到 24 槽（24×144 = 3456 B RAM）让一批 8 帧塞得下。
+                                    * 一帧最大 7 + MAX_PAYLOAD(124) = 131 B。 */
 #define DL_TX_SLOT_SZ    144u      /* 槽位字节数（131 向上取整，留点余量） */
 
 static DMA_HandleTypeDef hdma_dl_rx;
