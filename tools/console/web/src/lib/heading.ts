@@ -19,6 +19,24 @@ import type { DriveRequest } from './types'
 
 /** 单次操作里允许的目标偏移上限（度）：一直按着转向键最多累计这么多就饱和。 */
 export const HOLD_LIMIT = 540
+
+/**
+ * 目标最多允许领先车头多少度（**原地转实测出来的安全线**）。
+ *
+ * 为什么必须有它：页面是按设定速率**无脑**拧目标角的，而车的原地转速有物理上限
+ * （2026-10-07 真车实测：设定 30°/s → 实测 30.0；60 → 48.8；90 → 75.9；120 → 79.2；
+ * 180 → 只有 ~79，见 `out/_g_hold*.txt` 与 `out/_ganalyze.py`）。设定高于上限时
+ * 目标就一路跑远，而车上的误差是 `NormalizeAngle(目标 − 航向)`（gyro_control.c:264-269
+ * 的 `CalculateAngleError`，**永远走最近路**）—— 一旦领先超过 180°，它会把"继续往左"
+ * 理解成"往右 160°"，`rate_ref`/`corr` 当场翻号，车**突然倒着拐**；领先缩回 180° 以内
+ * 又翻回来 ⇒ 就是用户说的"按住不动却突然拐、来回拐"。
+ *
+ * 实测翻号那一刻的领先量：183.4° / 201.5° / 203.9° / 209.0°（四次独立实验，见
+ * `out/_g_r180.txt`、`out/_g_hold120.txt`、`out/_g_hold180.txt`、`out/_pw_before180.txt`）。
+ * 卡在 140° 就永远到不了 180°；实测这条线在"车跟得上"的档位（≤90°/s，领先峰值 ~104°）
+ * 碰不到，所以那些档位的行为与以前逐位相同。
+ */
+export const MAX_LEAD = 140
 /** 转向速度滑块的上限（°/s）—— 只是"键按着时航向每秒变多少"，不是轮速。 */
 export const TURN_RATE_LIMIT = 180
 /** 操控页把转向速度积分成目标角度的节拍（ms）。 */
@@ -106,10 +124,17 @@ export interface DriveRuntime {
   armed: boolean
   /** 上一次真正发出去的帧，用来去重（键按着不动时不必重复下发）。 */
   last: DriveRequest | null
+  /**
+   * 目标**领先车头**多少度（正 = 目标在车头左边）。用"页面发出的偏移增量 − 车实际转过的角度"
+   * 累加出来（见 `stepDrive`），用来实现 `MAX_LEAD` 保护。
+   */
+  lead: number
+  /** 上一拍看到的车头航向（遥测 `yaw`，±180 的原始值），用来算这一拍车转了多少。 */
+  lastYaw: number | null
 }
 
 export function initDriveRuntime(): DriveRuntime {
-  return { offset: 0, armed: false, last: null }
+  return { offset: 0, armed: false, last: null, lead: 0, lastYaw: null }
 }
 
 function same(a: DriveRequest | null, b: DriveRequest): boolean {
@@ -124,10 +149,18 @@ function same(a: DriveRequest | null, b: DriveRequest): boolean {
  * 规则：
  *   * 急停 ⇒ 发一帧 off，偏移清零；
  *   * 按着转向键 ⇒ 按 turnRate 积分偏移（**倒车时取反**），然后发 base_turn（基准速度 + 目标偏移）；
+ *     但目标**领先车头不超过 `MAX_LEAD`**（见 MAX_LEAD 的注释：再往前拧，车上的"最近路"误差会
+ *     翻号 ⇒ 车突然倒拐）。要这条保护就得把当前航向 `yawNow` 传进来；不传（老调用/单测）时
+ *     保护不生效，其余行为完全不变。
  *   * 松开全部键（基准 0 且不转）⇒ 发一帧 off（交还车上任务流程），偏移清零；
  *     这样"松手再按"就等于重新对零，不会攒着一个越滚越大的目标航向。
  */
-export function stepDrive(rt: DriveRuntime, intent: DriveIntent, dtMs: number): { rt: DriveRuntime; send: DriveRequest[] } {
+export function stepDrive(
+  rt: DriveRuntime,
+  intent: DriveIntent,
+  dtMs: number,
+  yawNow?: number,
+): { rt: DriveRuntime; send: DriveRequest[] } {
   if (intent.stop) {
     return { rt: initDriveRuntime(), send: rt.armed ? [{ mode: 'off' }] : [] }
   }
@@ -145,8 +178,27 @@ export function stepDrive(rt: DriveRuntime, intent: DriveIntent, dtMs: number): 
   // （θ 增大）；前进时不用翻（车头往右就是车往右）。原地转（base == 0）也不翻：A 始终是"车头往左"。
   const yawRate = intent.base < 0 ? -intent.turnRate : intent.turnRate
 
-  const offset = turning ? offsetAfter(rt.offset, yawRate, dtMs) : rt.offset
+  let offset = turning ? offsetAfter(rt.offset, yawRate, dtMs) : rt.offset
+  let lead = rt.lead
+  let lastYaw = rt.lastYaw
+
+  if (yawNow !== undefined && Number.isFinite(yawNow)) {
+    // 这一拍车实际转过的角度（航向是 ±180 的原始值 ⇒ 按最近路取小量，一拍最多几十度）
+    const turned = lastYaw === null ? 0 : norm180(yawNow - lastYaw)
+    lead = rt.lead - turned + (offset - rt.offset)
+    if (turning && Math.abs(lead) > MAX_LEAD) {
+      // 领先超线：把目标**朝车拉回来**（不是只"停拧"）。为什么必须拉：车被打滑/被线缆拽/
+      // 被挡住时自己会往回转，只停拧的话领先仍会被推过 180°，车上的"最近路"照旧翻号
+      // （2026-10-07 实测就是这么翻的：领先 150° 时车被拽回 40° ⇒ 190° ⇒ 车倒拐）。
+      // 拉回后领先恒等于 MAX_LEAD，且**方向不变**（车继续朝原方向转，只是目标贴着它走）。
+      const excess = Math.abs(lead) - MAX_LEAD
+      offset -= Math.sign(lead) * excess
+      lead = Math.sign(lead) * MAX_LEAD
+    }
+    lastYaw = yawNow
+  }
+
   const cmd: DriveRequest = { mode: 'base_turn', base: Math.round(intent.base), turn: Math.round(offset) }
   const send = same(rt.last, cmd) ? [] : [cmd]
-  return { rt: { offset, armed: true, last: cmd }, send }
+  return { rt: { offset, lead, lastYaw, armed: true, last: cmd }, send }
 }

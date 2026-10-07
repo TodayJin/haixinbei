@@ -7,6 +7,7 @@ import { fmt, fmtInt } from '../lib/format'
 import { isTypingTarget, keyId, keyRoleById, rolesToIntent, type KeyRole } from '../lib/keys'
 import {
   DEAD_SCALE,
+  MAX_LEAD,
   PWM_MAX,
   TURN_RATE_LIMIT,
   TURN_TICK_MS,
@@ -75,16 +76,37 @@ export function DrivePage() {
   // 页面上要显示目标航向就得记住它。
   const baseYawRef = React.useRef<number | null>(null)
   const [offset, setOffset] = React.useState(0)
+  // 目标领先车头多少度（stepDrive 用它做 MAX_LEAD 保护：领先超过 180° 车上的"最近路"误差会翻号）
+  const [lead, setLead] = React.useState(0)
 
   const pump = React.useCallback((dtMs: number) => {
     const wasArmed = rt.current.armed
-    const r = stepDrive(rt.current, intentRef.current, dtMs)
+    const r = stepDrive(rt.current, intentRef.current, dtMs, yawRef.current)
     rt.current = r.rt
     setOffset(r.rt.offset)
+    setLead(r.rt.lead)
     if (!wasArmed && r.rt.armed) baseYawRef.current = yawRef.current
     if (!r.rt.armed) baseYawRef.current = null
     for (const f of r.send) void store.drive(f)
   }, [])
+
+  // 车把驾驶会话丢了（链路丢一帧 ⇒ 桥等 0.6s 才重发 ⇒ 车的 500ms 看门狗先停车；或低压保护/
+  // 任务抢电机）：车再进来时会**重新锁存**基准航向（host_ext.c:196-198 的 s_base_yaw = Yaw），
+  // 页面要是继续发同一个累计偏移，那个偏移就被再叠加一次 —— 2026-10-07 真车实测这一下是
+  // **+73.7° 的突跳**（out/_pw_before180.txt：t=2514~2609ms 有 18 帧 mode=0/host_drive=0，
+  // 由 err 反推的基准航向从 126.3° 跳到 −160.2°）。所以这里跟着重新对零：车保持当前朝向，
+  // 页面从"现在"重新开始积分（与"松手/空格 ⇒ 重新对零"同一条口径）。
+  const drivingRef = React.useRef(false)
+  React.useEffect(() => {
+    const was = drivingRef.current
+    drivingRef.current = driving
+    if (was && !driving && rt.current.armed) {
+      rt.current = initDriveRuntime()
+      baseYawRef.current = null
+      setOffset(0)
+      setLead(0)
+    }
+  }, [driving])
 
   const turning = input.turnRate !== 0 && !input.stop
 
@@ -184,7 +206,19 @@ export function DrivePage() {
                   tone={input.turnRate ? 'amber' : undefined}
                   hint="按住 A/D 时航向每秒变多少"
                 />
-                <Stat label="目标偏移" value={fmtInt(offset)} unit="°" tone={offset ? 'amber' : undefined} hint={offsetLabel(offset)} />
+                <Stat
+                  label="目标偏移"
+                  value={fmtInt(offset)}
+                  unit="°"
+                  tone={offset ? 'amber' : undefined}
+                  hint={
+                    driving
+                      ? `${offsetLabel(offset)} · 目标领先车头 ${fmtInt(lead)}°${
+                          Math.abs(lead) >= MAX_LEAD - 1 ? '（已到领先上限：目标贴着车走）' : ''
+                        }`
+                      : offsetLabel(offset)
+                  }
+                />
                 <Stat
                   label="目标航向"
                   value={target === null ? '--' : fmt(target, 1)}
@@ -224,6 +258,12 @@ export function DrivePage() {
                 <span className="num text-slate-400">{turnRate} °/s</span>
               </div>
               <Slider value={turnRate} min={0} max={TURN_RATE_LIMIT} step={5} onChange={setTurnRate} />
+              <div className="mt-1 text-[11px] leading-snug text-slate-500">
+                这是「每秒想转多少度」，不是保证值：<span className="text-slate-300">原地转速实测上限 ≈80~85°/s</span>
+                （设定 30 → 实测 30.0、60 → 48.8、90 → 75.9、120 → 79.2、180 → 也只有 ~79）。设得再高只是「尽快转」。
+                目标一旦领先车头超过 180°，车上的「最近路」误差会翻号让车
+                <span className="text-amber-400/90">倒着拐</span>，所以页面把领先量卡在 {MAX_LEAD}°（车跟得上时这条线碰不到）。
+              </div>
             </div>
           </div>
 

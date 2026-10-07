@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   HOLD_LIMIT,
+  MAX_LEAD,
   clamp,
   headingError,
   initDriveRuntime,
@@ -154,7 +155,7 @@ describe('操控页状态机 stepDrive', () => {
       { intent: {}, dtMs: 0 },
     ])
     expect(sent.at(-1)).toEqual({ mode: 'off' })
-    expect(rt).toEqual({ offset: 0, armed: false, last: null })
+    expect(rt).toEqual(initDriveRuntime())
 
     // 已经停了就别再刷 off
     const again = stepDrive(rt, intent({}), 0)
@@ -207,5 +208,67 @@ describe('操控页状态机 stepDrive', () => {
     // 一直按着 S+D：偏移累积到 HOLD_LIMIT 就饱和（方向不会穿过 0 跑反）
     const long = run(Array.from({ length: 8 }, () => ({ intent: { base: -600, turnRate: -90 }, dtMs: 1000 })))
     expect(long.rt.offset).toBe(HOLD_LIMIT)
+  })
+})
+
+describe('MAX_LEAD 领先保护（2026-10-07 真车实测：领先过 180° 车会倒拐）', () => {
+  /**
+   * 模拟"按住 A 一直转"：页面第一拍 pump(0)（锁存基准），之后每 100ms 一拍照常积分；
+   * 车按 carRate °/s 真的转，`kick` 用来注入一次"车被拽/打滑"的反向角度。
+   */
+  function hold(ticks: number, rate: number, carRate: number, kick?: { at: number; deg: number }) {
+    let rt: DriveRuntime = initDriveRuntime()
+    let yaw = 0
+    let maxLead = 0
+    const turns: number[] = []
+    for (let i = 0; i < ticks; i++) {
+      const r = stepDrive(rt, intent({ turnRate: rate }), i === 0 ? 0 : 100, yaw)
+      rt = r.rt
+      if (r.send.length) turns.push((r.send[0] as { turn: number }).turn)
+      yaw = norm180(yaw + (carRate * 100) / 1000)
+      if (kick && i === kick.at) yaw = norm180(yaw + kick.deg)
+      maxLead = Math.max(maxLead, Math.abs(rt.lead))
+    }
+    return { rt, turns, maxLead, yaw }
+  }
+
+  it('车跟不上（设 180°/s、车只有 80°/s）⇒ 目标贴着车走，领先恒 ≤ MAX_LEAD', () => {
+    const h = hold(60, 180, 80) // 6s：不保护的话目标早到 540°、领先 300°+
+    expect(h.maxLead).toBeLessThanOrEqual(MAX_LEAD + 1e-6)
+    // 一直按到底：目标仍然顶到 HOLD_LIMIT（车转过 540° 就该停），只是"贴着车"走完的
+    expect(h.rt.offset).toBe(HOLD_LIMIT)
+    expect(h.turns.at(-1)).toBe(HOLD_LIMIT)
+    // 大部分拍都在发帧（目标前进或被拉回）；最后几拍目标饱和、车追上了才不发
+    expect(h.turns.length).toBeGreaterThan(40)
+    expect(h.turns.length).toBeLessThanOrEqual(60)
+  })
+
+  it('车跟得上（设 90°/s、车也 90°/s）⇒ 这条线根本碰不到，每拍照常下发 9°', () => {
+    const h = hold(20, 90, 90)
+    expect(h.maxLead).toBeLessThan(1)
+    expect(h.turns).toEqual([0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99, 108, 117, 126, 135, 144, 153, 162, 171])
+  })
+
+  it('车被打滑/拽回转 40° ⇒ 领先被拉回 MAX_LEAD（不会推到 180° 的翻号线）', () => {
+    const h = hold(60, 180, 80, { at: 30, deg: -40 })
+    expect(h.maxLead).toBeLessThanOrEqual(MAX_LEAD + 1e-6)
+  })
+
+  it('不传航向（老调用）时保护不生效 —— 行为与以前逐位相同', () => {
+    const { rt } = run(Array.from({ length: 8 }, () => ({ intent: { turnRate: 90 }, dtMs: 1000 })))
+    expect(rt.offset).toBe(HOLD_LIMIT)
+  })
+
+  it('往回拧不受保护影响：领先卡住时按 D 仍能把目标拧回来', () => {
+    let rt: DriveRuntime = initDriveRuntime()
+    let yaw = 0
+    for (let i = 0; i < 30; i++) {
+      rt = stepDrive(rt, intent({ turnRate: 180 }), i === 0 ? 0 : 100, yaw).rt
+      yaw = norm180(yaw + 8)
+    }
+    const locked = rt.offset
+    const back = stepDrive(rt, intent({ turnRate: -180 }), 100, yaw)
+    expect(back.rt.offset).toBeLessThan(locked)
+    expect(back.send).not.toEqual([])
   })
 })

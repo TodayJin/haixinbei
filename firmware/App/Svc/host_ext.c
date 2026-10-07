@@ -31,6 +31,7 @@
 static uint8_t  s_mode;             /* HOST_DRIVE_* */
 static int      s_a, s_b;           /* 最近一次驾驶指令的原样参数（遥测/回报用） */
 static float    s_base_yaw;         /* 进 HOST_DRIVE_BASE 时的航向（b 是相对它的偏转） */
+static float    s_base_yaw_cont;    /* 同上，但**连续域**（不取模）——见 HostExt_DriveSet 的 BASE 分支 */
 static uint32_t s_keepalive_ms;     /* 最近一次收到合法帧的时刻 */
 static uint8_t  s_trips;            /* 看门狗自动停车的次数（诊断） */
 static uint8_t  s_cur_action;       /* 最近一次下发的动作号（0 = 没下发过） */
@@ -48,6 +49,7 @@ void HostExt_Init(void)
     s_a             = 0;
     s_b             = 0;
     s_base_yaw      = 0.0f;
+    s_base_yaw_cont = 0.0f;
     s_keepalive_ms  = HAL_GetTick();
     s_trips         = 0U;
     s_cur_action    = 0U;
@@ -193,12 +195,19 @@ int HostExt_DriveSet(uint8_t mode, int a, int b)
         return 0;
 
     case HOST_DRIVE_BASE:
-        if (s_mode != HOST_DRIVE_BASE) {
-            s_base_yaw = Yaw;          /* 进模式那一刻的航向当基准 */
-        }
         Motion_SetSpeed(a);
         Motion_SetMode(MOTION_GYRO);   /* 角度环 + 速度环（两种形态里的"障碍流程"） */
-        GyroControl_SetTargetAngle(NormalizeAngle(s_base_yaw + (float)b));
+        if (s_mode != HOST_DRIVE_BASE) {
+            s_base_yaw = Yaw;                              /* 进模式那一刻的航向（遥测/诊断用） */
+            s_base_yaw_cont = GyroControl_GetYawCont();    /* 连续域基准（未取模） */
+        }
+        /* ★2026-10-07：b 是上位机的**累计转角**（可到 ±540°），必须走连续域目标。
+         * 走 `GyroControl_SetTargetAngle(NormalizeAngle(...))` 时，只要累计目标领先车头
+         * 超过 180°，角度环的 `CalculateAngleError`（±180 取模 + 最近路）就会把"继续往左"
+         * 解释成"往右 160°" ⇒ 车突然倒拐、来回拐。真车实测翻号点：183.4/201.5/203.9/209.0°，
+         * 与"设定 180°/s 但车只能转 ~80°/s ⇒ 领先一路涨过 180°"完全对应。
+         * 连续域模式下目标与航向都不取模，误差 = 还差多少度，方向永远正确。 */
+        GyroControl_SetTargetAngleCont(s_base_yaw_cont + (float)b);
         s_mode = HOST_DRIVE_BASE;
         return 0;
 

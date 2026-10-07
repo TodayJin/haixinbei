@@ -24,7 +24,16 @@ uint8_t GyroControl_IsEnabled(void);
  * 速度环开启时写进速度环，否则直接写 PWM。 */
 void  GyroControl_SetTargetAngle(float deg);
 float GyroControl_GetTargetAngle(void);
-float GyroControl_HeadingError(void);            /* 目标 - 实际，已折算到 ±180 */
+float GyroControl_HeadingError(void);            /* 目标 - 实际（连续域模式下是未取模的差） */
+/* ★2026-10-07 连续域目标（给"按住转向键累计转角"用）：
+ * 上位机操控页的 `b` 是**累计转角**（可到 ±540°），而角度环默认按 ±180 取模、"最近路"算误差
+ * （CalculateAngleError）—— 一旦目标领先车头超过 180°，它会把"继续往左"理解成"往右 160°"，
+ * 车突然倒拐、来回拐（真车实测翻号点：183/201/204/209°）。
+ * 连续域模式把目标与航向都放在**不取模**的坐标里（航向由 Yaw 逐拍解卷绕得到），
+ * 误差永远是"还差多少度"，过 ±180° 也不会翻号。
+ * 只在 `HOST_DRIVE_BASE` 里用；任务/循迹路径仍走 SetTargetAngle ⇒ 行为逐位不变。 */
+void  GyroControl_SetTargetAngleCont(float deg); /* deg = 连续域绝对目标角（不取模） */
+float GyroControl_GetYawCont(void);              /* 连续域当前航向（未取模） */
 /* 遥测只读快照（上位机 angle 组）：本拍内部用的期望角速度 / 最终修正量 */
 float GyroControl_DebugRateRef(void);
 float GyroControl_DebugCorr(void);

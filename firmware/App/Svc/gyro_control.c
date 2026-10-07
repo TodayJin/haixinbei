@@ -228,6 +228,17 @@ static int base_speed_right = 0;
 static float target_angle = 0.0f;
 static uint8_t angle_initialized = 0;
 
+/* ★2026-10-07 连续域（不取模）目标与航向，专给 HOST_DRIVE_BASE 的"累计转角"用。
+ * 为什么需要：`CalculateAngleError()` 按 ±180 取模走**最近路**，当上位机要的累计转角
+ * 领先车头超过 180° 时它会指反 —— 车突然倒拐（真车实测翻号点 183/201/204/209°，
+ * 见 out/_g_hold120.txt / _g_hold180.txt / _pw_before180.txt）。连续域里没有"最近路"，
+ * 误差就是"还差多少度"，方向永远是对的。
+ * 只在连续域模式（s_cont != 0）下参与控制；其余模式走原路径，行为逐位不变。 */
+static float   target_cont = 0.0f;   /* 连续域目标角（不取模） */
+static float   s_yaw_cont  = 0.0f;   /* 连续域航向：把 ±180 的 Yaw 逐拍解卷绕累加 */
+static float   s_yaw_last  = 0.0f;   /* 上一拍的原始 Yaw（±180） */
+static uint8_t s_cont      = 0U;     /* 1 = 用连续域误差 */
+
 // 转向角度偏移量（可从参数表 HP_TURN_ANGLE_OFFSET 改）
 #define TURN_ANGLE_OFFSET 90.0f
 
@@ -344,6 +355,11 @@ void GyroControl_Start(void)
 {
     target_angle = NormalizeAngle(Yaw);
     angle_initialized = 1;
+    /* 连续域从"现在"重新起算：目标是当前航向、误差 0；默认退回取模路径 */
+    s_yaw_cont  = Yaw;
+    s_yaw_last  = Yaw;
+    target_cont = Yaw;
+    s_cont      = 0U;
     gyro_pid.integral = 0.0f;
     gyro_pid.last_error = 0.0f;
     s_rate_f    = gyro_sane(Gyro_Z);   /* 低通初值：别从 0 开始，否则头几拍会虚假地"慢慢转" */
@@ -361,6 +377,7 @@ void GyroControl_Start(void)
 void GyroControl_Stop(void)
 {
     gyro_control_enabled = 0;
+    s_cont = 0U;                   /* 退出时一定要退回取模路径（任务/循迹不许吃到连续域） */
     turn_active = 0;
     s_boost_mag = 0.0f;
     s_boost_cool = 0.0f;
@@ -380,10 +397,36 @@ uint8_t GyroControl_IsEnabled(void)
 
 void GyroControl_SetTargetAngle(float deg)
 {
+    s_cont = 0U;                   /* 取模路径（任务/循迹/菜单都走这条，行为与以前一致） */
     target_angle = NormalizeAngle(deg);
     angle_initialized = 1;
     gyro_pid.integral = 0.0f;      /* 换了目标就清积分，别把上一个目标的存量带过来 */
     s_settled = 0;                 /* 换了目标就解锁到位锁存 */
+}
+
+/**
+ * @brief 连续域目标（不取模）：给上位机操控页的"累计转角"用
+ *
+ * 与 `GyroControl_SetTargetAngle` 的唯一区别是 `s_cont = 1` ⇒ `GyroControl_Task()` 用
+ * `target_cont − s_yaw_cont`（未取模）当误差，而不是 `CalculateAngleError()`（±180 最近路）。
+ * 过 ±180° 时不再翻号（见头文件里那段说明）。非法值（NaN/Inf）直接忽略，保持上一拍目标。
+ */
+void GyroControl_SetTargetAngleCont(float deg)
+{
+    if (!(deg >= -1.0e6f && deg <= 1.0e6f)) {
+        return;                    /* NaN / ±Inf：宁可不动目标，也不要把环写坏 */
+    }
+    target_cont  = deg;
+    target_angle = NormalizeAngle(deg);    /* 遥测/调试仍看取模值 */
+    angle_initialized = 1;
+    gyro_pid.integral = 0.0f;
+    s_settled = 0;
+    s_cont = 1U;
+}
+
+float GyroControl_GetYawCont(void)
+{
+    return s_yaw_cont;
 }
 
 float GyroControl_GetTargetAngle(void)
@@ -393,6 +436,9 @@ float GyroControl_GetTargetAngle(void)
 
 float GyroControl_HeadingError(void)
 {
+    if (s_cont != 0U) {
+        return target_cont - s_yaw_cont;   /* 连续域：未取模的"还差多少度" */
+    }
     return CalculateAngleError(target_angle, NormalizeAngle(Yaw));
 }
 
@@ -556,6 +602,7 @@ void GyroControl_Task(void)
     float corr_lim;                       /* 本拍生效的差速上限（见 GyroControl_CorrLimit） */
     int left_speed, right_speed;
     float ff_rate;                        /* 本拍来自循迹串级的转率前馈，消费式（见 SetTraceRate） */
+    float err_now;                        /* 本拍误差：连续域模式 = 未取模的差；否则 = ±180 最近路 */
 
     if (!gyro_control_enabled) return;
 
@@ -605,6 +652,22 @@ void GyroControl_Task(void)
 
     actual_angle = NormalizeAngle(Yaw);
 
+    /* ★2026-10-07 连续域航向（逐拍把 ±180 的 Yaw 解卷绕）：
+     * 5ms 一拍车身最多转几度，所以"按最近路取小量再累加"不会误判整圈。
+     * 只有 s_cont（连续域目标）模式用它，其余模式只维护不参与控制。 */
+    {
+        float dyaw = NormalizeAngle(Yaw - s_yaw_last);
+        s_yaw_last  = Yaw;
+        s_yaw_cont += dyaw;
+        if (!(s_yaw_cont >= -1.0e7f && s_yaw_cont <= 1.0e7f)) {
+            s_yaw_cont = Yaw;              /* 自愈：被写坏就从当前航向重来 */
+        }
+    }
+
+    /* 本拍误差：连续域模式**不取模**（方向永远对），其余模式与以前逐位相同 */
+    err_now = (s_cont != 0U) ? (target_cont - s_yaw_cont)
+                             : CalculateAngleError(target_angle, actual_angle);
+
     /* 换目标就解锁"到位锁存"，并清掉各律的微分/助推状态。
      * 放在各律之前：同一拍里所有律看到同一份状态；台架直接写 RAM 改 target_angle 也算换目标。 */
     if (target_angle != s_settled_target) {
@@ -626,7 +689,7 @@ void GyroControl_Task(void)
     } else if (s_law == 1) {
         /* 三档开关（对照用，实测有 0.7s 极限环）：外环 角度误差 → 期望角速度，
          * 内环 期望角速度 → spin/hold/brake 三档定值。 */
-        float err = CalculateAngleError(target_angle, actual_angle);
+        float err = err_now;
         float rate_ref, e_rate;
 
         gyro_pid.target   = target_angle;
@@ -661,7 +724,7 @@ void GyroControl_Task(void)
          * 刹车阶段只有 Kp=80 的比例权限（跟 800°/s² 的曲线需要 5300+ 的 corr），
          * 于是提前松刹 → 以 110°/s 冲过目标 → 曲线符号翻转后又全速加速回来。
          * 保留它做对照，默认律见 s_law=3。 */
-        float err = CalculateAngleError(target_angle, actual_angle);
+        float err = err_now;
         float rate_ref;
 
         gyro_pid.target   = target_angle;
@@ -758,7 +821,7 @@ void GyroControl_Task(void)
          * 死区，巡航段 corr 每拍 ±4000 翻、角速度 34↔128°/s，比之前更糟）；曲线
          * 减速度前馈 s_kacc·Δv_ref/dt（v_ref 被 ±s_rate_max 夹住 ⇒ 误差过零时
          * a_cmd=±44000，前馈自己变成继电器，出 ±23°/174°/s 的剧烈极限环）。 */
-        float err = CalculateAngleError(target_angle, actual_angle);
+        float err = err_now;
         float v   = s_rate_f;
 
         gyro_pid.target   = target_angle;
@@ -907,7 +970,7 @@ void GyroControl_Task(void)
     }
 
     if (s_law != 4U && ff_rate == 0.0f) {
-        float err_l = CalculateAngleError(target_angle, actual_angle);
+        float err_l = err_now;
 
         if (fabsf(err_l) < s_settle_deg * 2.0f && fabsf(s_rate_f) < s_settle_rate) {
             float need_ms = (fabsf(err_l) < s_settle_deg) ? s_settle_ms : (s_settle_ms * 6.0f);
