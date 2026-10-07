@@ -46,6 +46,12 @@ extern float    stub_gyro_err;
 extern uint8_t  stub_motion_fault;
 extern int      stub_cross_clears;
 extern int      stub_speed_mmps[2];
+/* ★2026-10-07 新特性的观测点（host_appstub.c 里现成的）：
+ *   「过点蜂鸣」= seq_begin() 里 `if (g_cfg.beep_marker) AppUi_Beep(20)`（桩里 beep_marker 默认 true）
+ *   「切标定套」= TASK_OP_CAL_SET 落到 trace_cal_select_set()（桩里夹成 0/1） */
+extern int      stub_beep_n;          /* AppUi_Beep 被调了几次 */
+extern int      stub_beep_ms;         /* 最近一次的蜂鸣时长（ms） */
+extern int      stub_cal_set;         /* 最近一次 trace_cal_select_set() 的套号（0/1） */
 
 /* ------------------------------------------------------------------ */
 /* 程序构造器：把块数组序列化成上位机将来要生成的那种字节流            */
@@ -661,6 +667,59 @@ int main(void)
     }
     TaskRun_Stop();
     CHECK_EQ_I(TaskRun_IsRunning(), 0);
+
+    /* ===============================================================
+     * 13) ★2026-10-07 两个新特性各一条断言（此前完全没有覆盖）
+     *     (a) 「过点蜂鸣」：切状态必须响一下。
+     *         `seq_begin()` 里 `if (g_cfg.beep_marker) AppUi_Beep(20);` —— 在这个
+     *         改动之前，那个菜单开关（声明/默认/NVRAM 都在）全工程没人读，切状态
+     *         一声不响。桩里 `g_cfg.beep_marker` 默认 **true**（与真机一致）。
+     *     (b) `CAL_SET(0x0B)`：切灰度标定套要真的落到 `trace_cal_select_set()`。
+     * =============================================================== */
+    pg_reset(2u, 0u);
+    strcpy(g_name[0], "b0");
+    strcpy(g_name[1], "b1");
+    add_body(0u, TASK_OP_SET_SPEED, 5000u, 0, 0u, 0xFFFFu, 0u);
+    add_body(0u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);      /* → 切进状态 1 */
+    add_body(1u, TASK_OP_END, 0u, 0, 0u, 0xFFFFu, 0u);
+    len = pg_build();
+    CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
+    stub_beep_n  = 0;
+    stub_beep_ms = -1;
+    CHECK_EQ_I(TaskRun_Start(13u), 0);
+    CHECK_EQ_I(stub_beep_n, 1);                 /* 启动进主页状态：响第 1 下 */
+    CHECK_EQ_I(stub_beep_ms, 20);               /* 时长就是 task_run.c 写死的 20ms */
+    TaskRun_Tick(40000u);                       /* 第一拍跑到 GOTO 1 ⇒ 切状态 */
+    CHECK_EQ_I(stub_beep_n, 2);                 /* ★「切状态会响」：递增到 2 */
+    CHECK_EQ_I(stub_beep_ms, 20);
+    CHECK_EQ_I(TaskRun_State(), 1);
+    CHECK_EQ_I(TaskRun_IsRunning(), 0);         /* 状态 1 的 END 同拍跑到了 */
+    TaskRun_Stop();
+
+    /* (b) CAL_SET 1 ⇒ 亚克力套 */
+    pg_reset(1u, 0u);
+    add_body(0u, TASK_OP_CAL_SET, 1u, 0, 0u, 0xFFFFu, 0u);
+    add_body(0u, TASK_OP_END, 0u, 0, 0u, 0xFFFFu, 0u);
+    len = pg_build();
+    CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
+    stub_cal_set = -1;
+    CHECK_EQ_I(TaskRun_Start(14u), 0);
+    TaskRun_Tick(50000u);
+    CHECK_EQ_I(stub_cal_set, 1);                /* ★CAL_SET 1 生效（桩夹成 1） */
+    CHECK_EQ_I(TaskRun_IsRunning(), 0);
+
+    /* (b') CAL_SET 0 ⇒ 切回普通套（同一条通路的反向，防止"只会置 1"） */
+    pg_reset(1u, 0u);
+    add_body(0u, TASK_OP_CAL_SET, 0u, 0, 0u, 0xFFFFu, 0u);
+    add_body(0u, TASK_OP_END, 0u, 0, 0u, 0xFFFFu, 0u);
+    len = pg_build();
+    CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
+    stub_cal_set = -1;
+    CHECK_EQ_I(TaskRun_Start(15u), 0);
+    TaskRun_Tick(60000u);
+    CHECK_EQ_I(stub_cal_set, 0);
+    CHECK_EQ_I(TaskRun_IsRunning(), 0);
+    TaskRun_Stop();
 
     return T_SUMMARY();
 }

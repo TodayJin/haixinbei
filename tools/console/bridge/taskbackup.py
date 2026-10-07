@@ -14,7 +14,15 @@ offset 8..9、`len` 当成 4..5 —— 正确是 **`crc` 在 6..7、`len` 在 8.
   `<槽>_<名字>_<CRC>.bin`     每条任务的镜像，逐字节
   `index.json`                槽 / 名字 / 长度 / crc / 时间戳 / 文件名 / sha256
 
-校验（**任一不符就报错、退出码 1**，不静默通过）：
+★「坏读不许覆盖好备份」（2026-10-07 修）：文件名里**只有目录的 crc**，而回读被截断时
+  桥会把坏数据当成功返回（2026-10-07 实测：任务镜像超过 ~2.4KB 时，车端 DMA 发送队列
+  丢的是**尾巴上的数据帧**、收尾帧却活着 ⇒ 桥收下"连续前缀 + 收尾"就当读完了），
+  于是**坏数据算出与好备份同一个文件名**，把上一次的好备份盖掉 ✗（实测发生过）。
+  现在的落盘顺序：**先写临时名 `<...>.bin.part` → 五项校验全过 → 才 `os.replace()` 成正式名**。
+  失败时：临时文件**原样留着**（后缀还是 `.part`，一眼看出是坏读），正式名**一个字节都不碰**；
+  正式名已存在且内容一致时连临时文件都不留（说明这条本来就有好备份）。
+
+校验（**任一不符就报错、退出码 1**，不静默通过）——也是"能不能改名成正式名"的判据：
   ① 落盘文件长度 == 目录报的 `len`
   ② 镜像头 offset **6..7**（`crc16`）== 目录报的 `crc`
   ③ magic（offset 0..1）== `0x4B54`、头部 `len`（offset **8..9**）== 目录报的 `len`
@@ -49,6 +57,7 @@ REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file
                                           "..", "..", ".."))
 DEFAULT_OUT = os.path.join(REPO_ROOT, "out", "taskbackup")
 DEFAULT_BASE = "http://127.0.0.1:8770"
+PART_SUFFIX = ".part"          # 临时名后缀：五项校验全过才改名成正式 .bin（坏读只脏这个）
 
 
 class BackupError(RuntimeError):
@@ -147,6 +156,44 @@ def check_image(slot: int, img: bytes, want_len: int, want_crc: int) -> tuple:
     return (not bad), " / ".join(notes), bad
 
 
+def save_verified(out_dir: str, fname: str, slot: int, img: bytes,
+                  want_len: int, want_crc: int) -> tuple:
+    """把镜像落盘：**先写 `<fname>.part`，五项校验全过才改名成正式名**。
+
+    返回 `(ok, detail, bad, saved_as, note)`：
+      · ok=True  → `saved_as` = 正式名（内容已核对过），note 说明是不是"原地没动"；
+      · ok=False → `saved_as` = 临时名（**原样留着**给人事后看），正式名一个字节都没碰，
+                   note 里写清"原来那个好备份还在/不在"。
+    """
+    fpath = os.path.join(out_dir, fname)
+    tpath = fpath + PART_SUFFIX
+    with open(tpath, "wb") as f:                     # 先落临时名（坏数据也只脏这个文件）
+        f.write(img)
+    with open(tpath, "rb") as f:                     # 再读回磁盘对拍，防写坏
+        back = f.read()
+    ok, detail, bad = check_image(slot, back, want_len, want_crc)
+    if back != img:
+        ok, bad = False, bad + ["落盘后读回与收到的字节不一致"]
+    if not ok:
+        old = os.path.exists(fpath)
+        return (False, detail, bad, os.path.basename(tpath),
+                f"坏读留在 {os.path.basename(tpath)}；正式名 {fname} "
+                + ("**原样保留**（上一次的好备份没被覆盖）" if old else "本来就不存在（没有好备份可保）"))
+    # 校验全过：正式名已存在且内容一致 ⇒ 说明这条本来就有好备份，临时文件都别留
+    if os.path.exists(fpath):
+        with open(fpath, "rb") as f:
+            old_img = f.read()
+        if old_img == back:
+            os.remove(tpath)
+            return (True, detail, [], fname, "已有同名好备份且内容一致，未改动")
+        # 同名但内容不同：理论上只有 CRC 碰撞才会走到这里 —— 宁可不写，也不覆盖
+        os.remove(tpath)
+        return (False, detail, [f"同名备份已存在但内容不同（crc 撞名？）—— 不覆盖，保留原文件"],
+                f"{fname}（原文件未动）", "检测到同名不同内容：不覆盖")
+    os.replace(tpath, fpath)                         # 同一分区内改名 = 原子
+    return (True, detail, [], fname, "校验全过后改名")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="把车上任务目录 + 镜像字节备份到磁盘（只读，不发写指令）")
     ap.add_argument("--base", default=os.environ.get("CONSOLE_BASE", DEFAULT_BASE),
@@ -186,29 +233,25 @@ def main(argv=None) -> int:
     for it in items:
         slot = it["id"]
         fname = f"{slot}_{safe_name(it['name'])}_{it['crc']:04X}.bin"
-        fpath = os.path.join(a.out, fname)
         try:
             img = fetch_image(a.base, slot)
         except BackupError as e:
             print(f"[backup] #{slot} FAIL {e}")
             failed.append(f"#{slot} {e}")
             continue
-        with open(fpath, "wb") as f:                 # 先落盘（哪怕后面校验不过，字节也留下了）
-            f.write(img)
-        with open(fpath, "rb") as f:                 # 再读回磁盘对拍，防写坏
-            back = f.read()
-        ok, detail, bad = check_image(slot, back, it["len"], it["crc"])
-        if back != img:
-            ok, bad = False, bad + ["落盘后读回与收到的字节不一致"]
+        ok, detail, bad, saved_as, note = save_verified(
+            a.out, fname, slot, img, it["len"], it["crc"])
         recs.append({"slot": slot, "name": it["name"], "len": it["len"], "crc": it["crc"],
                      "crc_hex": f"0x{it['crc']:04X}", "flags": it["flags"], "time": stamp,
-                     "file": fname, "bytes": len(back),
-                     "sha256": hashlib.sha256(back).hexdigest(),
-                     "header_len": u16le(back, OFF_LEN) if len(back) >= HDR_LEN else None,
-                     "header_crc": u16le(back, OFF_CRC) if len(back) >= HDR_LEN else None,
+                     "file": fname, "saved_as": saved_as, "note": note,
+                     "bytes": len(img),
+                     "sha256": hashlib.sha256(img).hexdigest(),
+                     "header_len": u16le(img, OFF_LEN) if len(img) >= HDR_LEN else None,
+                     "header_crc": u16le(img, OFF_CRC) if len(img) >= HDR_LEN else None,
                      "verified": bool(ok)})
-        print(f"[backup] #{slot} {it['name'] or '(无名)'} → {fname}  "
+        print(f"[backup] #{slot} {it['name'] or '(无名)'} → {saved_as}  "
               f"{'OK' if ok else 'FAIL'}  {detail}")
+        print(f"[backup]    · {note}")
         for b in bad:
             print(f"[backup]    - {b}")
             failed.append(f"#{slot} {b}")
@@ -226,8 +269,10 @@ def main(argv=None) -> int:
         print(f"[backup] FAIL 有 {len(failed)} 处不一致，**别急着写车**：")
         for b in failed:
             print(f"[backup]    {b}")
+        print(f"[backup] 注意：坏读只留在 `*{PART_SUFFIX}` 里，正式名 .bin 一个字节都没被覆盖")
         return 1
-    print(f"[backup] OK 全部 {len(recs)} 条对上了（长度 / 头 crc[6..7] / magic / 头 len[8..9] / body CRC 五项）")
+    print(f"[backup] OK 全部 {len(recs)} 条对上了（长度 / 头 crc[6..7] / magic / 头 len[8..9] / body CRC 五项），"
+          f"且都已改名成正式 .bin")
     return 0
 
 
