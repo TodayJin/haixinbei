@@ -30,6 +30,12 @@ float    stub_sc_ramp;
 int      stub_sc_stops;
 int      stub_gyro_started, stub_gyro_stopped;
 float    stub_gyro_target;
+/* ★2026-10-07 连续域目标（`HOST_DRIVE_BASE` 走这条）：不进 `stub_gyro_target`。
+ * 与真实现（gyro_control.c 的 `target_cont` / `s_yaw_cont`）一样**不取模**——
+ * `host_ext.c:210` 传进来的是"基准 + 累计转角"（可到 ±540°），桩里也必须原样存，
+ * 折回 ±180 就测不出连续域这条路了（那正是"按住转向键突然倒拐"的根因所在）。 */
+float    stub_gyro_target_cont;
+float    stub_gyro_target_cont;
 int      stub_servo_apply_n;        /* 最近一次 Servo_ApplyAction 的动作号 */
 int      stub_servo_ctl[3];         /* Servo_Control 收到的角度 */
 int      stub_servo_dev[3];
@@ -114,6 +120,14 @@ void    GyroControl_Stop(void) { stub_gyro_stopped++; }
 uint8_t GyroControl_IsEnabled(void) { return 0u; }
 void    GyroControl_SetTargetAngle(float deg) { stub_gyro_target = NormalizeAngle(deg); }
 float   GyroControl_GetTargetAngle(void) { return stub_gyro_target; }
+/* ★2026-10-07 连续域目标/航向：`host_ext.c` 的 `HOST_DRIVE_BASE` 用这一对
+ *（真实现 = `gyro_control.c` 的 `GyroControl_SetTargetAngleCont()` / `GyroControl_GetYawCont()`，
+ *  Yaw 逐拍解卷绕成 `s_yaw_cont`、误差不取模）。桩里没有"车身在转"这回事，
+ *  所以连续域航向就等于 `Yaw` 本身；目标**原样存、不折回**（见上）。
+ *  少了这两个替身，`t_hostext` 与 `test_firmware_pipe.py` 的真固件管道程序
+ *  在链接期就挂（undefined reference），整组用例编不出来。 */
+void    GyroControl_SetTargetAngleCont(float deg) { stub_gyro_target_cont = deg; }
+float   GyroControl_GetYawCont(void) { return Yaw; }
 float   GyroControl_HeadingError(void) { return stub_gyro_err; }
 float   GyroControl_DebugRateRef(void) { return 2.5f; }
 float   GyroControl_DebugCorr(void) { return -3.75f; }

@@ -73,6 +73,16 @@
 #define HP_GYRO_SETTLE_DEG   0x0110u  /* 停车带半宽 °（|err| 内认为到位） */
 #define HP_GYRO_SETTLE_MS    0x0111u  /* 待在停车带里多久算到位 ms */
 #define HP_GYRO_CORR_REF     0x0112u  /* 差速天花板随基准速度放大的参考刻度（0 = 关闭，退回旧行为） */
+/* ★2026-10-07 起步助推（静摩擦"起转"那一下）的两个旋钮 —— 加它们**只为一件事**：
+ *   让"原地转起步一卡一卡"能像 `gyro_corr_limit` 一样**在线扫**（J-Link 只读 / 上位机
+ *   `POST /api/params/set` + `push` 改 RAM），不必为了试一个值重烧一次。
+ * ⚠ 这两项**不持久化**：不在 `app_ui.c` 的 `g_cfg` / NVRAM 里（与 `task_speed`、
+ *   `trace_rate_max` 同类）⇒ 只吃 `host_link.c` 的 SPECS[] + 上位机 push，复位/烧录回默认。
+ *   所以**不要**去动 `app_ui.c` 的 `push_pull_pid_params()` 那三处同步（那些只针对持久化的那些项）。
+ * 默认值 = 进参数表之前的硬编码值（250 / 60000）⇒ 不 push 时行为与以前**逐位一致**。 */
+#define HP_GYRO_BOOST_GAP_MS 0x0113u  /* 起转助推的冷却时间 ms：助推一撤，这么多毫秒内不许再点火。
+                                       * 有它是因为"撤了又点"会把车来回射（见 gyro_control.c 的注释）。 */
+#define HP_GYRO_BOOST_RATE   0x0114u  /* 起转助推的爬升斜率 PWM/s：60000 ⇒ 60ms 爬到 3600（起转阈值 ≈3450） */
 #define HP_TRACE_ANGLE_PER_UNIT 0x0205u /* 串级外环：重心误差 -> 转率 (°/s)/格（用户 m32880 改口径） */
 #define HP_TRACE_ANGLE_MAX   0x0206u  /* 串级外环：目标航向相对**当前**航向的前置量上限 °（防积分饱和） */
 #define HP_TRACE_RATE_MAX    0x020Au  /* 串级：**循迹时**的期望角速度上限 °/s（pivot 仍用 HP_GYRO_RATE_MAX） */

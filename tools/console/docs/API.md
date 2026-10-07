@@ -87,6 +87,16 @@
 ```
 `group` 取值固定为：`速度环` `角度环` `循迹环` `串级` `机械/车辆` `电源` `任务`。
 
+**列表本身不写死**：`items` 来自桥的 `bridge/params.py` 镜像，镜像的 id/默认值/范围由
+`tests/test_params_spec.py` 直接解析固件 `host_link.c` 的 `SPECS[]` 逐项断言，所以固件加了参数、
+这里漏加会红（不用改前端：页面完全按 `/api/params` 渲染）。
+
+**哪些项是"只吃 push、不进 NVRAM"的**：`SPECS[]` 里有一批参数**不持久化**（不在 `app_ui.c` 的
+`g_cfg` 里，例如 `task_speed`、`trace_rate_max`、以及 **2026-10-07 新增的**
+`gyro_boost_gap_ms`(0x0113) 与 `gyro_boost_rate`(0x0114)）⇒ `set` + `push` 能立刻改 RAM 里的值，
+但 `/api/params/save` 存不下它们、**复位/烧录一律回到固件默认值**。这两项就是「起步助推」
+（静摩擦起转那一下）的冷却时间与爬升斜率，专门做成可在线扫的（用户报的「原地转一卡一卡」）。
+
 ### 3.3 `/api/actions`
 ```json
 {"ok":true,"items":[

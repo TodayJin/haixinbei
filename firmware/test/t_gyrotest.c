@@ -361,5 +361,49 @@ int main(void)
         GyroControl_SetBaseSpeed(0, 0);
     }
 
+    /* ---------------------------------------------------------------
+     * 10) ★2026-10-07 起步助推的两个旋钮进参数表（HP_GYRO_BOOST_GAP_MS 0x0113 /
+     *     HP_GYRO_BOOST_RATE 0x0114）—— 加它们的目的就是让"原地转起步一卡一卡"
+     *     能像 gyro_corr_limit 一样**在线扫**（J-Link 只读 / 上位机 set + push 改 RAM）。
+     *     这里钉两条：
+     *       ① 参数表里没有这两个 id 时（台架/老固件）走兜底 = 变量当前值 ⇒ 一个字节都不变；
+     *       ② push 进参数表后**下一拍**就按新值跑，而且两个 id 互不串扰。
+     *     真车不 push 时读到的就是 SPECS 默认值 250 / 60000（t_hostlink.c 第 15 节钉住），
+     *     与加参数表之前的硬编码值逐位相同 ⇒ 默认行为零变化。
+     * --------------------------------------------------------------- */
+    {
+        int i;
+
+        param_default_angle();          /* 故意**不**预置这两个 id ⇒ 先走兜底分支 */
+        s_boost_gap  = 250.0f;          /* 加参数表之前的硬编码值 */
+        s_boost_rate = 60000.0f;
+        Yaw = 0.0f; Gyro_Z = 0.0f;
+        GyroControl_Init();
+        s_law = 3;
+        GyroControl_Start();
+        GyroControl_SetTargetAngle(15.0f);
+        for (i = 0; i < 8; i++) { GyroControl_Task(); }
+        CHECK(s_boost_gap  == 250.0f);          /* 兜底路径不写坏原值 */
+        CHECK(s_boost_rate == 60000.0f);
+
+        /* 模拟"车上参数表里就是 SPECS 默认值"：读出来必须还是 250 / 60000 */
+        host_param_set_local(HP_GYRO_BOOST_GAP_MS, 250.0f);
+        host_param_set_local(HP_GYRO_BOOST_RATE,   60000.0f);
+        for (i = 0; i < 8; i++) { GyroControl_Task(); }
+        CHECK(s_boost_gap  == 250.0f);
+        CHECK(s_boost_rate == 60000.0f);
+
+        /* push 新值 ⇒ 下一拍生效（这就是"能在线扫"的那条路） */
+        host_param_set_local(HP_GYRO_BOOST_GAP_MS, 40.0f);
+        GyroControl_Task();
+        CHECK(s_boost_gap == 40.0f);
+        CHECK(s_boost_rate == 60000.0f);        /* 只改了 gap，rate 不受影响 */
+
+        host_param_set_local(HP_GYRO_BOOST_RATE, 120000.0f);
+        GyroControl_Task();
+        CHECK(s_boost_rate == 120000.0f);
+        CHECK(s_boost_gap  == 40.0f);           /* 两个 id 互不串扰 */
+    }
+
     return T_SUMMARY();
 }

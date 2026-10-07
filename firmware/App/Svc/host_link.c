@@ -240,6 +240,22 @@ static const param_spec_t SPECS[] = {
    * 那时 `left = −corr / right = +corr` 天然对转，走的是调好的 pivot 工况（cap = corr_limit），
    * 不需要动这里。所以本项**保持 3000**。 */
   { HP_GYRO_CORR_REF,   3000.0f,     0.0f,     7200.0f },
+  /* ★2026-10-07 **起步助推**的两个旋钮（用户报「操控页原地转一卡一卡」的定位结论：
+   * 起步半秒角速度是「冲 36°/s → 掉回 0 停 ~0.3s → 再冲到 75」，因为静摩擦滞回
+   * （起转 ≈3450 刻度 / 维持 ≈1000）配上**脉冲式**助推 —— 爬到 3600 把车点着、车一动
+   * 助推立刻撤、比例项又推不动，于是掉回静止，只能等冷却结束再点一次。
+   * 加这两项**只为能在线扫**：像 `gyro_corr_limit` 一样 J-Link 只读 / 桥
+   * `POST /api/params/set` + `push` 改 RAM，试一个值不必重烧。
+   * ⚠ **不持久化**：不在 `app_ui.c` 的 `g_cfg`/NVRAM 里（与 `HP_TASK_SPEED`、
+   *   `HP_TRACE_RATE_MAX` 同类）⇒ 只吃本表 + 上位机 push，复位/烧录回默认；
+   *   **不要**去动 `app_ui.c` 的 `push_pull_pid_params()`（那三处只同步持久化的那些项）。
+   * ⚠ **默认值 = 进参数表之前的硬编码值**（`gyro_control.c` 里 `s_boost_gap = 250.0f`、
+   *   `s_boost_rate = 60000.0f`）⇒ 不 push 时行为与以前**逐位一致**。
+   * ⚠ 250ms 冷却**不能盲目调小**：它是为了防「撤了又点 ⇒ 来回射」（60° 台阶尾部
+   *   ±2~4°、±50°/s 的来回穿梭）。要试小值就 push 着试，随时 push 回 250。
+   * 单位与语义见 `gyro_control.c` 的 `s_boost_gap` / `s_boost_rate` 注释。 */
+  { HP_GYRO_BOOST_GAP_MS,  250.0f,     0.0f,     1000.0f },  /* 起转助推冷却 ms（0 = 不冷却，退回 2026-10 之前的行为）*/
+  { HP_GYRO_BOOST_RATE,  60000.0f, 10000.0f,   200000.0f },  /* 起转助推爬升斜率 PWM/s（60000 ⇒ 60ms 到 3600；10000 ⇒ 360ms）*/
   { HP_TRACE_ANGLE_PER_UNIT, 30.0f,  0.5f,       60.0f },   /* 串级：重心误差 → 转率 (°/s)/格 */
                                                             /* 2026-10-05 定稿 30（第 20 轮 P 剂量-反应）：
                                                              * P=40/50 会把 rate_ref 顶到 `HP_GYRO_RATE_MAX`

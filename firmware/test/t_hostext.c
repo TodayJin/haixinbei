@@ -26,6 +26,7 @@ extern float stub_sc_ramp;
 extern int   stub_sc_stops;
 extern int   stub_gyro_started, stub_gyro_stopped;
 extern float stub_gyro_target;
+extern float stub_gyro_target_cont;   /* ★2026-10-07 连续域目标（HOST_DRIVE_BASE 走这条） */
 extern int   stub_servo_apply_n;
 extern int   stub_servo_ctl[3];
 extern int   stub_servo_dev[3];
@@ -52,6 +53,7 @@ static void reset_all(void)
     stub_sc_stops = 0;
     stub_gyro_started = stub_gyro_stopped = 0;
     stub_gyro_target = 0.0f;
+    stub_gyro_target_cont = 0.0f;
     stub_servo_apply_n = 0;
     stub_servo_ctl[1] = stub_servo_ctl[2] = 0;
     stub_servo_dev[1] = stub_servo_dev[2] = 0;
@@ -102,25 +104,29 @@ int main(void)
     CHECK_EQ_I(b, -300);
     CHECK_EQ_I(stub_motion_speed, 0);              /* WHEELS 不动基准速度 */
 
-    /* ---- 4. BASE：角度环 + 速度环；基准航向只在"刚进模式"时锁存 ---- */
+    /* ---- 4. BASE：角度环 + 速度环；基准航向只在"刚进模式"时锁存 ----
+     * ★2026-10-07：`b` 是上位机的**累计转角**，走的是 `GyroControl_SetTargetAngleCont()`
+     * （连续域、不取模）而不是 `SetTargetAngle(NormalizeAngle(...))` —— 取模 + "最近路"
+     * 会在累计领先超过 180° 时把"继续往左"解释成"往右 160°"（真车实测翻号点
+     * 183.4/201.5/203.9/209.0°）。所以这里钉的是 `stub_gyro_target_cont`。 */
     reset_all();
     Yaw = 10.0f;
     CHECK_EQ_I(HostExt_DriveSet(HOST_DRIVE_BASE, 5000, 30), 0);
     CHECK_EQ_I(stub_motion_mode, MOTION_GYRO);
     CHECK_EQ_I(stub_motion_speed, 5000);
-    CHECK(stub_gyro_target == 40.0f);              /* 10 + 30 */
+    CHECK(stub_gyro_target_cont == 40.0f);         /* 10 + 30（基准 = 进模式时的连续域航向） */
     CHECK_EQ_I(HostExt_DriveMode(), HOST_DRIVE_BASE);
 
     Yaw = 50.0f;
     CHECK_EQ_I(HostExt_DriveSet(HOST_DRIVE_BASE, 4000, 10), 0);
-    CHECK(stub_gyro_target == 20.0f);              /* 基准仍是 10（50 只是当前航向） */
+    CHECK(stub_gyro_target_cont == 20.0f);         /* 基准仍是 10（50 只是当前航向） */
     CHECK_EQ_I(stub_motion_speed, 4000);
 
-    /* 转个接近 ±180 的目标，确认走 NormalizeAngle 折回 */
+    /* 连续域**不折回**：170 + 40 = 210 就存 210（旧路会折成 −150，那正是"倒拐"的根因） */
     reset_all();
     Yaw = 170.0f;
     CHECK_EQ_I(HostExt_DriveSet(HOST_DRIVE_BASE, 3000, 40), 0);
-    CHECK(stub_gyro_target == -150.0f);            /* 170 + 40 = 210 ⇒ −150 */
+    CHECK(stub_gyro_target_cont == 210.0f);
 
     /* ---- 5. TRACE：三级串级循迹 ---- */
     reset_all();

@@ -135,7 +135,11 @@ volatile float s_rate_kp     = 40.0f;  /* s_law=2/3 速率环比例：PWM刻度/
                                         * 兜底初值，每拍由参数表覆盖。 */
 volatile float s_ff_rate     = 3.0f;   /* s_law=2 摩擦前馈的方向判定阈值 °/s */
 volatile float s_stuck_rate  = 2.0f;   /* s_law=2 "真的停住了"的角速度阈值 °/s */
-volatile float s_boost_rate  = 60000.0f;/* s_law=2 起转助推的爬升斜率 PWM/s（60000 ⇒ 60ms 到 3600） */
+volatile float s_boost_rate  = 60000.0f;/* s_law=2 起转助推的爬升斜率 PWM/s（60000 ⇒ 60ms 到 3600）。
+                                        * ★2026-10-07 起**每拍由参数表 HP_GYRO_BOOST_RATE(0x0114) 覆盖**
+                                        *（范围 10000..200000，见 host_link.c 的 SPECS 注释）⇒
+                                        * 能在 J-Link/上位机上在线扫"助推爬多快"，默认值就是这里的
+                                        * 60000.0f，不 push 参数时行为逐位不变。 */
 volatile float s_rate_lpf    = 0.35f;  /* s_law=1/2 角速度反馈的一阶低通系数（每 5ms 一拍，0.35 ⇒ τ≈12ms） */
 volatile float s_settle_deg  = 0.8f;   /* s_law=3 停车带宽（原版 s_err_stop 的 2°）+ 锁存判据。
                                         * 2026-10-06 由 2.0 → 1.0 → 0.8：起转助推在 |err| < 它时不武装
@@ -181,7 +185,13 @@ static float s_rate_f    = 0.0f;
 /* 起转助推的最小间隔（ms）：助推一撤就进冷却，冷却期内不许再点火。
  * 没有它，车在死区边缘一停，助推又满幅点着，把车再射出去 ——
  * 实测 60° 台阶尾部就是 ±2~4°、±50°/s 的来回穿梭（Boost 见动就撤也没用，
- * 因为"撤"和"再点"之间只隔一两拍）。 */
+ * 因为"撤"和"再点"之间只隔一两拍）。
+ * ⇒ **这 250ms 是防"撤了又点 ⇒ 来回射"的，不能盲目调小**：要试更小的值就在
+ *   上位机上 push（`HP_GYRO_BOOST_GAP_MS`，范围 0..1000ms）扫着试，随时 push 回 250。
+ * ★2026-10-07 起**每拍由参数表 HP_GYRO_BOOST_GAP_MS(0x0113) 覆盖**（默认 = 这里的
+ *   250.0f ⇒ 不 push 时行为逐位不变）。用户报的"操控页原地转一卡一卡"就落在
+ *   起步半秒：角速度 0→36°/s→掉回 0 停 ~0.3s→再冲到 75，正好是这个冷却在起作用
+ *   （第一次助推没把车"带住"就得等冷却结束再点一次）—— 所以它必须能扫、也能回退。 */
 volatile float s_boost_gap   = 250.0f;
 static float  s_boost_cool = 0.0f;     /* 冷却剩余 ms */
 static float  s_boost_mag = 0.0f;
@@ -637,6 +647,18 @@ void GyroControl_Task(void)
     s_corr_slew  = host_param_get(HP_GYRO_CORR_SLEW,  s_corr_slew);
     s_settle_deg = host_param_get(HP_GYRO_SETTLE_DEG, s_settle_deg);
     s_settle_ms  = host_param_get(HP_GYRO_SETTLE_MS,  s_settle_ms);
+    /* ★2026-10-07 起步助推的两个旋钮也进参数表，好让它们能像 gyro_corr_limit 一样**在线扫**。
+     * 取法和上面十项完全一样：兜底值 = 变量当前值 ⇒ 参数表里没这两个 id（老固件/台架）时
+     * 一个字节都不变；参数表里有（正常固件就是）时取到的是 SPECS 默认值 250.0f / 60000.0f，
+     * 与原硬编码值**逐位相同** ⇒ 不 push 参数时行为与以前逐位一致。
+     * 扫描路径：J-Link 只读 / 桥 `POST /api/params/set` + `push`（改 RAM，复位回默认）。
+     * 为什么放在这里（5ms 热路径每拍读）而不是"变化时同步"：一是不引入第二份状态
+     * （`s_boost_mag`/`s_boost_cool` 已经够多了，再加"上一次的值"就多一种失配方式），
+     * 二是 `host_param_get()` 只是一张全表线性扫描 + 有限性判据，本函数**已经在**每拍读
+     * 上面那十项了 ⇒ 多两个 id 是同一量级的常数开销，不改变热路径的量级；
+     * 三是"改完立刻生效"这条台架习惯（:621 的注释）对所有参数都成立、不会漏。 */
+    s_boost_gap  = host_param_get(HP_GYRO_BOOST_GAP_MS, s_boost_gap);
+    s_boost_rate = host_param_get(HP_GYRO_BOOST_RATE,   s_boost_rate);
 
     /* 差速上限：按上一步回读到的 s_corr_limit / s_corr_ref 与基准速度算一次，本拍各律共用。
      * 放在参数回读之后，保证"上位机改完参数同一拍就按新值算"。 */
@@ -764,7 +786,8 @@ void GyroControl_Task(void)
 
         /* 起转助推（静摩擦）：车停着（|v_f| < s_stuck_rate）而误差还在停车带外时，
          * 比例项往往只有几十~几百，根本推不动（起转要 ≈3450）。所以叠加一个
-         * **按斜率爬上来**的助推量（s_boost_rate=60000 ⇒ 60ms 爬到 3600），
+         * **按斜率爬上来**的助推量（s_boost_rate=60000 ⇒ 60ms 爬到 3600，
+         *  ★2026-10-07 起这两个量每拍从参数表读：`HP_GYRO_BOOST_RATE` / `HP_GYRO_BOOST_GAP_MS`），
          * 一旦车动起来立刻清零。
          * 为什么不能像早先那版"停住就一步顶到 3600"：那个每次过零/回头都被重新
          * 点着，20° 阶跃后半段变成 0.5s 周期的来回摆（实测 ±2~4° 抖不停）。
@@ -908,6 +931,9 @@ void GyroControl_Task(void)
 
         /* 起转助推：停车带外、车真的停住了、而比例量又推不动（起转要 ≈3450）时
          * 按斜率补一脚；一动就撤、撤了进冷却（见 s_boost_gap 注释）。
+         * ★2026-10-07 起 `s_boost_rate` / `s_boost_gap` 每拍由参数表
+         * `HP_GYRO_BOOST_RATE(0x0114)` / `HP_GYRO_BOOST_GAP_MS(0x0113)` 覆盖（在 Task 开头，
+         * 与上面十项同一处）⇒ 上位机 push 完**同一拍**就按新值跑，默认值 = 原硬编码值。
          * 有循迹前馈时不补：前馈本身就能给出远超起转阈值的量（s_rate_kp×ff），
          * 而且外环的转率指令可能和"朝目标角"的方向相反，补这一脚就是打架。 */
         if (s_boost_cool > 0.0f) s_boost_cool -= GYRO_DT * 1000.0f;

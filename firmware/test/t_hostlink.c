@@ -406,6 +406,13 @@ int main(void)
         /* 2026-10-06 2.0 → 1.0 → 0.8：起转助推在 |err| < settle_deg 时不武装，收到 0.8 补最后 1°；
          * 0.8 也是 ak5 组唯一"五趟窗 p-p 全 ≤3.0°、换向 0 次"的候选 */
         CHECK(def == 0.8f && lo == 0.2f && hi == 10.0f);
+        /* ★2026-10-07 起步助推的两个旋钮（用户报「原地转一卡一卡」→ 让这两个量能在线扫）。
+         * 这里把**默认值 = 进参数表之前的硬编码值**钉死：不 push 参数时行为逐位不变。
+         * 它们**不持久化**（不在 app_ui 的 g_cfg/NVRAM 里）⇒ 只在本表 + 上位机 push 里存在。 */
+        CHECK_EQ_I(host_param_bounds(HP_GYRO_BOOST_GAP_MS, &def, &lo, &hi), 1);
+        CHECK(def == 250.0f && lo == 0.0f && hi == 1000.0f);
+        CHECK_EQ_I(host_param_bounds(HP_GYRO_BOOST_RATE, &def, &lo, &hi), 1);
+        CHECK(def == 60000.0f && lo == 10000.0f && hi == 200000.0f);
         CHECK_EQ_I(host_param_bounds(0x7777u, NULL, NULL, NULL), 0);
         CHECK_EQ_I(host_param_id_at(n), 0u);         /* 越界返回 0，不崩 */
         CHECK(host_param_table_crc() != 0u);
