@@ -126,6 +126,13 @@
 | POST | `/api/tasks/stop` | `{}` | `{"ok":true}` |
 | GET | `/api/tasks/status` | — | `{"ok":true,"status":{"id","state","running","block","elapsed_ms","flags"}}` |
 
+> **★写车前先跑 `python -m bridge.taskbackup`**（workdir `tools/console`）：**只读**走
+> `GET /api/tasks` + 逐槽 `GET /api/tasks/get`，把目录与**镜像字节**抄到仓根 `out/taskbackup/`
+> （`<槽>_<名字>_<CRC>.bin` + `index.json`），并逐条校验「长度 / 头 `crc[6..7]` / magic /
+> 头 `len[8..9]` / 按 `[12:]` 重算的 body CRC」—— 任一条不合就明确报错、退出码 1。
+> 2026-10-07 有两次**参数填错**的 `commit`（`crc` 写成 8..9、`len` 写成 4..5）把车上三条任务
+> **从目录里抹掉了** ⇒ **先备份，再写车**。
+
 - 失败体一律 `{"ok":false,"error":"…"}`；**语义性失败（车拒收/没人应答）也是 HTTP 200 + `ok:false`**，只有参数不合法才回 400。`error` 必须是人话，**不许只丢一个状态码**：2026-10-04 用户 m24215 报的「每次操控弹一个后端报错，什么 HTTP002。200」就是 `send_wait` 失败时不补 `error`、前端兜底把 HTTP 状态码当成了错误信息。现在 `bridge/state.py` 的 `send_wait` 会按情形补「车上没应答（等 Ns 超时）/ 车上没回确认帧（收到 N 帧都不是 ACK）/ 车上拒绝了：<name>」并记一条 warn 日志，驾驶被拒还说明下一步（「任务正在跑…先去任务页停掉」）。任务这几个端点额外过一遍 `TASK_STATUS_HINT`
 （`bridge/state.py`）：车回 `忙` ⇒ 「先在任务页按停车」、`参数错` ⇒ 「多半是任务名超长或长度/校验对不上」、
 `超范围` ⇒ 「换一个 0~7 里的空槽」…… 2026-10-07 之前这里在"链路正常、只是这一帧没回"时写

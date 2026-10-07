@@ -26,7 +26,7 @@ import {
   store,
   type SlotPlan,
 } from '../lib/store'
-import { COND, MODE, OP, decodeTask, encodeTask, waitCondJumpTarget, withWaitCondJumpTarget, type TaskBlock, type TaskProgram } from '../lib/task'
+import { COND, MODE, OP, decodeTask, encodeTask, waitCondJumpTarget, withWaitCondJumpTarget, WAIT_COND_JUMP_ON, type TaskBlock, type TaskProgram } from '../lib/task'
 import {
   COND_SPECS,
   DRAG_MIME,
@@ -64,6 +64,9 @@ import {
   stateLabel,
   duplicateBlock,
   updateBlock,
+  waitCondHoldMs,
+  withWaitCondHoldMs,
+  WAIT_COND_HOLD_MAX_MS,
   type FieldKey,
   type FieldSpec,
   type SeqName,
@@ -108,6 +111,45 @@ function download(name: string, text: string): void {
 
 /* ------------------------------------------------------------------ 单块 */
 
+/* 「等条件」的「需持续」那一格（★2026-10-07 用户 m：「两段超过 1s 的全黑」）。
+   为什么单独一个组件、不塞进通用字段渲染：
+     ① 它的值**不在** `b['flags']` 里 —— 是 flags 的**低 7 位**（`waitCondHoldMs()` 解出来的
+        毫秒数）。走通用那条路（`setField()` 把 `flags` 整个路由给 `withWaitCondJumpTarget()`）
+        会把用户填的毫秒数当成"满足后跳到的状态号"存进去 —— **写坏数据**。
+     ② 用户填了超范围的数时，输入框要能**弹回真正存下来的值**；`NumberField` 只记得它自己
+        发出去的那个数，所以这里用一个会变的 key（`bump()`）让它重挂一次。
+     ③ `flags` 的 bit7 已经被「满足后跳转」用掉时，这一格**禁用**（同一处只能留一个），
+        并且点它会给一句人话解释怎么腾出来。 */
+function HoldField({ b, f, onChange }: { b: TaskBlock; f: FieldSpec; onChange: (patch: Partial<TaskBlock>) => void }) {
+  const blocked = (b.flags & WAIT_COND_JUMP_ON) !== 0
+  const cur = waitCondHoldMs(b.flags)
+  const [nonce, bump] = React.useReducer((n: number) => n + 1, 0)
+
+  const blockedToast = () =>
+    store.toast('err', '这一格现在填不了：上面「满足后」已经选了要跳到某个状态 —— 它和「需持续」共用同一处，一块上只能留一个。把「满足后」选回「继续往下跑」就能填。')
+
+  const apply = (nv: number) => {
+    const r = withWaitCondHoldMs(b.flags, nv)
+    if (r.blocked) {
+      blockedToast()
+      bump()
+      return
+    }
+    if (r.clamped) {
+      store.toast('err', `「需持续」最多 ${WAIT_COND_HOLD_MAX_MS}ms（12.7 秒）：${nv}ms 超范围，已按 ${r.storedMs}ms 收下。`)
+      bump()
+    }
+    onChange({ flags: r.flags })
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1" onClick={blocked ? blockedToast : undefined}>
+      <NumberField key={nonce} value={cur} min={f.lo} onChange={apply} disabled={blocked} />
+      {f.unit && <span className="text-[11px] text-slate-600">{f.unit}</span>}
+    </span>
+  )
+}
+
 function FieldEditor({
   b,
   at,
@@ -142,7 +184,7 @@ function FieldEditor({
   /* 一行的外壳：标题（鼠标停上去弹说明）+ 控件 + 下面一行"这个值是什么意思"（常显，不用悬停也能看到）。
      注意是**普通函数**不是组件：写成内联组件会让 React 每次渲染换一个类型、输入框一打字就丢焦点。 */
   const fieldRow = (f: FieldSpec, control: React.ReactNode) => (
-    <div key={f.key} className="grid gap-0.5">
+    <div key={`${f.kind}:${f.key}`} className="grid gap-0.5">
       <label className="flex items-center gap-2 text-[12px] text-slate-400" title={f.hint}>
         <span className="w-14 shrink-0 cursor-help border-b border-dotted border-slate-500/50">{fieldLabel(f, b)}</span>
         {control}
@@ -179,6 +221,10 @@ function FieldEditor({
         })
         .map((f) => {
           const v = b[f.key]
+          if (f.kind === 'hold') {
+            /* 「需持续」：取值/写值都不走 `b[f.key]`（见 HoldField 上面那段注释） */
+            return fieldRow(f, <HoldField b={b} f={f} onChange={onChange} />)
+          }
           if (f.kind === 'condjump') {
             const cur = waitCondJumpTarget(b[f.key])
             return fieldRow(

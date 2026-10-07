@@ -7,13 +7,15 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { COND, MODE, NO_STATE, OP, TASK_MAX_STATES, blk, validateTask, type TaskBlock, type TaskProgram } from './task';
+import { COND, MODE, NO_STATE, OP, TASK_MAX_STATES, blk, validateTask, waitCondJumpTarget, withWaitCondJumpTarget, type TaskBlock, type TaskProgram } from './task';
 import {
   COND_SPECS,
   DRAG_MIME,
   EDIT_MAX_TASKS,
   MODE_OPTIONS,
   OP_SPECS,
+  WAIT_COND_HOLD_MAX_MS,
+  WAIT_COND_HOLD_UNIT_MS,
   addState,
   addTaskDef,
   blockCount,
@@ -48,6 +50,8 @@ import {
   stateLabel,
   truncateNameUtf8,
   updateBlock,
+  waitCondHoldMs,
+  withWaitCondHoldMs,
   type Where,
 } from './taskedit';
 
@@ -199,6 +203,87 @@ describe('块摘要', () => {
     }
     // 「丢线」用户明确说看不懂 ⇒ 界面上统一叫「探头全白」
     expect(COND_SPECS.find((c) => c.cond === COND.LINE_LOST)?.label).toBe('探头全白');
+  });
+});
+
+describe('「等条件」的「需持续」（flags 低 7 位 ×100ms；与「满足后跳转」共用同一个字节）', () => {
+  it('① 老任务（flags = 0）⇒ 需持续 = 0 = 「不要求持续」，写回也一个字节都不动', () => {
+    const old = blk(OP.WAIT_COND, COND.CH_BLACK, 0xff, 8000, 5); // flags 默认 0（老镜像就长这样）
+    expect(old.flags).toBe(0);
+    expect(waitCondHoldMs(old.flags)).toBe(0); // ★界面那一格显示的就是这个 0
+    // 界面「原样显示 → 用户没改 → 不改数据」：写回同一个 0，flags 还是 0
+    expect(withWaitCondHoldMs(old.flags, waitCondHoldMs(old.flags)).flags).toBe(0);
+    expect(withWaitCondHoldMs(old.flags, 0).flags).toBe(0);
+    // 摘要里不许多出一句"需持续"，老任务看起来跟以前一模一样
+    expect(describeBlock(old, 15)).not.toContain('需持续');
+    expect(describeBlock(old, 15)).toContain('最多 8000ms');
+  });
+
+  it('② 填 1000ms ⇒ flags = 10（口径 = 低 7 位 × 100ms，与固件 TASK_WAIT_COND_HOLD_MSK 一致）', () => {
+    const r = withWaitCondHoldMs(0, 1000);
+    expect(r).toMatchObject({ flags: 10, blocked: false, clamped: false, storedMs: 1000 });
+    expect(waitCondHoldMs(r.flags)).toBe(1000);
+    expect(WAIT_COND_HOLD_UNIT_MS).toBe(100);
+    expect(describeBlock(blk(OP.WAIT_COND, COND.CH_BLACK, 0xff, 6000, 5, 10), 15)).toContain('需持续 1000ms');
+  });
+
+  it('③ 填 13000ms（超范围）被拦：夹到 12700ms 并报 clamped = true（界面据此弹人话提示）', () => {
+    const hi = withWaitCondHoldMs(0, 13000);
+    expect(hi.clamped).toBe(true);
+    expect(hi.storedMs).toBe(WAIT_COND_HOLD_MAX_MS);
+    expect(hi.flags).toBe(127);
+    expect(waitCondHoldMs(hi.flags)).toBe(12700);
+    // 负数同理（夹到 0）
+    const lo = withWaitCondHoldMs(0, -100);
+    expect(lo.clamped).toBe(true);
+    expect(lo.flags).toBe(0);
+    // 正好在边界上不算超范围
+    expect(withWaitCondHoldMs(0, WAIT_COND_HOLD_MAX_MS).clamped).toBe(false);
+    expect(withWaitCondHoldMs(0, 0).clamped).toBe(false);
+  });
+
+  it('按 100ms 一格取整（填 1050 存成 1100），且量化不等于超范围', () => {
+    expect(withWaitCondHoldMs(0, 1050).flags).toBe(11);
+    expect(withWaitCondHoldMs(0, 1050).storedMs).toBe(1100);
+    expect(withWaitCondHoldMs(0, 1050).clamped).toBe(false);
+    expect(waitCondHoldMs(withWaitCondHoldMs(0, 60).flags)).toBe(100);
+  });
+
+  it('★bit7（满足后跳转）与「需持续」互斥：占着就写不进（原样返回），腾出来就能写', () => {
+    const jumped = withWaitCondJumpTarget(0, 5); // 0x85 = bit7 + 目标状态 5
+    expect(jumped).toBe(0x85);
+    const blocked = withWaitCondHoldMs(jumped, 1000);
+    expect(blocked.blocked).toBe(true);
+    expect(blocked.flags).toBe(0x85); // ★原样返回 —— 绝不把跳转目标冲掉
+    expect(waitCondHoldMs(jumped)).toBe(0); // 那几位是跳转目标，不是"需持续"
+    expect(waitCondJumpTarget(jumped)).toBe(5);
+    // 界面上把「满足后」选回「继续往下跑」⇒ 低 7 位腾出来，这一格就能填了
+    const freed = withWaitCondJumpTarget(jumped, NO_STATE);
+    expect(freed).toBe(0);
+    expect(withWaitCondHoldMs(freed, 1000).flags).toBe(10);
+    // 反向：先写需持续、再选跳转 ⇒ 跳转接管低 7 位（一块上只有一处能留）
+    const holdFirst = withWaitCondHoldMs(0, 1000).flags;
+    expect(holdFirst).toBe(10);
+    expect(withWaitCondJumpTarget(holdFirst, 7)).toBe(0x87);
+    expect(waitCondHoldMs(0x87)).toBe(0);
+  });
+
+  it('块库元数据：这一格是 kind = hold、0..12700ms，和「满足后」两行同时在字段表里', () => {
+    const wait = OP_SPECS.find((s) => s.op === OP.WAIT_COND)!;
+    const hold = wait.fields.find((f) => f.kind === 'hold')!;
+    expect(hold.key).toBe('flags'); // 存的就是 flags（key 用 'flags'，页面里 b[f.key] 的类型才对得上）
+    expect(hold.label).toBe('需持续');
+    expect([hold.lo, hold.hi]).toEqual([0, WAIT_COND_HOLD_MAX_MS]);
+    expect(hold.unit).toBe('ms');
+    expect(hold.showIf).toBeUndefined(); // 恒显示：填不了的时候是"禁用 + 说明"，不是凭空消失
+    expect(wait.fields.filter((f) => f.key === 'flags').map((f) => f.kind)).toEqual(['condjump', 'hold']);
+    // 两行的 React key 不会撞（Tasks.tsx 的 fieldRow 用 `${kind}:${key}`）
+    expect(new Set(wait.fields.map((f) => `${f.kind}:${f.key}`)).size).toBe(wait.fields.length);
+  });
+
+  it('缺省块（拖进来的「等条件」）不受影响：flags = 0 ⇒ 老行为', () => {
+    expect(defaultsFor(OP.WAIT_COND).flags).toBe(0);
+    expect(waitCondHoldMs(defaultsFor(OP.WAIT_COND).flags)).toBe(0);
   });
 });
 

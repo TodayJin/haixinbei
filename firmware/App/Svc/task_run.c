@@ -52,6 +52,14 @@ static uint32_t s_now;
 static uint32_t s_tick_last;
 static uint32_t s_t0_block;
 static uint32_t s_elapsed;
+/* ★「需持续」的连续计时（TASK_WAIT_COND 的 flags 低 7 位，见 task_prog.h）：
+ *   s_hold_run = 0 表示"条件当前不成立（或还没开始计时）"，= 1 表示正在累计。
+ *   s_hold_from = 这一轮**连续成立**的起始时刻；条件断一次就 s_hold_run = 0，
+ *   下次成立时重新取 s_now ⇒ **断一次重新计时**（不是累计、不是打折扣）。
+ *   进入每一块时清零（见 TaskRun_Tick 的 `if (!s_started)`）：否则连着两块都成立的
+ *   「等条件」会继承上一块的起始时刻、第二块当场就"持续够久"了。 */
+static uint8_t  s_hold_run;
+static uint32_t s_hold_from;
 static float    s_dist_mm;
 static uint16_t s_cross_n;
 static uint8_t  s_cross_last;
@@ -270,24 +278,46 @@ static int block_step(const task_block_t *b)
     case TASK_OP_WAIT_MS:
         return ((s_now - s_t0_block) >= (uint32_t)b->p0) ? 1 : 0;
 
-    case TASK_OP_WAIT_COND:
-        if (cond_ok(b->p0, b->p1)) {
-            if (b->p0 == (uint16_t)TASK_C_CROSS) {
-                tracing_cross_clear();
-            }
-            /* ★flags.bit7（用户 m 2026-10-07）：「满足后」去哪。
-             *   bit7 = 1 ⇒ 跳到低 7 位的状态号（和 p3 的"超时后跳"是两条独立出路）；
-             *   bit7 = 0 ⇒ **满足后继续往下走一块**（老任务 flags 全是 0 ⇒ 行为一字不变）。 */
-            if ((b->flags & TASK_WAIT_COND_JUMP) != 0u) {
-                uint8_t tgt = (uint8_t)(b->flags & TASK_WAIT_COND_TGT_MSK);
+    case TASK_OP_WAIT_COND: {
+        /* ★「需持续」（用户 m 2026-10-07：两段减速带 = "扫到两段超过 1s 的全黑"）。
+         *   flags 按 bit7 分档：bit7=1 时低 7 位是"满足后跳到的状态号"，那种块**不支持**
+         *   需持续（要两者都有，就写成"等条件(需持续) + 下一块 GOTO"）；bit7=0 时低 7 位
+         *   才是"需要连续成立多少个 100ms"。低 7 位 = 0 ⇒ 需持续 0ms ⇒ **本拍成立即满足**，
+         *   与加这个功能之前逐字节等价（老任务 flags 全是 0）。
+         *   计时口径：条件首次成立的那一拍记起始时刻（那一拍算已持续 0ms），此后每 5ms 一拍
+         *   检查 now - from >= 需持续；**中途假一次就把这一轮作废**，下次成立重新记起点。
+         *   全程不阻塞（本函数每拍被 TaskRun_Tick 调一次），也不影响"超时后跳 p3"那条出路。 */
+        uint8_t  ok     = (uint8_t)cond_ok(b->p0, b->p1);
+        uint8_t  hold_n = ((b->flags & TASK_WAIT_COND_JUMP) != 0u)
+                              ? 0u
+                              : (uint8_t)(b->flags & TASK_WAIT_COND_HOLD_MSK);
+        uint32_t need   = (uint32_t)hold_n * TASK_WAIT_COND_HOLD_UNIT_MS;
 
-                if (tgt < s_n_states) {
-                    seq_begin(tgt);
-                    return 2;
-                }
-                /* 目标状态越界（程序被改过）：当"继续往下"处理 —— 绝不越界跳 */
+        if (ok == 0u) {
+            s_hold_run = 0u;                     /* 条件断了 ⇒ 这一轮作废，计时清零重来 */
+        } else {
+            if (s_hold_run == 0u) {
+                s_hold_run  = 1u;
+                s_hold_from = s_now;             /* 这一拍刚开始连续成立 */
             }
-            return 1;
+            if ((s_now - s_hold_from) >= need) { /* need = 0 ⇒ 恒真 ⇒ 老行为 */
+                if (b->p0 == (uint16_t)TASK_C_CROSS) {
+                    tracing_cross_clear();
+                }
+                /* ★flags.bit7（用户 m 2026-10-07）：「满足后」去哪。
+                 *   bit7 = 1 ⇒ 跳到低 7 位的状态号（和 p3 的"超时后跳"是两条独立出路）；
+                 *   bit7 = 0 ⇒ **满足后继续往下走一块**（老任务 flags 全是 0 ⇒ 行为一字不变）。 */
+                if ((b->flags & TASK_WAIT_COND_JUMP) != 0u) {
+                    uint8_t tgt = (uint8_t)(b->flags & TASK_WAIT_COND_TGT_MSK);
+
+                    if (tgt < s_n_states) {
+                        seq_begin(tgt);
+                        return 2;
+                    }
+                    /* 目标状态越界（程序被改过）：当"继续往下"处理 —— 绝不越界跳 */
+                }
+                return 1;
+            }
         }
         if (b->p2 != 0u && (s_now - s_t0_block) >= (uint32_t)b->p2) {
             s_flags |= TASK_RUN_F_TIMEOUT;       /* 超时（无论改不改道都要留下痕迹） */
@@ -298,6 +328,7 @@ static int block_step(const task_block_t *b)
             return 1;
         }
         return 0;
+    }
 
     case TASK_OP_GOTO:
         if (b->p0 < s_n_states) {
@@ -376,6 +407,8 @@ int TaskRun_Start(uint16_t id)
     s_t0_block  = 0u;
     s_inited    = 0u;
     s_turn_target = 0.0f;
+    s_hold_run  = 0u;                            /* 「需持续」计时：新任务从零开始 */
+    s_hold_from = 0u;
 
     Motion_ClearFault();
     tracing_cross_clear();
@@ -453,6 +486,9 @@ void TaskRun_Tick(uint32_t now_ms)
             s_t0_block = now_ms;
             s_started  = 1u;
             s_inited   = 0u;
+            s_hold_run = 0u;                     /* ★换块了：「需持续」的连续计时必须重新开始
+                                                  *   （否则连着两块都成立的「等条件」会继承
+                                                  *    上一块的起点、第二块当场就算"持续够久"） */
         }
         TaskProg_ReadBlock(s_prog, (uint32_t)s_off + (uint32_t)s_idx * TASK_BLOCK_LEN, &b);
 

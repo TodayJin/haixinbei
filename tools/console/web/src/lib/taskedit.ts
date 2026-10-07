@@ -16,6 +16,8 @@ import {
   TASK_MAX_BLOCKS,
   TASK_MAX_NAME,
   TASK_MAX_STATES,
+  WAIT_COND_JUMP_ON,
+  WAIT_COND_TGT_MASK,
   blk,
   crc16Ccitt,
   encodeTask,
@@ -51,8 +53,10 @@ export type FieldKey = 'p0' | 'p1' | 'p2' | 'p3' | 'flags'
  *  - `state`    状态下拉
  *  - `servo`    舵机通道下拉
  *  - `chmask`   ★8 个多选框（「指定哪几路是黑的」(10) / 「指定哪几路是白的」(11) 共用的掩码，存 `p1`）
- *  - `condjump` ★「等条件」满足后去哪（存 `flags` 的 bit7 + 低 7 位；见 task.ts 的 WAIT_COND_JUMP_ON） */
-export type FieldKind = 'int' | 'mode' | 'cond' | 'state' | 'servo' | 'chmask' | 'condjump'
+ *  - `condjump` ★「等条件」满足后去哪（存 `flags` 的 bit7 + 低 7 位；见 task.ts 的 WAIT_COND_JUMP_ON）
+ *  - `hold`     ★「等条件」的「需持续」（存**同一个** `flags` 的低 7 位，只在 bit7 = 0 时有效；
+ *                见 `waitCondHoldMs()` / `withWaitCondHoldMs()`；渲染在 `pages/Tasks.tsx` 的 HoldField） */
+export type FieldKind = 'int' | 'mode' | 'cond' | 'state' | 'servo' | 'chmask' | 'condjump' | 'hold'
 
 export interface FieldSpec {
   key: FieldKey
@@ -90,6 +94,50 @@ export interface OpSpec {
 }
 
 const speed = (key: FieldKey, label: string, hint: string): FieldSpec => ({ key, label, hint, kind: 'int', lo: 0, hi: 7200, unit: '油门刻度' })
+
+/* ------------------------------------------- 「等条件」的「需持续」（★2026-10-07 用户 m）
+
+   需求原话：「之后直走要**扫到两段超过 1s 的全黑**就算过完了两段减速带」——
+   「这一拍成不成立」表达不了「持续 1 秒」，所以给「等条件」加了"需持续"。
+
+   存哪儿（与固件 `task_prog.h` 的 TASK_WAIT_COND_HOLD_MSK 一字不差）：
+     `flags` 的**低 7 位** = 需要连续成立的 **100ms 格数**（0..127 ⇒ 0..12.7s），**0 = 不要求持续**。
+   ★ 与「满足后跳转」共用同一个字节，**按 bit7 分档**（低 7 位物理上只有一个）：
+       bit7 = 1 ⇒ 低 7 位 = 满足后跳到的状态号（老功能，`withWaitCondJumpTarget()` 写的）
+       bit7 = 0 ⇒ 低 7 位 = 需持续（本文件这两个函数写的）
+     两者**不能同时写**；要"持续够久再跳走"，就在这一块后面单独放一块「跳到状态」（执行流等价）。
+   ★ 向后兼容：老任务/老镜像的「等条件」块 flags 全是 0 ⇒ 需持续 = 0 ⇒ 行为一字不差。
+
+   ★ 界面上怎么给用户填（2026-10-07 补上）：`OP_SPECS` 里这一块多一个
+     `{ key:'flags', kind:'hold' }` 的字段，但它**不能**走通用的那条渲染/写值路径
+     （`pages/Tasks.tsx` 的 `v = b[f.key]` 与 `setField()` 会把 `flags` 整个路由给
+     `withWaitCondJumpTarget()` ⇒ 用户填的毫秒数会被当成"跳转目标状态号"存进去，**写坏数据**）。
+     所以 Tasks.tsx 给它单独一个 `kind === 'hold'` 分支 + 一个 `HoldField` 组件：
+     取值走 `waitCondHoldMs()`、写值走 `withWaitCondHoldMs()`；`flags.bit7 = 1`（已经用了
+     「满足后跳转」）时那一格**禁用并说明原因**。摘要里也看得见（`describeBlock()` 会写
+     「需持续 1000ms」）。 */
+export const WAIT_COND_HOLD_UNIT_MS = 100
+export const WAIT_COND_HOLD_MAX_MS = 127 * WAIT_COND_HOLD_UNIT_MS
+
+/** 「等条件」这一块的「需持续」是多少毫秒（0 = 不要求持续）。
+ *  已经写了"满足后跳转"（bit7 = 1）的块返回 0：那几位被跳转目标占着，没有"需持续"。 */
+export function waitCondHoldMs(flags: number): number {
+  if ((flags & WAIT_COND_JUMP_ON) !== 0) return 0
+  return (flags & WAIT_COND_TGT_MASK) * WAIT_COND_HOLD_UNIT_MS
+}
+
+/** 写回「需持续」（单位 ms，**按 100ms 量化**，夹到 0..12700；写 0 = 不要求持续）。
+ *  `blocked = true` 表示"这一块已经设了满足后跳转（bit7 = 1），低 7 位腾不出来" ⇒ flags 原样返回。
+ *  `clamped = true` 表示"用户填的数超出 0..12700" ⇒ 已夹到边界（界面据此弹人话提示；
+ *  `storedMs` 是**真正存下来**的那个毫秒数，便于提示里报准数字）。
+ *  语义（界面上要写清的那句）：这段时间内条件必须**一直成立**，**断一次就重新计时**。 */
+export function withWaitCondHoldMs(flags: number, ms: number): { flags: number; blocked: boolean; clamped: boolean; storedMs: number } {
+  if ((flags & WAIT_COND_JUMP_ON) !== 0) return { flags, blocked: true, clamped: false, storedMs: 0 }
+  const want = Number.isFinite(ms) ? ms : 0
+  const bounded = Math.max(0, Math.min(WAIT_COND_HOLD_MAX_MS, want))
+  const n = Math.round(bounded / WAIT_COND_HOLD_UNIT_MS)
+  return { flags: (flags & ~WAIT_COND_TGT_MASK) | n, blocked: false, clamped: want < 0 || want > WAIT_COND_HOLD_MAX_MS, storedMs: n * WAIT_COND_HOLD_UNIT_MS }
+}
 
 /** 10 个基础块的字段语义 —— 与 docs/任务编程.md 的块表逐条对应。
  *  文案规矩（用户 m25776）：`doc` 只说"这块是干什么的"，字段 `hint` 只说"这个数改变车的什么行为"，
@@ -167,6 +215,15 @@ export const OP_SPECS: OpSpec[] = [
         lo: 0,
         hi: 0xff,
         allowNoState: true,
+      },
+      {
+        key: 'flags',
+        label: '需持续',
+        hint: '这段时间内条件必须一直成立，断一次就重新计时；0 = 不要求持续（用了"满足后跳转"时此项不可用）',
+        kind: 'hold',
+        lo: 0,
+        hi: WAIT_COND_HOLD_MAX_MS,
+        unit: 'ms',
       },
     ],
   },
@@ -314,7 +371,8 @@ export function describeBlock(b: TaskBlock, stateCount: number, names?: string[]
       return `等 ${b.p0}ms${b.p0 >= 1000 ? `（${(b.p0 / 1000).toFixed(2).replace(/\.?0+$/, '')} 秒）` : ''}`
     case OP.WAIT_COND: {
       const jt = waitCondJumpTarget(b.flags)
-      return `等「${COND_BY_CODE.get(b.p0)?.label ?? `条件 ${b.p0}`}」${b.p2 ? `最多 ${b.p2}ms` : '不限时'}${jt !== NO_STATE ? `，满足后跳到 ${st(jt)}` : ''}${b.p3 !== NO_STATE ? `，超时后跳到 ${st(b.p3)}` : ''}`
+      const hold = waitCondHoldMs(b.flags)
+      return `等「${COND_BY_CODE.get(b.p0)?.label ?? `条件 ${b.p0}`}」${b.p2 ? `最多 ${b.p2}ms` : '不限时'}${hold ? `，需持续 ${hold}ms（这期间必须一直成立，断一次就重新计时）` : ''}${jt !== NO_STATE ? `，满足后跳到 ${st(jt)}` : ''}${b.p3 !== NO_STATE ? `，超时后跳到 ${st(b.p3)}` : ''}`
     }
     case OP.CROSS_CLEAR:
       return '把横线计数清零'
@@ -346,9 +404,27 @@ export function fieldHint(f: FieldSpec, b: TaskBlock): string {
       ? `已勾第 ${on.join('、')} 路：这几路现在必须一路都不压着黑线（全白）才算等到，其余几路不管。`
       : `已勾第 ${on.join('、')} 路：这几路现在必须全是黑的才算等到，其余几路不管。`
   }
+  if (f.kind === 'hold') {
+    /* 「需持续」的那一格：值 = flags 低 7 位（bit7 = 1 时那几位是跳转目标 ⇒ 这一格用不了）。
+       写的是**当前**状态，所以解释了"为什么现在填不了 / 现在是多少"。 */
+    const t = waitCondJumpTarget(b.flags)
+    if (t !== NO_STATE) {
+      return `这一格现在填不了：上面「满足后」已经选了要跳到 状态 ${t} —— 它和「需持续」共用同一处，一块上只能留一个。把「满足后」选回「继续往下跑」就能填；要"持续够久再跳走"，改成在这一块后面单独放一块「跳到状态」。`
+    }
+    return `${f.hint}。按 100ms 一格取整（填 1050 会存成 1100）；现在 = ${waitCondHoldMs(b.flags)}ms。`
+  }
   if (f.kind === 'condjump') {
     const t = waitCondJumpTarget(b[f.key])
-    return t === NO_STATE ? '满足后接着执行这一块的下一行（默认，也是所有老任务的样子）。' : `满足后立刻跳到状态 ${t}，它从自己的「进门」序列重新开始。`
+    /* ★「满足后跳转」与「需持续」共用 flags 的低 7 位（见 waitCondHoldMs 上面那段注释）：
+       选了某个状态就等于把那几位用掉了 ⇒ 这一块就不能再要求"需持续"。这里明说一句，
+       免得用户以为两者能叠。 */
+    const holdNote =
+      t === NO_STATE
+        ? ''
+        : '注意：选了某个状态，这一块就不能再要求「需持续」了（两件事共用同几位，只能有一个）；要"持续够久再跳走"，请在这一块后面单独放一块「跳到状态」。'
+    const base =
+      t === NO_STATE ? '满足后接着执行这一块的下一行（默认，也是所有老任务的样子）。' : `满足后立刻跳到状态 ${t}，它从自己的「进门」序列重新开始。`
+    return t === NO_STATE ? `${base}这里也可以给这一块加「需持续」：那段时间内条件必须一直成立，断一次就重新计时。` : `${base}${holdNote}`
   }
   return f.hint
 }
