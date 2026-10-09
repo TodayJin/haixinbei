@@ -87,15 +87,16 @@ describe('旧全程流程转出来的任务文件（renwu-lap.json · 主页分�
   it('编码后的字节数：能装进 4096 的单任务上限（这也正是把上限从 2048 提上来的原因）', () => {
     const enc = encodeTask(prog)
     expect(enc.errors).toEqual([])
-    expect(enc.bytes.length).toBe(2479) // 尺寸护栏：改瘦身规则/增删块就会在这里报到
+    expect(enc.bytes.length).toBe(2559) // 尺寸护栏：改瘦身规则/增删块就会在这里报到
     expect(enc.bytes.length).toBeGreaterThan(2048)
     expect(enc.bytes.length).toBeLessThanOrEqual(4096)
     // 程序区 6144 B 里还能再放一个短任务
     expect(enc.bytes.length).toBeLessThan(6144)
-    // ★2479 还在"串口回读基本不丢帧"的经验线（约 2487 B）以内 —— 把「记段号」那 20 块去掉
-    //   顺带省了 200 B（带段号那版一度 2679 B，见 memory/DECISIONS.md 2026-10-10 的段号定案）
-    // CRC 护栏：段号参数删掉之后是 0x95CD（带段号那版 0xB95A；第四版初版 0x5E7B；第三版 0xE021）
-    expect(enc.bytes[6] | (enc.bytes[7] << 8)).toBe(0x95cd)
+    // ★2026-10-10 按用户方案改完（草地/减速带改成"等回到线上"、方通/U型隧道改切亚克力标定）
+    //   ⇒ 219 → 227 块、2479 → 2559 B，**又超了"回读基本不丢帧"的经验线（约 2487 B）72 B**
+    //   ⇒ 真车串口回读要重读一两次核对（见 memory/DECISIONS.md 2026-10-07 那条）
+    // CRC 护栏：本轮改完是 0x01B7（段号删掉那版 0x95CD；带段号那版 0xB95A；第四版初版 0x5E7B）
+    expect(enc.bytes[6] | (enc.bytes[7] << 8)).toBe(0x01b7)
   })
 
   it('名字都不超 32 字节，单序列都不超 64 块', () => {
@@ -167,11 +168,15 @@ describe('旧全程流程转出来的任务文件（renwu-lap.json · 主页分�
     //   host_link.c:496  `== GPIO_PIN_SET → 1 = 压线`
     //   docs/上位机通信协议.md:163 「bit i = 第 i+1 路灰度压线（1 = 压线）」
     //   docs/控制算法升级方案.md:42  「renwu.c 里『全 0』事件 = 8 路原始位全 SET（整排压线）」
-    // 新结构里已经没有「等条件」块了（入口条件全搬到主页 ⇒ OP.IF_STAGE 的掩码直接是"压黑"），
-    // 所以这里只钉"一条「全白」口径都不许出现"。
-    expect(allBlocks.filter((b) => b.op === OP.WAIT_COND && b.p0 === COND.CH_WHITE)).toHaveLength(0)
-    expect(allBlocks.filter((b) => b.op === OP.WAIT_COND && b.p0 === COND.LINE_LOST)).toHaveLength(0)
+    // 入口条件全搬到主页 ⇒ OP.IF_STAGE 的掩码直接是"压黑"，主页那 21 条**全**是压黑口径：
     expect(ifs.every((b) => (b.p1 & 0xff) !== 0)).toBe(true)
+    // ★2026-10-10：全任务现在有 3 处「哪几路白」——**不是**入口极性反了，而是草地/减速带那两处
+    //   "等回到线上"用的：障碍本身就压在黑里，"又看见黑线"分不开"压在障碍上"和"回到线上"，
+    //   只能反过来看"最外侧两路是白的"。三处掩码都是 0x81（第 1、8 路都白）。
+    const whites = allBlocks.filter((b) => b.op === OP.WAIT_COND && b.p0 === COND.CH_WHITE)
+    expect(whites).toHaveLength(3)
+    expect(whites.every((b) => (b.p1 & 0xff) === 0x81)).toBe(true)
+    expect(allBlocks.filter((b) => b.op === OP.WAIT_COND && b.p0 === COND.LINE_LOST)).toHaveLength(0)
   })
 
   it('关键动作没在转换里丢：两轮直给、右转 90°、动作 2 后等 2050ms', () => {
@@ -273,7 +278,32 @@ describe('压线链：第几次压线 ↔ 哪一段', () => {
     expect(allBlocks.filter((b) => b.op === OP.CLIMB)).toHaveLength(2)
   })
 
-  it('序号不占镜像体积：编出来还是 2479 B', () => {
-    expect(encodeTask(prog).bytes.length).toBe(2479)
+  it('序号不占镜像体积：编出来还是 2559 B', () => {
+    expect(encodeTask(prog).bytes.length).toBe(2559)
+  })
+
+  it('★2026-10-10 的五处改进都在：草地/减速带改成"等回到线上"，方通/U型隧道切亚克力标定', () => {
+    const seg = (k: number) => segments[k]
+    // ① 段6（减速带，两片）：序贯 压黑 → 回线 → 压黑 → 回线
+    const s6 = seg(6).body.filter((b) => b.op === OP.WAIT_COND)
+    expect(s6.map((b) => [b.p0, b.p1])).toEqual([
+      [COND.CH_BLACK, 0xff], [COND.CH_WHITE, 0x81], [COND.CH_BLACK, 0xff], [COND.CH_WHITE, 0x81],
+    ])
+    // 每一个都带"需持续"（flags 低 7 位 = 100ms 数）：压黑 200ms = 2、等回线 300ms = 3
+    expect(s6.map((b) => b.flags)).toEqual([2, 3, 2, 3])
+    expect(s6.every((b) => b.p2 > 0)).toBe(true) // 必须带超时，别让传感器坏了就卡死
+    // ② 段8（草地，一片）：压黑 → 回线
+    expect(seg(8).body.filter((b) => b.op === OP.WAIT_COND).map((b) => [b.p0, b.p1, b.flags]))
+      .toEqual([[COND.CH_BLACK, 0xff, 2], [COND.CH_WHITE, 0x81, 3]])
+    // ③ 段9 进方通前切亚克力标定；段10 出方通切回普通标定
+    expect(seg(9).body[0]).toMatchObject({ op: OP.CAL_SET, p0: 1 })
+    expect(seg(10).body.some((b) => b.op === OP.CAL_SET && b.p0 === 0)).toBe(true)
+    // ④ 方形隧道不再"切角度环硬挤"：段10 里不该再有 MODE.GYRO
+    expect(seg(10).body.filter((b) => b.op === OP.SET_MODE && b.p0 === MODE.GYRO)).toEqual([])
+    // ⑤ U 型隧道首尾切标定套
+    expect(seg(13).body[0]).toMatchObject({ op: OP.CAL_SET, p0: 1 })
+    expect(seg(13).body[seg(13).body.length - 2]).toMatchObject({ op: OP.CAL_SET, p0: 0 })
+    // 全任务一共 4 处切标定套（段9 一、段10 一、段13 两）
+    expect(allBlocks.filter((b) => b.op === OP.CAL_SET)).toHaveLength(4)
   })
 })
