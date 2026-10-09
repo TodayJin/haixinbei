@@ -44,14 +44,14 @@ function threeStates() {
   };
 }
 
-/** 16 个状态（上限）：每个都以 GOTO 收尾，且互相引用。 */
+/** 32 个状态（上限，2026-10-09 起）：每个都以 GOTO 收尾，且互相引用。 */
 function maxStates() {
   const states = [];
-  for (let i = 0; i < 16; i += 1) {
+  for (let i = 0; i < 32; i += 1) {
     states.push({
       name: `状态${i}`,
       enter: i % 3 === 0 ? [blk(OP.WAIT_MS, 20 * (i + 1))] : [],
-      body: [blk(OP.SET_MODE, [MODE.IDLE, MODE.GYRO, MODE.TRACE, MODE.TRACE_GYRO][i % 4]), blk(OP.GOTO, (i + 1) % 16)],
+      body: [blk(OP.SET_MODE, [MODE.IDLE, MODE.GYRO, MODE.TRACE, MODE.TRACE_GYRO][i % 4]), blk(OP.GOTO, (i + 1) % 32)],
     });
   }
   return { main: 7, states };

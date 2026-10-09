@@ -26,7 +26,7 @@ import {
   store,
   type SlotPlan,
 } from '../lib/store'
-import { COND, MODE, OP, decodeTask, encodeTask, waitCondJumpTarget, withWaitCondJumpTarget, WAIT_COND_JUMP_ON, type TaskBlock, type TaskProgram } from '../lib/task'
+import { COND, MODE, OP, TASK_MAX_STATES, decodeTask, encodeTask, waitCondJumpTarget, withWaitCondJumpTarget, WAIT_COND_JUMP_ON, type TaskBlock, type TaskProgram } from '../lib/task'
 import {
   COND_SPECS,
   DRAG_MIME,
@@ -38,6 +38,9 @@ import {
   blockCount,
   cloneState,
   compileInfo,
+  crossingIndexOf,
+  crossingMarks,
+  crossingsOfState,
   decodeDrag,
   defaultsFor,
   describeBlock,
@@ -49,6 +52,7 @@ import {
   importTaskFile,
   insertBlock,
   loadTaskFile,
+  maskLabel,
   modeChoices,
   moveBlock,
   nameBytes,
@@ -67,6 +71,7 @@ import {
   waitCondHoldMs,
   withWaitCondHoldMs,
   WAIT_COND_HOLD_MAX_MS,
+  type CrossingMark,
   type FieldKey,
   type FieldSpec,
   type SeqName,
@@ -248,7 +253,9 @@ function FieldEditor({
                <label>，里面再放 <label> 是嵌套 label（点标题会误勾第一个框）。
                同一个控件伺候两条镜像条件（黑 / 白）：标题与方块提示都跟着 b.p0 改口。 */
             const mask = b[f.key] & 0xff
-            const white = b.p0 === COND.CH_WHITE
+            /* 只有「等条件 + 条件 11」才是"白"的口径；「如果…就跳」的掩码永远是"压黑"，
+               而它的 p0 是段号（可能正好等于 11）⇒ 必须连 op 一起判。 */
+            const white = b.op === OP.WAIT_COND && b.p0 === COND.CH_WHITE
             return (
               <div key={f.key} className="grid gap-0.5">
                 <div className="flex items-center gap-2 text-[12px] text-slate-400">
@@ -388,6 +395,7 @@ function BlockChip({
   onDelete,
   onDuplicate,
   onMove,
+  crossN,
 }: {
   b: TaskBlock
   at: Where
@@ -395,6 +403,8 @@ function BlockChip({
   stateNames: string[]
   open: boolean
   current: boolean
+  /** 链上第几次压线（不是压线入口就没有） */
+  crossN?: number
   onToggle: () => void
   onPatch: (patch: Partial<TaskBlock>) => void
   onDelete: () => void
@@ -414,6 +424,14 @@ function BlockChip({
       <div className="flex items-center gap-1.5">
         <GripVertical size={13} className="shrink-0 cursor-grab text-slate-600" />
         <span className="num text-[10px] text-slate-600">{at.index}</span>
+        {crossN !== undefined && (
+          <span
+            className="shrink-0 rounded bg-neon-cyan/15 px-1 py-px text-[10px] font-medium text-neon-cyan"
+            title={`链上第 ${crossN} 次压线（= 旧代码 black_num 链上的第 ${crossN} 段）。这个序号由块在链上的位置算出来，**不进镜像、不参与固件判断** —— 状态机停在哪个状态，就相当于"走到第几段"。`}
+          >
+            第 {crossN} 次
+          </span>
+        )}
         <button className="min-w-0 flex-1 truncate text-left text-[12px] text-slate-200" onClick={onToggle} title="点一下改参数">
           <span className="text-neon-cyan/90">{spec?.label ?? `不认识的块（编号 ${b.op}）`}</span>
           <span className="ml-1.5 text-slate-400">{describeBlock(b, stateCount, stateNames)}</span>
@@ -468,10 +486,12 @@ function StateCard({
   onOver,
   onToggleBlock,
   upd,
+  marks,
 }: {
   prog: TaskProgram
   i: number
   sel: boolean
+  marks: CrossingMark[]
   open: Where | null
   dropAt: Where | null
   cur: { state: number; block: number } | null
@@ -482,6 +502,7 @@ function StateCard({
   upd: (fn: (p: TaskProgram) => TaskProgram) => void
 }) {
   const st = prog.states[i]
+  const cross = crossingsOfState(marks, i)
   const isMain = prog.main === i
   const live = cur?.state === i
   const seqs: Array<[SeqName, string]> = [
@@ -507,7 +528,7 @@ function StateCard({
             设为主页
           </button>
         )}
-        <button className="btn-ghost !px-2 !py-0.5 text-[11px]" onClick={() => upd((p) => cloneState(p, i))} disabled={prog.states.length >= 16}>
+        <button className="btn-ghost !px-2 !py-0.5 text-[11px]" onClick={() => upd((p) => cloneState(p, i))} disabled={prog.states.length >= TASK_MAX_STATES}>
           复制
         </button>
         <button
@@ -520,6 +541,21 @@ function StateCard({
         </button>
       </div>
 
+      {cross.length > 0 && (
+        <div className="mb-2 rounded-lg bg-neon-cyan/[0.06] px-2 py-1 text-[11px] leading-relaxed text-neon-cyan/90">
+          <span className="font-medium">压线入口：</span>
+          {cross.map((m, k) => (
+            <span key={m.n}>
+              {k > 0 && <span className="text-slate-500"> → </span>}
+              第 {m.n} 次 · {maskLabel(m.mask, m.white)}
+            </span>
+          ))}
+          <span className="ml-1 text-slate-500">
+            （"第几次" = 链上第几个压线块，序号由位置算出来、不进镜像；旧代码的 black_num 段号由"停在哪个状态"承担）
+          </span>
+        </div>
+      )}
+
       <div className="grid gap-2 lg:grid-cols-2">
         {seqs.map(([seq, title]) => (
           <div key={seq} className="rounded-lg border border-white/5 bg-black/10 p-1.5">
@@ -530,6 +566,7 @@ function StateCard({
                 <BlockChip
                   b={r.block}
                   at={{ state: i, seq, index: r.index }}
+                  crossN={crossingIndexOf(marks, i, seq, r.index)}
                   stateCount={prog.states.length}
                   stateNames={prog.states.map((s) => s.name)}
                   open={!!open && open.state === i && open.seq === seq && open.index === r.index}
@@ -615,6 +652,8 @@ export function TasksPage() {
 
   const task: TaskDef = file.tasks[Math.min(selTask, file.tasks.length - 1)] ?? file.tasks[0]
   const prog = task.prog
+  /** 链上每个"压线入口"是第几次（纯静态信息，不进镜像） */
+  const crossMarks = React.useMemo(() => crossingMarks(prog), [prog])
   const info = compileInfo(prog)
   const bytes = encodeTask(prog).bytes
   const activeState = Math.min(selState, prog.states.length - 1)
@@ -1144,7 +1183,7 @@ export function TasksPage() {
                   upd((p) => addState(p))
                   setSelState(Math.min(n, 15))
                 }}
-                disabled={prog.states.length >= 16}
+                disabled={prog.states.length >= TASK_MAX_STATES}
               >
                 <Plus size={12} /> 加状态
               </button>
@@ -1183,6 +1222,7 @@ export function TasksPage() {
             prog={prog}
             i={activeState}
             sel
+            marks={crossMarks}
             open={open}
             dropAt={dropAt}
             cur={cur}
@@ -1237,12 +1277,43 @@ export function TasksPage() {
             其它块都占一拍就走。循环体末尾必须是「跳到状态 / 结束 / 带超时改道的等条件」，否则车会保持最后一个模式一直开 —— 这就是校验里那条错误。
           </div>
           <div className="mt-2 num text-[10px] leading-relaxed text-slate-600" title="这是车上真正认的二进制格式，写给想核对的人看">
-            文件开头固定 4B54 · 版本 1 · 文件头 12 字节 · 每个状态 8 字节 · 每个块 10 字节 · 校验方式 CRC16/CCITT · 车上 5 毫秒跑一拍 · 最多 16 个状态、每段最多 64 块
+            文件开头固定 4B54 · 版本 1 · 文件头 12 字节 · 每个状态 8 字节 · 每个块 10 字节 · 校验方式 CRC16/CCITT · 车上 5 毫秒跑一拍 · 最多 {TASK_MAX_STATES} 个状态、每段最多 64 块
           </div>
           <div className="mt-2 text-[10px] text-slate-600">
             快捷键：拖块改顺序；◀▶ 微调；点块展开改参数；同一块再点一下收起。
           </div>
         </Card>
+
+        {crossMarks.length > 0 && (
+          <Card
+            title="压线链"
+            right={<span className="text-[10px] text-slate-600">共 {crossMarks.length} 次</span>}
+          >
+            <div className="mb-1.5 text-[11px] leading-relaxed text-slate-500">
+              旧流程是「车一直循迹，每压到一次黑线就看走到第几段」。这里把那条链摊开：
+              <b className="text-slate-400">第 N 次压线 → 做哪一段</b>。点一行能跳到那一块。
+              <br />
+              序号由块在链上的位置算出来，<b>不进镜像、不改车的行为</b>。
+            </div>
+            <div className="grid gap-0.5">
+              {crossMarks.map((m) => (
+                <button
+                  key={m.n}
+                  className="flex items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] hover:bg-white/[0.04]"
+                  onClick={() => {
+                    setSelState(m.state)
+                    setOpen({ state: m.state, seq: m.seq, index: m.index })
+                  }}
+                  title={`点一下跳到「${stateLabel(m.state, stateNames)}」的这一块（${m.white ? '哪几路是白的' : '哪几路是黑的'} = ${maskLabel(m.mask, m.white)}）`}
+                >
+                  <span className="num w-10 shrink-0 text-neon-cyan/80">第{m.n}次</span>
+                  <span className="w-24 shrink-0 truncate text-slate-500">{maskLabel(m.mask, m.white)}</span>
+                  <span className="min-w-0 flex-1 truncate text-slate-400">{stateLabel(m.state, stateNames)}</span>
+                </button>
+              ))}
+            </div>
+          </Card>
+        )}
       </div>
     </div>
   )

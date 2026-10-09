@@ -14,7 +14,10 @@ export const TASK_VER = 1;
 export const TASK_HDR_LEN = 12;
 export const TASK_STATE_LEN = 8;
 export const TASK_BLOCK_LEN = 10;
-export const TASK_MAX_STATES = 16;
+/** 状态数上限。★2026-10-09：16 → 32 —— 旧全程流程改成"主页分派 + 一段一状态"要 **22 个**
+ *  （1 主页 + 21 段），16 装不下（原来只能把连续段合并成一个状态）。
+ *  必须与固件 `firmware/App/Svc/task_prog.h` 的 `TASK_MAX_STATES` 一致；老任务（≤16）照跑。 */
+export const TASK_MAX_STATES = 32;
 export const TASK_MAX_BLOCKS = 64;
 export const TASK_MAX_NAME = 32;
 
@@ -32,6 +35,13 @@ export const OP = {
   SET_SERVO: 0x09, // p0 = 通道 1/2；p1 = 角度 0..180
   CROSS_CLEAR: 0x0a, // 清横线/路口计数
   CAL_SET: 0x0b, // ★p0 = 用第几套灰度标定：0 = 普通 / 1 = 亚克力
+  SET_STAGE: 0x0c, // ★p0 = 段号：记一笔"我走到第几段了"（旧代码 `black_num=M`）
+  IF_STAGE: 0x0d, // ★「如果 段号==p0 且 p1 那几路压黑 ⇒ 跳到 p2」，不满足**往下走**
+  //                  —— 主页做多路分派用的那个 `if`。与 0x06「等条件」的区别：
+  //                     0x06 会停在那里等它成立，本块看一眼就走（见 task_prog.h 的注释）。
+  CLIMB: 0x0e, // ★p0=要爬几节 p1=抬起阈值(0.1°) p2=回落容差(0.1°) p3=没满足时跳回的状态
+  //                —— 「爬台阶/爬坡：循环到车平」：跑够节数**且**车头真的落回水平才往下走，
+  //                   否则跳回 p3（一般填本状态自己）把这段动作再来一遍（见 task_prog.h）。
 } as const;
 
 export const MODE = {
@@ -175,6 +185,15 @@ export function validateTask(p: TaskProgram): ValidateResult {
       }
       if (b.op === OP.WAIT_COND && b.p3 !== NO_STATE && !(b.p3 < p.states.length)) {
         errors.push(`${tag}：超时改道到状态 ${b.p3}，但没有这个状态`);
+      }
+      if (b.op === OP.IF_STAGE && !(b.p2 < p.states.length)) {
+        errors.push(`${tag}：「如果…就跳」要跳到状态 ${b.p2}，但没有这个状态（车上会当"不成立"往下走）`);
+      }
+      if (b.op === OP.IF_STAGE && (b.p1 & 0xff) === 0) {
+        warnings.push(`${tag}：「如果…就跳」一路都没勾 —— 这条永远不会成立（等于白放一块）`);
+      }
+      if (b.op === OP.CLIMB && b.p3 !== NO_STATE && !(b.p3 < p.states.length)) {
+        errors.push(`${tag}：「爬台阶」没上去时要跳回状态 ${b.p3}，但没有这个状态`);
       }
       if (b.op === OP.WAIT_COND && (b.flags & WAIT_COND_JUMP_ON) !== 0) {
         const tgt = b.flags & WAIT_COND_TGT_MASK;

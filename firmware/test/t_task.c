@@ -52,6 +52,9 @@ extern int      stub_speed_mmps[2];
 extern int      stub_beep_n;          /* AppUi_Beep 被调了几次 */
 extern int      stub_beep_ms;         /* 最近一次的蜂鸣时长（ms） */
 extern int      stub_cal_set;         /* 最近一次 trace_cal_select_set() 的套号（0/1） */
+/* ★「爬台阶（循环到车平）」靠它判断车头平不平 —— 桩里就是 host_appstub.c 的全局变量，
+ *   测试直接赋值就能模拟"抬头 / 落回水平"。 */
+extern float    Pitch;
 
 /* ------------------------------------------------------------------ */
 /* 程序构造器：把块数组序列化成上位机将来要生成的那种字节流            */
@@ -720,6 +723,185 @@ int main(void)
     CHECK_EQ_I(stub_cal_set, 0);
     CHECK_EQ_I(TaskRun_IsRunning(), 0);
     TaskRun_Stop();
+
+    /* ===============================================================
+     * ★「主页分派」的两个新块（2026-10-09，用户要的"主页只放循迹 + 判断"）
+     *   TASK_OP_SET_STAGE(0x0C) = 旧代码的 `black_num = M`
+     *   TASK_OP_IF_STAGE(0x0D)  = 「如果 段号==p0 且 p1 那几路压黑 ⇒ 跳到 p2」，**不满足往下走**
+     * 这就是主页能并排写 21 条判断的原因（0x06「等条件」会停在那里等，写不出分派）。
+     * =============================================================== */
+    {
+        uint8_t i;
+
+        /* (a) SET_STAGE 真改段号；TaskRun_Start() 每次把它清 0 */
+        pg_reset(2u, 0u);
+        add_body(0u, TASK_OP_SET_STAGE, 7u, 0, 0u, 0xFFFFu, 0u);
+        add_body(0u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);
+        add_body(1u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);      /* 自环：停在状态 1 */
+        len = pg_build();
+        CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
+        CHECK_EQ_I(TaskRun_Start(16u), 0);
+        CHECK_EQ_I(TaskRun_Stage(), 0);                          /* 启动清 0 */
+        TaskRun_Tick(70000u);
+        CHECK_EQ_I(TaskRun_Stage(), 7);                          /* 记段号生效 */
+        CHECK_EQ_I(TaskRun_State(), 1);
+        TaskRun_Stop();
+        CHECK_EQ_I(TaskRun_Start(16u), 0);
+        CHECK_EQ_I(TaskRun_Stage(), 0);                          /* 重跑必须回到第 0 段 */
+        TaskRun_Stop();
+
+        /* (b) IF_STAGE 的四条边界。主页的 enter 先把段号置成 5，body 里一条判断 + 自环。 */
+        pg_reset(3u, 0u);
+        add_enter(0u, TASK_OP_SET_STAGE, 5u, 0, 0u, 0xFFFFu, 0u);
+        add_body(0u, TASK_OP_IF_STAGE, 5u, 0xFF, 1u, 0xFFFFu, 0u);   /* 段号5 且 8 路全黑 → 状态1 */
+        add_body(0u, TASK_OP_GOTO, 0u, 0, 0u, 0xFFFFu, 0u);          /* 不成立就自环（继续循迹） */
+        add_body(1u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);
+        add_body(2u, TASK_OP_GOTO, 2u, 0, 0u, 0xFFFFu, 0u);
+        len = pg_build();
+        CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
+
+        /* b1 默认灰度（全 <128 = 一路都没压黑）⇒ 不成立 ⇒ 停在主页、还在跑（自环不卡死） */
+        for (i = 0u; i < 8u; i++) stub_gray[i] = 50u;
+        CHECK_EQ_I(TaskRun_Start(17u), 0);
+        TaskRun_Tick(80000u);
+        CHECK_EQ_I(TaskRun_State(), 0);
+        CHECK_EQ_I(TaskRun_IsRunning(), 1);
+        TaskRun_Stop();
+
+        /* b2 8 路全黑 ⇒ 成立 ⇒ 跳状态 1 */
+        for (i = 0u; i < 8u; i++) stub_gray[i] = 200u;
+        CHECK_EQ_I(TaskRun_Start(17u), 0);
+        TaskRun_Tick(81000u);
+        CHECK_EQ_I(TaskRun_State(), 1);
+        TaskRun_Stop();
+
+        /* b3 只有第 1~4 路黑：掩码 0xFF 要 8 路 ⇒ 不成立（这是"哪几路"真正的意义） */
+        for (i = 0u; i < 4u; i++) stub_gray[i] = 200u;
+        for (i = 4u; i < 8u; i++) stub_gray[i] = 50u;
+        CHECK_EQ_I(TaskRun_Start(17u), 0);
+        TaskRun_Tick(82000u);
+        CHECK_EQ_I(TaskRun_State(), 0);
+        TaskRun_Stop();
+
+        /* b4 同样的灰度 + 掩码 0x0F（只看第 1~4 路）⇒ 成立 */
+        pg_reset(3u, 0u);
+        add_enter(0u, TASK_OP_SET_STAGE, 5u, 0, 0u, 0xFFFFu, 0u);
+        add_body(0u, TASK_OP_IF_STAGE, 5u, 0x0F, 1u, 0xFFFFu, 0u);
+        add_body(0u, TASK_OP_GOTO, 0u, 0, 0u, 0xFFFFu, 0u);
+        add_body(1u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);
+        add_body(2u, TASK_OP_GOTO, 2u, 0, 0u, 0xFFFFu, 0u);
+        len = pg_build();
+        CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
+        CHECK_EQ_I(TaskRun_Start(18u), 0);
+        TaskRun_Tick(83000u);
+        CHECK_EQ_I(TaskRun_State(), 1);
+        TaskRun_Stop();
+
+        /* b5 段号不匹配（要 6、实际 5）⇒ 不成立，哪怕 8 路全黑 */
+        pg_reset(3u, 0u);
+        add_enter(0u, TASK_OP_SET_STAGE, 5u, 0, 0u, 0xFFFFu, 0u);
+        add_body(0u, TASK_OP_IF_STAGE, 6u, 0xFF, 1u, 0xFFFFu, 0u);
+        add_body(0u, TASK_OP_GOTO, 0u, 0, 0u, 0xFFFFu, 0u);
+        add_body(1u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);
+        add_body(2u, TASK_OP_GOTO, 2u, 0, 0u, 0xFFFFu, 0u);
+        len = pg_build();
+        CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
+        for (i = 0u; i < 8u; i++) stub_gray[i] = 200u;
+        CHECK_EQ_I(TaskRun_Start(19u), 0);
+        TaskRun_Tick(84000u);
+        CHECK_EQ_I(TaskRun_State(), 0);
+        TaskRun_Stop();
+
+        /* b6 掩码 0 ⇒ 恒不成立（空真陷阱，与条件 10/11 同一口径） */
+        pg_reset(3u, 0u);
+        add_enter(0u, TASK_OP_SET_STAGE, 5u, 0, 0u, 0xFFFFu, 0u);
+        add_body(0u, TASK_OP_IF_STAGE, 5u, 0x00, 1u, 0xFFFFu, 0u);
+        add_body(0u, TASK_OP_GOTO, 0u, 0, 0u, 0xFFFFu, 0u);
+        add_body(1u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);
+        add_body(2u, TASK_OP_GOTO, 2u, 0, 0u, 0xFFFFu, 0u);
+        len = pg_build();
+        CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
+        CHECK_EQ_I(TaskRun_Start(20u), 0);
+        TaskRun_Tick(85000u);
+        CHECK_EQ_I(TaskRun_State(), 0);
+        TaskRun_Stop();
+
+        /* b7 目标状态越界 ⇒ 当不成立（绝不越界跳） */
+        pg_reset(3u, 0u);
+        add_enter(0u, TASK_OP_SET_STAGE, 5u, 0, 0u, 0xFFFFu, 0u);
+        add_body(0u, TASK_OP_IF_STAGE, 5u, 0xFF, 99u, 0xFFFFu, 0u);
+        add_body(0u, TASK_OP_GOTO, 0u, 0, 0u, 0xFFFFu, 0u);
+        add_body(1u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);
+        add_body(2u, TASK_OP_GOTO, 2u, 0, 0u, 0xFFFFu, 0u);
+        len = pg_build();
+        CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
+        CHECK_EQ_I(TaskRun_Start(21u), 0);
+        TaskRun_Tick(86000u);
+        CHECK_EQ_I(TaskRun_State(), 0);
+        TaskRun_Stop();
+
+        /* 收尾：灰度还原成桩的出厂默认，后面的用例不该被这里改过的值影响 */
+        {
+            static const uint8_t gray_default[8] = { 5u, 15u, 25u, 35u, 45u, 55u, 65u, 75u };
+            for (i = 0u; i < 8u; i++) stub_gray[i] = gray_default[i];
+        }
+    }
+
+    /* ===============================================================
+     * ★「爬台阶（循环到车平）」（2026-10-09，用户："打滑上不去就再爬一遍"）
+     *   TASK_OP_CLIMB：跑够节数 **且** 车头真的落回水平 ⇒ 往下走；否则跳回本状态再来一遍。
+     *   会话在**进状态那一刻**由 seq_begin() 开（基准 = 此刻的俯仰角），"跳回自己"不会重置它
+     *   —— 这一条是本块容易做错的地方（等块被执行到才开，会漏掉动作期间的抬头）。
+     * =============================================================== */
+    {
+        uint8_t k;
+
+        /* (a) 从没抬起过 ⇒ 跑再多轮也不认（哪怕俯仰角一直"等于"基准） */
+        pg_reset(1u, 0u);
+        add_body(0u, TASK_OP_WAIT_MS, 10u, 0, 0u, 0xFFFFu, 0u);
+        add_body(0u, TASK_OP_CLIMB, 2u, 150, 30u, 0u, 0u);   /* 爬 2 节、要先抬过 15°、容差 3°、跳回状态 0 */
+        add_body(0u, TASK_OP_END, 0u, 0, 0u, 0xFFFFu, 0u);
+        len = pg_build();
+        CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
+        Pitch = 0.0f;
+        CHECK_EQ_I(TaskRun_Start(22u), 0);
+        TaskRun_Tick(90000u);
+        CHECK_EQ_I(TaskRun_IsRunning(), 1);
+        for (k = 0u; k < 20u; k++) {
+            TaskRun_Tick(90010u + (uint32_t)k * 10u);
+        }
+        CHECK_EQ_I(TaskRun_IsRunning(), 1);     /* 20 轮了还在爬：没抬起过 ⇒ 一律不认 */
+
+        /* (b) 让它真的抬起来（超过基准 +15°）—— 每拍那一眼会记住 */
+        Pitch = 20.0f;
+        TaskRun_Tick(90300u);
+        CHECK_EQ_I(TaskRun_IsRunning(), 1);     /* 还抬着 ⇒ |20−0| > 3 ⇒ 不算平 */
+
+        /* (c) 落回水平 ⇒ 下一次走到「爬台阶」就通过，往下执行 END 停车 */
+        Pitch = 1.0f;
+        TaskRun_Tick(90310u);
+        CHECK_EQ_I(TaskRun_IsRunning(), 0);     /* ★爬上去了 */
+        TaskRun_Stop();
+
+        /* (d) ★计数必须跑够：进来就"抬过又落回"，但第 1 轮仍然不认
+         *     —— 这就是用户要的"设定两节，就必须跑完两段之后才认" */
+        pg_reset(1u, 0u);
+        add_body(0u, TASK_OP_WAIT_MS, 10u, 0, 0u, 0xFFFFu, 0u);
+        add_body(0u, TASK_OP_CLIMB, 2u, 150, 30u, 0u, 0u);
+        add_body(0u, TASK_OP_END, 0u, 0, 0u, 0xFFFFu, 0u);
+        len = pg_build();
+        CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
+        Pitch = 0.0f;
+        CHECK_EQ_I(TaskRun_Start(23u), 0);      /* 开会话：基准 = 0 */
+        Pitch = 20.0f;
+        TaskRun_Tick(100000u);                  /* WAIT 开始；这一拍看到"抬起来了" ⇒ 记住 */
+        Pitch = 0.0f;
+        TaskRun_Tick(100010u);                  /* WAIT 满 ⇒ 第 1 轮：计数 2→1 ⇒ 不认 */
+        CHECK_EQ_I(TaskRun_IsRunning(), 1);
+        TaskRun_Tick(100020u);                  /* 第 2 轮：计数 1→0，抬起过 ✓，回落 ✓ ⇒ 通过 */
+        CHECK_EQ_I(TaskRun_IsRunning(), 0);
+        TaskRun_Stop();
+    }
 
     return T_SUMMARY();
 }

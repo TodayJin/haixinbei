@@ -21,6 +21,7 @@
 #include "buzzer.h"        /* ★beep_ms()：蜂鸣器 */
 #include "gyro_control.h"
 #include "host_link.h"     /* HP_TASK_SPEED + host_param_get：启动时的默认基准速度 */
+#include "jy61p.h"         /* ★Pitch：「爬台阶循环到车平」靠它判断车头平不平 */
 #include "motion.h"
 #include "PID_tracing.h"
 #include "servo.h"
@@ -65,6 +66,57 @@ static uint16_t s_cross_n;
 static uint8_t  s_cross_last;
 static uint8_t  s_flags;
 static float    s_turn_target;
+/* ★「段号」（用户 2026-10-09）：旧代码 `black_num` 的那个变量。主页用 `TASK_OP_IF_STAGE`
+ *   做分派（"如果 段号==N 且 这几路压黑 ⇒ 跳状态"），各段末尾用 `TASK_OP_SET_STAGE` 记下一段，
+ *   执行完「跳到状态(主页)」回来接着分派 —— 就是旧代码 `void A()` 的 if/else-if 链。
+ *   任务启动时清 0（见 TaskRun_Start），所以同一份程序重跑一定从第 0 段开始。 */
+static uint8_t  s_stage;
+
+/* ★「爬台阶」会话（TASK_OP_CLIMB，用户 m 2026-10-09）：一次爬台阶/爬坡的上下文。
+ *   基准角 = 本块第一次执行那一刻的俯仰角（车还在坡底/台阶前）；会话按**段号**区分，
+ *   所以同一个块放在"大坡"和"台阶3"两处不会互相串。 */
+static uint8_t  s_climb_on;      /* 1 = 正在爬（每拍盯俯仰角） */
+static uint8_t  s_climb_stage;   /* 这次会话属于哪一段 */
+static uint8_t  s_climb_left;    /* 还剩几节要爬 */
+static uint8_t  s_climb_lifted;  /* 期间有没有真的抬起来过 */
+static float    s_climb_base;    /* 基准俯仰角（度） */
+static float    s_climb_lift_at; /* 抬起判定线 = 基准 + 阈值；≤0 = 不要求 */
+
+/* ------------------------------------------------------------------ */
+/* 爬台阶会话                                                          */
+/* ------------------------------------------------------------------ */
+/* ★「爬台阶（循环到车平）」的会话必须在**进入状态那一刻**就开起来，不能等块被执行到：
+ *   抬头发生在**动作执行期间** —— 等走到那个块时，车可能已经爬上去了（角度早已回落）
+ *   或者已经打滑滑下来，两个方向都会判错（前者会永远判不通过、后者会误判成功）。
+ *   所以 seq_begin() 一进状态就扫一遍 body 里有没有这个块：有就记基准（= 此刻的角度，
+ *   车还在坡底/台阶前）、设计数、算好抬起判定线。
+ *   ★幂等：同一个状态**已经在爬**时直接返回 —— "没上去就跳回自己"会再调一次 seq_begin()，
+ *   重开会把计数和基准一起重置，那就永远爬不完了。 */
+static void climb_begin_if_any(uint8_t st)
+{
+    task_state_t s;
+    uint16_t i;
+    task_block_t b;
+
+    if (s_climb_on != 0u && s_climb_stage == st) {
+        return;                                  /* 就是"跳回自己再来一遍" ⇒ 别重置 */
+    }
+    TaskProg_ReadState(s_prog, st, &s);
+    for (i = 0u; i < s.n_body; i++) {
+        TaskProg_ReadBlock(s_prog, (uint32_t)s.body_off + (uint32_t)i * TASK_BLOCK_LEN, &b);
+        if (b.op != TASK_OP_CLIMB) {
+            continue;
+        }
+        s_climb_base    = Pitch;
+        s_climb_left    = (uint8_t)((b.p0 > 0u) ? (b.p0 & 0xFFu) : 1u);
+        s_climb_lifted  = 0u;
+        s_climb_lift_at = (b.p1 > 0) ? (s_climb_base + (float)b.p1 / 10.0f) : 0.0f;
+        s_climb_on      = 1u;
+        s_climb_stage   = st;
+        return;
+    }
+    s_climb_on = 0u;                             /* 这个状态里没有爬台阶块 ⇒ 会话到此结束 */
+}
 
 /* ------------------------------------------------------------------ */
 /* 状态切换                                                            */
@@ -91,6 +143,7 @@ static void seq_begin(uint8_t st)
     }
     s_idx     = 0u;
     s_started = 0u;
+    climb_begin_if_any(st);                      /* ★爬台阶会话：进状态就开（幂等，见上） */
 }
 
 /* ------------------------------------------------------------------ */
@@ -359,6 +412,74 @@ static int block_step(const task_block_t *b)
         trace_cal_select_set((uint8_t)(b->p0 & 1));
         return 1;
 
+    case TASK_OP_SET_STAGE:                      /* ★段号 = p0（旧代码的 `black_num=M`）*/
+        s_stage = (uint8_t)(b->p0 & 0xFFu);
+        return 1;
+
+    case TASK_OP_IF_STAGE: {
+        /* ★主页的分派判断（旧代码 `if (8路全黑 && black_num==N) {...} else if ...`）：
+         *   段号对 **且** p1 那几路压黑 ⇒ 跳到 p2；否则**往下走一块** —— 这就是"看一眼就走"，
+         *   也是主页能并排写 21 条判断的原因（0x06「等条件」会停在那里等，写不了分派）。
+         *   判据复用 ch_black()，与条件 10 是同一份，不会出现两套口径。
+         *   掩码 0 当**不成立**（0 路"全黑"是空真，会让主页第一块就把执行流带走 ——
+         *   与条件 10/11 同一口径）；目标状态号越界也当不成立（绝不越界跳）。 */
+        uint16_t m = (uint16_t)b->p1 & 0xFFu;
+        uint8_t  i;
+
+        if (m == 0u || s_stage != (uint8_t)(b->p0 & 0xFFu)) {
+            return 1;
+        }
+        for (i = 0u; i < 8u; i++) {
+            if ((m & (uint16_t)(1u << i)) != 0u && ch_black(i) == 0u) {
+                return 1;                        /* 勾中的某一路没压黑 ⇒ 这条不成立，往下走 */
+            }
+        }
+        if (b->p2 < s_n_states) {
+            seq_begin((uint8_t)b->p2);
+            return 2;
+        }
+        return 1;
+    }
+
+    case TASK_OP_CLIMB: {
+        /* ★「爬台阶/爬坡：循环到车平」（用户 m 2026-10-09）—— 详见 task_prog.h 的注释。
+         *   本块每被走到一次 = 刚做完一轮动作 ⇒ 记一节；**跑够节数、而且车头真的落回水平**
+         *   才往下走（后面一般接「切换模式：停车」）；否则跳回 p3（一般填本状态自己）再来一遍。 */
+        float tol  = (b->p2 == 0u) ? 3.0f : (float)b->p2 / 10.0f;
+        float lift = (float)b->p1 / 10.0f;
+
+        /* 会话由 seq_begin() 在**进状态那一刻**开好（见那里的注释）；这里只留兜底：
+         * 万一没有（程序被改过、段号对不上），就地开一个，别让这块变成空操作。 */
+        if (s_climb_on == 0u || s_climb_stage != s_stage) {
+            s_climb_base    = Pitch;
+            s_climb_left    = (uint8_t)((b->p0 > 0u) ? (b->p0 & 0xFFu) : 1u);
+            s_climb_lifted  = 0u;
+            s_climb_lift_at = (lift > 0.0f) ? (s_climb_base + lift) : 0.0f;
+            s_climb_on      = 1u;
+            s_climb_stage   = s_stage;
+        }
+
+        if (s_climb_left > 0u) {
+            s_climb_left--;                      /* 这一轮算爬了一节 */
+        }
+        if (s_climb_lift_at > 0.0f && Pitch >= s_climb_lift_at) {
+            s_climb_lifted = 1u;                 /* 兜底：每拍那一眼在 TaskRun_Tick 里 */
+        }
+
+        if (s_climb_left == 0u
+            && (s_climb_lift_at <= 0.0f || s_climb_lifted != 0u)
+            && fabsf(Pitch - s_climb_base) <= tol) {
+            s_climb_on = 0u;                     /* 爬上去了：会话结束，往下走 */
+            return 1;
+        }
+
+        if (b->p3 < s_n_states) {                /* 还没到位：回本状态，把动作再来一遍 */
+            seq_begin((uint8_t)b->p3);
+            return 2;
+        }
+        return 1;                                /* 目标越界：当"通过"，绝不越界跳 */
+    }
+
     default:
         return 1;                                /* 未知块：跳过（格式校验已拦，这里兜底） */
     }
@@ -409,6 +530,13 @@ int TaskRun_Start(uint16_t id)
     s_turn_target = 0.0f;
     s_hold_run  = 0u;                            /* 「需持续」计时：新任务从零开始 */
     s_hold_from = 0u;
+    s_stage     = 0u;                            /* ★段号清 0：主页从"第 0 段"开始分派 */
+    s_climb_on      = 0u;                        /* ★爬台阶会话：新任务从零开始 */
+    s_climb_stage   = 0u;
+    s_climb_left    = 0u;
+    s_climb_lifted  = 0u;
+    s_climb_base    = 0.0f;
+    s_climb_lift_at = 0.0f;
 
     Motion_ClearFault();
     tracing_cross_clear();
@@ -463,6 +591,11 @@ void TaskRun_Tick(uint32_t now_ms)
         }
         s_cross_last = c;
     }
+    /* ★爬台阶会话：每拍盯一眼俯仰角。抬头可能发生在两块之间（甚至一拍之内），
+     *   只在"看一步"那块被执行的时刻检查会漏判 —— 这里补上每拍那一眼。 */
+    if (s_climb_on != 0u && s_climb_lift_at > 0.0f && Pitch >= s_climb_lift_at) {
+        s_climb_lifted = 1u;
+    }
 
     while (s_running && guard++ < TICK_MAX_BLOCKS) {
         if (s_idx >= s_cnt) {
@@ -515,6 +648,7 @@ uint16_t TaskRun_BlockCount(void)  { return s_cnt; }
 uint32_t TaskRun_ElapsedMs(void)   { return s_elapsed; }
 uint32_t TaskRun_BlockMs(void)     { return (s_started ? (s_now - s_t0_block) : 0u); }
 uint8_t  TaskRun_Flags(void)       { return s_flags; }
+uint8_t  TaskRun_Stage(void)       { return s_stage; }
 uint8_t  TaskRun_Loaded(void)      { return s_loaded; }
 uint16_t TaskRun_ProgLen(void)     { return s_len; }
 uint16_t TaskRun_CrossCount(void)  { return s_cross_n; }

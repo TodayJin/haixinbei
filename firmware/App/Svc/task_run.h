@@ -44,6 +44,7 @@ uint16_t TaskRun_BlockCount(void);
 uint32_t TaskRun_ElapsedMs(void);    /* 任务已运行时间 */
 uint32_t TaskRun_BlockMs(void);      /* 当前块已停留时间 */
 uint8_t  TaskRun_Flags(void);
+uint8_t  TaskRun_Stage(void);        /* ★当前段号（旧代码的 black_num）；任务启动时清 0 */
 uint8_t  TaskRun_Done(void);         /* 1 = 跑到过 END 块（正常结束） */
 uint8_t  TaskRun_Loaded(void);       /* 1 = RAM 里有一份校验过的程序 */
 uint16_t TaskRun_ProgLen(void);

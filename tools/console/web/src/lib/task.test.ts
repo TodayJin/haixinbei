@@ -200,8 +200,9 @@ describe('validateTask', () => {
   it('主页越界 / 状态数超上限 / 跳到不存在的状态都是错误', () => {
     expect(validateTask({ main: 2, states: [blkState(OP.END)] }).errors.join()).toContain('主页状态号越界');
     expect(validateTask({ main: 0, states: [] }).errors.join()).toContain('至少要有一个状态');
-    const many: TaskProgram = { main: 0, states: Array.from({ length: 17 }, () => blkState(OP.END)) };
-    expect(validateTask(many).errors.join()).toContain('状态数不能超过 16');
+    // 上限 2026-10-09 起是 32（原来 16，因为旧全程流程要"主页 + 21 段"）—— 造 33 个必须被拦下
+    const many: TaskProgram = { main: 0, states: Array.from({ length: 33 }, () => blkState(OP.END)) };
+    expect(validateTask(many).errors.join()).toContain('状态数不能超过 32');
     expect(validateTask({ main: 0, states: [blkState(OP.GOTO, 5)] }).errors.join()).toContain('跳到状态 5');
     expect(validateTask({ main: 0, states: [blkState(OP.WAIT_COND, COND.CROSS, 0, 100, 5)] }).errors.join()).toContain(
       '超时改道到状态 5',

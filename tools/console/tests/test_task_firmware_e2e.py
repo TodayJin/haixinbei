@@ -194,10 +194,10 @@ def test_上位机编的一律能被上位机解回来(harness):
 
 
 def test_块数与状态数的上限没被写松(harness):
-    """16 状态 / 64 块这两个上限：造到边界必须仍然合法（车上 `TASK_MAX_STATES`/`TASK_MAX_BLOCKS`）。"""
+    """32 状态 / 64 块这两个上限：造到边界必须仍然合法（车上 `TASK_MAX_STATES`/`TASK_MAX_BLOCKS`）。"""
     mx = _parse(harness["readings"]["max_states"])
     assert mx["code"] == 0, mx
-    assert mx["hdr"]["n_states"] == 16
+    assert mx["hdr"]["n_states"] == 32
     many = _parse(harness["readings"]["many_blocks"])
     assert many["code"] == 0, many
     assert max(b["j"] for b in many["blocks"] if b["seq"] == "body") == 63

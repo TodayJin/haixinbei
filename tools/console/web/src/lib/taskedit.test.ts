@@ -75,7 +75,7 @@ const where = (state: number, seq: 'enter' | 'body', index: number): Where => ({
 const ops = (list: TaskBlock[]) => list.map((b) => b.op);
 
 describe('块库元数据', () => {
-  it('11 个块每个都有说明和默认值，且默认值落在声明范围内', () => {
+  it('14 个块每个都有说明和默认值，且默认值落在声明范围内', () => {
     expect(OP_SPECS.map((s) => s.op)).toEqual([
       OP.SET_SPEED,
       OP.SET_MODE,
@@ -86,6 +86,10 @@ describe('块库元数据', () => {
       OP.WAIT_MS,
       OP.WAIT_COND,
       OP.CROSS_CLEAR,
+      // ★2026-10-09 新增：主页分派用的一对（固件 task_prog.h 的 0x0C/0x0D）+ 爬台阶（0x0E）
+      OP.SET_STAGE,
+      OP.IF_STAGE,
+      OP.CLIMB,
       OP.GOTO,
       OP.END,
     ]);

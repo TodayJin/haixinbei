@@ -228,6 +228,97 @@ export const OP_SPECS: OpSpec[] = [
     ],
   },
   { op: OP.CROSS_CLEAR, name: 'CROSS_CLEAR', label: '清横线', group: '等待', doc: '把"压过几条横线"的计数清零', fields: [] },
+  {
+    op: OP.SET_STAGE,
+    name: 'SET_STAGE',
+    label: '记段号',
+    group: '流程',
+    doc: '记下"我走到第几段了"—— 主页靠它决定下一个压线周期做哪一段（旧代码的 black_num）',
+    fields: [
+      {
+        key: 'p0',
+        label: '段号',
+        hint: '记成第几段。之后主页里写「段号 = 这个数」的那条「如果…就跳」才会成立。',
+        kind: 'int',
+        lo: 0,
+        hi: 255,
+      },
+    ],
+  },
+  {
+    op: OP.IF_STAGE,
+    name: 'IF_STAGE',
+    label: '如果…就跳',
+    group: '流程',
+    doc: '看一眼就走：段号对**而且**那几路压着黑线 ⇒ 跳到那个状态；不满足继续往下（不等待）',
+    fields: [
+      {
+        key: 'p0',
+        label: '段号',
+        hint: '要求"现在走到第几段"。主页里一条判断对一个段号，所以同一时刻最多只有一条会成立。',
+        kind: 'int',
+        lo: 0,
+        hi: 255,
+      },
+      {
+        key: 'p1',
+        label: '哪几路',
+        hint: '勾中的那几路必须**同时**压着黑线才算成立（没勾的一律不管）。一路都不勾 = 这条永远不成立。',
+        kind: 'chmask',
+        lo: 0,
+        hi: 255,
+      },
+      {
+        key: 'p2',
+        label: '跳到',
+        hint: '成立时跳到哪个状态。那个状态干完活，一般用「记段号」把段号 +1、再「跳到状态：主页」回来接着分派。',
+        kind: 'state',
+        lo: 0,
+        hi: 0xfffe,
+      },
+    ],
+  },
+  {
+    op: OP.CLIMB,
+    name: 'CLIMB',
+    label: '爬台阶（循环到车平）',
+    group: '流程',
+    doc: '把这一段动作一遍遍重复，直到"爬够了节数 **而且** 车头落回水平"—— 打滑上不去时会自己再爬一遍',
+    fields: [
+      {
+        key: 'p0',
+        label: '要爬几节',
+        hint: '本块每被走到一次算一节。填 2 = 至少把这段动作做完 2 遍之后才认"上完了"（防止上完第一节那一下的平走被误判成爬完）。',
+        kind: 'int',
+        lo: 1,
+        hi: 20,
+      },
+      {
+        key: 'p1',
+        label: '抬起过才算',
+        hint: '要求车头先真的抬起过这么多（0.1° 单位，填 150 = 15°），之后的"落回水平"才算数 —— 打滑滑下来也是"先抬头再落回"，不要求抬起过就会把它误判成上去了。填 0 = 不要求。',
+        kind: 'int',
+        lo: 0,
+        hi: 900,
+      },
+      {
+        key: 'p2',
+        label: '回落容差',
+        hint: '车头回到"进来那一刻的角度"的 ± 多少度算平了（0.1° 单位，填 30 = 3°）。填 0 = 用默认 3°。',
+        kind: 'int',
+        lo: 0,
+        hi: 300,
+      },
+      {
+        key: 'p3',
+        label: '没上去就跳回',
+        hint: '还没满足时跳到哪个状态 —— 一般选**本状态自己**，这样这段动作会再来一遍。',
+        kind: 'state',
+        lo: 0,
+        hi: 0xfffe,
+      },
+    ],
+  },
   { op: OP.GOTO, name: 'GOTO', label: '跳到状态', group: '流程', doc: '立刻跳到另一个状态，不等任何东西', fields: [{ key: 'p0', label: '目标', hint: '跳到哪个状态；新状态会从它的「进门」序列重新开始。这里只能选真实状态。', kind: 'state', lo: 0, hi: 0xfffe }] },
   { op: OP.END, name: 'END', label: '结束任务', group: '流程', doc: '停车，整个任务到此结束', fields: [] },
 ]
@@ -338,6 +429,14 @@ export function defaultsFor(op: number): TaskBlock {
       return blk(OP.WAIT_COND, COND.CROSS, 0, 3000, NO_STATE)
     case OP.CROSS_CLEAR:
       return blk(OP.CROSS_CLEAR)
+    case OP.SET_STAGE:
+      return blk(OP.SET_STAGE, 0)
+    case OP.IF_STAGE:
+      /* 默认给"段号 0 + 8 路全压黑"—— 一块就能用的最常见形态 */
+      return blk(OP.IF_STAGE, 0, 0xff, 0)
+    case OP.CLIMB:
+      /* 默认：爬 2 节、先抬过 15°、回落容差 3°、没上去就跳回状态 0（用户一般改成"本状态自己"） */
+      return blk(OP.CLIMB, 2, 150, 30, 0)
     case OP.GOTO:
       return blk(OP.GOTO, 0)
     case OP.END:
@@ -376,6 +475,12 @@ export function describeBlock(b: TaskBlock, stateCount: number, names?: string[]
     }
     case OP.CROSS_CLEAR:
       return '把横线计数清零'
+    case OP.SET_STAGE:
+      return `段号 = ${b.p0}`
+    case OP.IF_STAGE:
+      return `如果 段号=${b.p0} 且 ${maskLabel(b.p1, false)} → 跳到 ${st(b.p2)}（不成立就往下走）`
+    case OP.CLIMB:
+      return `爬 ${b.p0} 节，车头抬过 ${(b.p1 / 10).toFixed(1)}° 又落回 ±${((b.p2 || 30) / 10).toFixed(1)}° 才算上去；否则跳回 ${st(b.p3)} 再来一遍`
     case OP.GOTO:
       return `跳到 ${st(b.p0)}`
     case OP.END:
@@ -385,11 +490,18 @@ export function describeBlock(b: TaskBlock, stateCount: number, names?: string[]
   }
 }
 
+/** 「哪几路」这一格是不是"白"的口径。★只有 **0x06 等条件 + 条件 11** 才是；
+ *  「如果…就跳」(0x0D) 的掩码语义固定是"压黑"，而它的 `p0` 是**段号** ——
+ *  段号正好等于 11 也是有的（第 11 段），光看 `p0` 会把标题误显示成"哪几路是白的"。 */
+function isWhiteMask(b: TaskBlock): boolean {
+  return b.op === OP.WAIT_COND && b.p0 === COND.CH_WHITE
+}
+
 /** 一个字段**当前值**的标题：默认就是 `f.label`；只有随条件改口的那个（`chmask`：
- *  「哪几路是黑的」/「哪几路是白的」）从 `b.p0` 现取，做法同 `fieldHint()`/`fieldLegend()`。
+ *  「哪几路是黑的」/「哪几路是白的」）现取，做法同 `fieldHint()`/`fieldLegend()`。
  *  `FieldSpec.label` 是不带块的静态兜底（给「可设置：…」这类拿不到块的清单用）。 */
 export function fieldLabel(f: FieldSpec, b: TaskBlock): string {
-  if (f.kind === 'chmask') return b.p0 === COND.CH_WHITE ? '哪几路是白的' : '哪几路是黑的'
+  if (f.kind === 'chmask') return isWhiteMask(b) ? '哪几路是白的' : '哪几路是黑的'
   return f.label
 }
 
@@ -400,9 +512,9 @@ export function fieldHint(f: FieldSpec, b: TaskBlock): string {
   if (f.kind === 'chmask') {
     const on = [0, 1, 2, 3, 4, 5, 6, 7].filter((i) => (b[f.key] & (1 << i)) !== 0).map((i) => i + 1)
     if (!on.length) return '一路都没勾 —— 这个条件永远不会满足，会一直等到超时。点一下方块就是勾上/取消。'
-    return b.p0 === COND.CH_WHITE
+    return isWhiteMask(b)
       ? `已勾第 ${on.join('、')} 路：这几路现在必须一路都不压着黑线（全白）才算等到，其余几路不管。`
-      : `已勾第 ${on.join('、')} 路：这几路现在必须全是黑的才算等到，其余几路不管。`
+      : `已勾第 ${on.join('、')} 路：这几路现在必须全是黑的才算成立，其余几路不管。`
   }
   if (f.kind === 'hold') {
     /* 「需持续」的那一格：值 = flags 低 7 位（bit7 = 1 时那几位是跳转目标 ⇒ 这一格用不了）。
@@ -657,6 +769,81 @@ export function seqRows(p: TaskProgram, i: number, seq: SeqName): { index: numbe
 
 export function blockCount(p: TaskProgram): number {
   return p.states.reduce((n, s) => n + s.enter.length + s.body.length, 0)
+}
+
+/* --------------------------------------------------- 压线序号（第几次压线） */
+
+/** 「压线入口」块 = 「等条件：指定哪几路是黑的 / 哪几路是白的」（条件 10 / 11）。
+ *
+ *  旧全程流程就靠这种块分段：**链上第 N 个这样的块 = 第 N 次压线**，
+ *  也就是旧代码 `renwu.c` 的 `black_num` 链上的第 N 段
+ *  （段号本身是跳的：0→1→2→3→4→6→7→9…，但**压线事件的序号是连续的**）。
+ *
+ *  ★序号是**静态**的：由块在链上的位置算出来，**不进镜像、不参与固件判断**。
+ *  旧代码里 `black_num==N` 那一半由"状态机当前停在哪个状态"承担，序号只是把它写出来给人看 ——
+ *  所以加上它**不会改变车的任何行为**。
+ */
+export function isCrossingBlock(b: TaskBlock): boolean {
+  /* 新版（"主页分派 + 一段一状态"）：压线入口是主页里那条「如果…就跳」 */
+  if (b.op === OP.IF_STAGE) return true
+  /* 老版（每个状态自带入口条件的写法）：仍然是「等条件：哪几路压黑/白」 */
+  return b.op === OP.WAIT_COND && (b.p0 === COND.CH_BLACK || b.p0 === COND.CH_WHITE)
+}
+
+export interface CrossingMark {
+  /** 第几次压线（1 基） */
+  n: number
+  state: number
+  seq: SeqName
+  index: number
+  /** 8 位掩码（bit0 = 第 1 路） */
+  mask: number
+  /** true = 条件 11「哪几路是白的」；false = 条件 10「哪几路是黑的」 */
+  white: boolean
+}
+
+/** 按「状态 0..N，每个状态先 enter 后 body」的顺序给每个压线入口编号。
+ *  状态数组的顺序就是执行顺序（`renwu-lap.json` 全程就是这个口径：GOTO 永远跳下一个状态）。 */
+export function crossingMarks(p: TaskProgram): CrossingMark[] {
+  const out: CrossingMark[] = []
+  let n = 0
+  p.states.forEach((st, state) => {
+    ;(['enter', 'body'] as SeqName[]).forEach((seq) => {
+      st[seq].forEach((b, index) => {
+        if (!isCrossingBlock(b)) return
+        n += 1
+        out.push({ n, state, seq, index, mask: b.p1 & 0xff, white: isWhiteMask(b) })
+      })
+    })
+  })
+  return out
+}
+
+/** (状态, 序列, 下标) → 第几次压线；不是压线入口就返回 undefined */
+export function crossingIndexOf(
+  marks: CrossingMark[],
+  state: number,
+  seq: SeqName,
+  index: number,
+): number | undefined {
+  return marks.find((m) => m.state === state && m.seq === seq && m.index === index)?.n
+}
+
+/** 某个状态里的压线入口（按出现顺序）—— 用来在状态卡片上写"入口：第 4 次压线 · 8 路全压黑" */
+export function crossingsOfState(marks: CrossingMark[], state: number): CrossingMark[] {
+  return marks.filter((m) => m.state === state)
+}
+
+/** 掩码 → 人话：「8 路全压黑」「第 1~5 路压黑」「第 4、8 路压黑」 */
+export function maskLabel(mask: number, white = false): string {
+  const m = mask & 0xff
+  const on = [0, 1, 2, 3, 4, 5, 6, 7].filter((i) => (m & (1 << i)) !== 0)
+  if (on.length === 0) return '一路都没勾（永远不满足）'
+  const tail = white ? '路是白的' : '路压黑'
+  if (on.length === 8) return white ? '8 路全白' : '8 路全压黑'
+  const consec = on.every((v, i) => i === 0 || v === on[i - 1] + 1)
+  if (consec && on.length > 1) return `第 ${on[0] + 1}~${on[on.length - 1] + 1} ${tail}`
+  return `第 ${on.map((i) => i + 1).join('、')} ${tail}`
 }
 
 /* --------------------------------------------------- 编译信息（预览面板） */

@@ -557,7 +557,9 @@ class SimCar:
         if self._task_crc(img) != crc:
             self._ack(seq, pr.ST_BAD_PARAM)      # 拒"烧了一半"的程序
             return
-        if img[0] != 0x54 or img[1] != 0x4B or img[2] != 1 or not (1 <= img[3] <= 16):
+        # n_states 上限与固件一致：2026-10-09 起是 32（旧全程流程改成"主页分派 + 一段一状态"
+        # 需要 22 个状态）。别只在这里写死一个更松的数 —— 仿真车放行的、真车必须也认。
+        if img[0] != 0x54 or img[1] != 0x4B or img[2] != 1 or not (1 <= img[3] <= 32):
             self._ack(seq, pr.ST_BAD_PARAM)
             return
         used = sum(len(b) for k, b in self.tasks.items() if k != tid)

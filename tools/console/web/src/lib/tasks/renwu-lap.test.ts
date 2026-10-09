@@ -5,80 +5,95 @@
  *  ② 过 `validateTask`（否则页面点"烧写"会被拦下）；
  *  ③ 编码后长度 ≤ `TASK_STORE_CAP`（4096；同时也断言它 **> 2048**，
  *     因为正是"忠实转换装不下"才把上限从 2048 提到 4096 的）；
- *  ④ 几个关键块还在（两轮直给 / 转角度 / 动作 2 后等 2050ms / 状态尾都是 GOTO 或 END），
+ *  ④ 关键块还在（两轮直给 / 转角度 / 动作 2 后等 2050ms / 段尾合法），
  *     防止以后改瘦身规则时把语义悄悄删掉。
  *
  * **2026-10-07 第二版**：用户报「这份 JSON 与旧代码对不上」，逐行对拍后改了四类：
  *  · 换算基准 6480 → **7000**（`HP_TASK_SPEED` 的当前值，`host_link.c:108`）⇒ 全部速度刻度重算；
- *  · 补回第一版漏掉的 3 段循迹：栅栏 54×20ms=**1080ms**、方通 14×20ms=**280ms**、28×20ms=**560ms**
- *    （以及「关角度环后电机恢复到 enable 时保存的速度」被误写成「速度 0」的几处）；
+ *  · 补回第一版漏掉的 3 段循迹：栅栏 54×20ms=**1080ms**、方通 14×20ms=**280ms**、28×20ms=**560ms**；
  *  · 原地转前显式发「速度 0」（旧代码的 `Toggle_Gyro_Control(1,0,0)`），不再依赖残留状态；
  *  · 旧代码里 5 处「只看一半探头」的入口条件改用掩码精确表达。
  *
- * **2026-10-07 第三版（★极性修正，就是本文件最底下那两条用例钉的东西）**：用户当场指出
- * 「为什么会有全白？我记得我都是扫到黑线算的呀」—— 第二版把入口条件**整体译反了**。
- * 旧板 `Haixin/Hardware/tracing.c:9-16` 是 `tracing_data[i] = !HAL_GPIO_ReadPin(...)`（取反），
- * 而 `Haixin/Hardware/PID_tracing.c:18-25` 拿原值当「这一路看见线」；`firmware/App/Svc/host_link.c:496`
- * 写死 `if (bsp_trace_bit(i) == GPIO_PIN_SET) m |= 1<<i;` 并注上「1 = 压线」，
- * `docs/上位机通信协议.md:163` 同口径，`docs/控制算法升级方案.md:42` 更是直说
- * **「`renwu.c` 里『全 0』事件 = 8 路原始位全 SET（整排压线）」**。
- * ⇒ **`tracing_data[i] == 0` = 第 i 路压到黑线**（不是白！）。
- * 所以全部 21 个入口条件改成**条件 10 `CH_BLACK` + 掩码**：
- *   16 处「8 路全 0」→ 掩码 `0xFF`；5 处「只看一半探头」→ `0x1F / 0xF8 / 0x1F / 0x0F / 0xF8`（同第二版）。
- * 镜像**除这 21 块的条件号/掩码外逐字节相同**：仍然 **2434 B / 208 块 / 15 状态**，CRC `0x7319` → **`0xE021`**。
- * 逐段依据见 `out/_lap3_table.md` 与 `out/_gen_lap3.py`；第二版原件留在
- * `out/renwu-lap.json.bak-v2-fuhao-fan`（tasks 目录里的 `renwu-lap.json.bak` 是第一版的）。
+ * **2026-10-07 第三版（极性修正）**：用户当场指出「为什么会有全白？我记得我都是扫到黑线算的呀」
+ * —— 第二版把入口条件**整体译反了**。旧板 `Haixin/Hardware/tracing.c:9-16` 是
+ * `tracing_data[i] = !HAL_GPIO_ReadPin(...)`（取反），而 `firmware/App/Svc/host_link.c:496`
+ * 写死 `if (bsp_trace_bit(i) == GPIO_PIN_SET) m |= 1<<i;` 并注上「1 = 压线」
+ * ⇒ **`tracing_data[i] == 0` = 第 i 路压到黑线**（不是白！）。16 处「8 路全 0」→ 掩码 `0xFF`，
+ * 5 处「只看一半探头」→ `0x1F / 0xF8 / 0x1F / 0x0F / 0xF8`。
+ * 那一版是 15 状态 / 208 块 / 2434 B / CRC 0xE021（每个状态自带「等条件」块）。
+ *
+ * **★2026-10-09 第四版 —— 主页分派版（本文件现在钉的就是它）**
+ * 用户第三次指出："我要的是**主页只放两样东西**：一直循环的（循迹）、和判断条件；
+ * 判断中了进那个状态，状态里的代码跑完就出来，回来继续循迹、继续判断下一条。"
+ * —— 这才是旧代码 `void A()` 的真身：
+ *     `motor_tracing_pid(4.5);`（一直循迹）+ 一串 `if (8路全黑 && black_num==N) { 段N; black_num=M; }`
+ * 第三版受"最多 16 个状态"限制，只能把 21 段压成 15 个状态、**每段自带入口条件**，
+ * 于是主页不像主页、条件散在各处 —— 用户看的就是这个"没逻辑"。
+ *
+ * 现在固件补了两样、状态上限也放宽了：
+ *   · `TASK_OP_IF_STAGE(0x0D)`「如果 段号==p0 且 p1 那几路压黑 ⇒ 跳到 p2」，**不满足就往下走**
+ *     （与 0x06「等条件」的根本区别：0x06 停在那里等，写不出"判断①不行就看判断②"）
+ *   · `TASK_OP_SET_STAGE(0x0C)`「段号 = p0」= 旧代码的 `black_num = M`
+ *   · `TASK_MAX_STATES` 16 → 32
+ * 所以本版把 21 段**一段一个状态**摊开：
+ *   状态 0 = 主页：`[如果 段号=k 且 mask_k → 状态 k+1]` ×21 + `[跳到状态 0]`
+ *   状态 k+1 = 段 k：原文的动作… + `[记段号 = k+1]` + `[跳到状态 0]`（最后一段收在「结束任务」）
+ * 产物：**22 状态 / 235 块 / 2639 B / CRC 0x5E7B**（第三版是 15/208/2434/0xE021）。
+ * 动作、速度、延时与第三版**逐块同源**，只有两处结构变化：入口条件搬到主页、段尾 goto 换成
+ * SET_STAGE + GOTO 0。生成器 `out/_gen_lap5.py`，第三版原件留在 `out/renwu-lap.json.bak-v3-fenpai`。
  *
  * ⚠️ **倒车块依赖一处固件修复**：`task_block_t` 的 `p2` 是 u16（只有 `p1` 是有符号），
  *    所以「两轮直给 −3888/−3888」编码后 p2 变成 61936，固件的
- *    `SpeedControl_SetTarget((int)p1, (int)p2)` 会把它当成「右轮全速前进」⇒ 车原地打转。
- *    修法：`(int)(int16_t)b->p2`（`task_run.c` 的 `TASK_OP_SET_MODE` 分支，1 行）。
- *    本文件里那 6 个负速度块**故意保留负值**（那是旧代码的本意），等固件修好即生效。
+ *    `SpeedControl_SetTarget((int)p1, (int)(int16_t)p2)` 已按有符号解释（`task_run.c` 的
+ *    `TASK_OP_SET_MODE` 分支）⇒ 这 6 个负速度块是真倒车。本文件保留负值断言。
  */
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { COND, MODE, OP, encodeTask, validateTask, type TaskBlock } from '../task'
-import { loadTaskFile, serializeTaskFile } from '../taskedit'
+import { crossingMarks, loadTaskFile, maskLabel, serializeTaskFile } from '../taskedit'
 
 const file = loadTaskFile(readFileSync(new URL('./renwu-lap.json', import.meta.url), 'utf8'))
 const task = file.tasks[0]
 const prog = task.prog
 const states = prog.states
 const allBlocks: TaskBlock[] = states.flatMap((s) => [...s.enter, ...s.body])
-/** 某块后面紧跟着的那一块（找不到就 undefined） */
-const after = (pred: (b: TaskBlock) => boolean) =>
-  allBlocks.find((b, i) => pred(b) && allBlocks[i + 1] !== undefined && allBlocks[i + 1].op === OP.WAIT_MS)
+/** 主页（任务从这儿开始，一直循环） */
+const home = states[prog.main]
+/** 主页里那串分派判断 */
+const ifs = home.body.filter((b) => b.op === OP.IF_STAGE)
+/** 21 个段状态（状态 1..21；状态 0 是主页） */
+const segments = states.slice(1)
+/** 旧代码里 21 段的掩码顺序（第三版逐块同源，见文件头） */
+const MASKS = [0xff, 0xff, 0xff, 0xff, 0xff, 0x1f, 0xff, 0xff, 0xff, 0xff, 0xf8, 0x1f, 0xff, 0x0f, 0xf8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
 
-describe('旧全程流程转出来的任务文件（renwu-lap.json）', () => {
+describe('旧全程流程转出来的任务文件（renwu-lap.json · 主页分派版）', () => {
   it('能当普通任务文件导入，且 id/名字/主页都合理', () => {
     expect(file.ver).toBe(1)
     expect(file.tasks).toHaveLength(1)
     expect(task.id).toBe(0)
     expect(task.name).toContain('旧全程')
     expect(prog.main).toBe(0)
-    expect(states).toHaveLength(15)
+    expect(states).toHaveLength(22) // 1 主页 + 21 段
     expect(prog.main).toBeLessThan(states.length)
     // 任务名要进 Flash 页 58 的目录记录（上限 30 字节）
     expect(new TextEncoder().encode(task.name).length).toBeLessThanOrEqual(30)
   })
 
   it('过校验：没有 error（warnings 也空）', () => {
-    const { errors } = validateTask(prog)
-    expect(errors).toEqual([])
+    expect(validateTask(prog).errors).toEqual([])
     expect(validateTask(prog).warnings).toEqual([])
   })
 
   it('编码后的字节数：能装进 4096 的单任务上限（这也正是把上限从 2048 提上来的原因）', () => {
     const enc = encodeTask(prog)
     expect(enc.errors).toEqual([])
-    expect(enc.bytes.length).toBe(2434) // 尺寸护栏：改了瘦身规则/增删块就会在这里报到
+    expect(enc.bytes.length).toBe(2679) // 尺寸护栏：改瘦身规则/增删块就会在这里报到
     expect(enc.bytes.length).toBeGreaterThan(2048)
     expect(enc.bytes.length).toBeLessThanOrEqual(4096)
     // 程序区 6144 B 里还能再放一个短任务
     expect(enc.bytes.length).toBeLessThan(6144)
-    // CRC 护栏：第三版把 21 个入口条件从「全白」改成「全压黑」后是 0xE021
-    // （第二版/全白那版是 0x7319）—— 条件再被改反，这里立刻红
-    expect(enc.bytes[6] | (enc.bytes[7] << 8)).toBe(0xe021)
+    // CRC 护栏：加了「爬台阶」之后是 0xB95A（第四版初版 0x5E7B；第三版 0xE021；第二版全白 0x7319）
+    expect(enc.bytes[6] | (enc.bytes[7] << 8)).toBe(0xb95a)
   })
 
   it('名字都不超 32 字节，单序列都不超 64 块', () => {
@@ -92,46 +107,70 @@ describe('旧全程流程转出来的任务文件（renwu-lap.json）', () => {
     }
   })
 
-  it('每个状态都是「先等条件满足，再往下走或跳下一个状态」', () => {
-    for (let i = 0; i < states.length; i++) {
-      const body = states[i].body
-      expect(body[0].op).toBe(OP.WAIT_COND)
-      // ★第三版：**每个**入口都是「哪几路压到黑线」（条件 10）。
-      // 第二版这里写的是 [LINE_LOST, CH_WHITE] —— 那是把旧代码的极性译反了（见文件头）。
-      expect(body[0].p0).toBe(COND.CH_BLACK)
-      expect(body[0].p1 & 0xff).not.toBe(0) // 掩码 0 = 恒不满足（固件 task_run.c 明确定死）
-      const tail = body[body.length - 1]
-      if (i === states.length - 1) {
-        expect(tail.op).toBe(OP.END)
-      } else {
-        expect(tail.op).toBe(OP.GOTO)
-        expect(tail.p0).toBe(i + 1)
-      }
-    }
+  it('★主页只放两样东西：21 条「如果…就跳」+ 一条"跳回自己"', () => {
+    expect(home.name).toBe('主页')
+    expect(home.body).toHaveLength(22)
+    expect(ifs).toHaveLength(21)
+    // 最后一块必须是"跳回主页" —— 一条判断都没中时，车继续循迹、下一拍接着判断
+    const tail = home.body[home.body.length - 1]
+    expect(tail.op).toBe(OP.GOTO)
+    expect(tail.p0).toBe(prog.main)
+    // 进门块 = 旧代码开头那句一直跑的 motor_tracing_pid(4.5)
+    expect(home.enter.length).toBeGreaterThan(0)
+    expect(home.enter.some((b) => b.op === OP.SET_MODE && b.p0 === MODE.TRACE_GYRO)).toBe(true)
   })
 
-  it('★极性：入口条件是「压到黑线」而不是「全白」——旧代码 tracing_data[i]==0 就是这个意思', () => {
+  it('★每条判断：段号 k、掩码按旧代码、目标就是第 k+1 个段状态', () => {
+    ifs.forEach((b, k) => {
+      expect(b.p0).toBe(k) // 段号：第 k 段
+      expect(b.p1 & 0xff).toBe(MASKS[k]) // 那几路压黑
+      expect(b.p1 & 0xff).not.toBe(0) // 掩码 0 = 恒不成立（固件 task_run.c 明确定死）
+      expect(b.p2).toBe(k + 1) // 跳到段 k 的状态
+    })
+  })
+
+  it('★段号闭环：段 k 末尾把段号记成 k+1，主页下一拍就轮到第 k+1 条判断', () => {
+    segments.forEach((st, k) => {
+      const body = st.body
+      const last = body[body.length - 1]
+      if (k === segments.length - 1) {
+        // 最后一段：旧代码在这里把 renwu_flag 置 3 退出流程
+        expect(last.op).toBe(OP.END)
+        return
+      }
+      expect(last.op).toBe(OP.GOTO)
+      expect(last.p0).toBe(prog.main) // 干完活回主页
+      const set = body[body.length - 2]
+      expect(set.op).toBe(OP.SET_STAGE)
+      // 段 k 记的段号 == 主页里"目标指向本状态"的那条判断所要求的段号 + 1
+      expect(set.p0).toBe(k + 1)
+      expect(ifs[set.p0].p2).toBe(k + 2) // 下一条判断的目标就是下一个段状态
+    })
+  })
+
+  it('掩码分布：16 处 8 路全压黑 + 5 处只看一半探头（0x1F×2 / 0xF8×2 / 0x0F×1）', () => {
+    const hist = new Map<number, number>()
+    for (const b of ifs) hist.set(b.p1 & 0xff, (hist.get(b.p1 & 0xff) ?? 0) + 1)
+    expect([...hist.entries()].sort((a, b) => a[0] - b[0])).toEqual([
+      [0x0f, 1], [0x1f, 2], [0xf8, 2], [0xff, 16],
+    ])
+    expect(maskLabel(0xff)).toBe('8 路全压黑')
+    expect(maskLabel(0x1f)).toBe('第 1~5 路压黑')
+    expect(maskLabel(0xf8)).toBe('第 4~8 路压黑')
+    expect(maskLabel(0x0f)).toBe('第 1~4 路压黑')
+  })
+
+  it('★极性：判断的是「压到黑线」而不是「全白」—— 旧代码 tracing_data[i]==0 就是这个意思', () => {
     // 判据链（哪一个都够，这里是四取一的自证）：
     //   tracing.c:9-16 `!HAL_GPIO_ReadPin` 取反  ↔  PID_tracing.c:18-25 用原值当"看见线"
     //   host_link.c:496  `== GPIO_PIN_SET → 1 = 压线`
     //   docs/上位机通信协议.md:163 「bit i = 第 i+1 路灰度压线（1 = 压线）」
     //   docs/控制算法升级方案.md:42  「renwu.c 里『全 0』事件 = 8 路原始位全 SET（整排压线）」
-    const waits = allBlocks.filter((b) => b.op === OP.WAIT_COND)
-    expect(waits).toHaveLength(21)
-    // 一条都不许再用「丢线 / 全白」那两条条件
-    expect(allBlocks.filter((b) => b.op === OP.WAIT_COND && b.p0 === COND.LINE_LOST)).toHaveLength(0)
+    // 新结构里已经没有「等条件」块了（入口条件全搬到主页 ⇒ OP.IF_STAGE 的掩码直接是"压黑"），
+    // 所以这里只钉"一条「全白」口径都不许出现"。
     expect(allBlocks.filter((b) => b.op === OP.WAIT_COND && b.p0 === COND.CH_WHITE)).toHaveLength(0)
-    // 16 处「8 路全 0」= 8 路全压黑（掩码 0xFF）
-    expect(waits.filter((b) => b.p1 === 0xff)).toHaveLength(16)
-    // 5 处「只看一半探头」= 那几路全压黑（掩码与第二版逐个相同，只是判据反了过来）
-    expect(waits.filter((b) => b.p1 !== 0xff).map((b) => b.p1)).toEqual([0x1f, 0xf8, 0x1f, 0x0f, 0xf8])
-  })
-
-  it('旧代码里 5 处「只看一半探头」的入口，用掩码精确表达（不是擅自扩成 8 路）', () => {
-    // renwu.c：段6(H271)/段17(H642) 看 data[0..4]==0、段13(H461)/段21(H719) 看 data[3..7]==0、
-    //          段19(H679) 看 data[0..3]==0（5..7 或 0..2 那几路被作者注释掉了 ⇒ 不管）
-    const masked = allBlocks.filter((b) => b.op === OP.WAIT_COND && b.p0 === COND.CH_BLACK && b.p1 !== 0xff)
-    expect(masked.map((b) => b.p1)).toEqual([0x1f, 0xf8, 0x1f, 0x0f, 0xf8])
+    expect(allBlocks.filter((b) => b.op === OP.WAIT_COND && b.p0 === COND.LINE_LOST)).toHaveLength(0)
+    expect(ifs.every((b) => (b.p1 & 0xff) !== 0)).toBe(true)
   })
 
   it('关键动作没在转换里丢：两轮直给、右转 90°、动作 2 后等 2050ms', () => {
@@ -169,22 +208,71 @@ describe('旧全程流程转出来的任务文件（renwu-lap.json）', () => {
     expect(allBlocks.slice(rev, rev + 6).some((b, k) => b.op === OP.WAIT_MS && b.p0 === 1080 && allBlocks[rev + k - 1].op === OP.SET_MODE)).toBe(true)
   })
 
-  it('倒车块故意保留负值（旧代码本意）；等固件把 p2 按有符号解释后才真的倒车', () => {
+  it('倒车块故意保留负值（旧代码本意）；固件已把 p2 按有符号解释 ⇒ 真倒车', () => {
     const back = allBlocks.filter((b) => b.op === OP.SET_MODE && b.p0 === MODE.WHEELS && b.p1 < 0 && b.p2 < 0)
     expect(back).toHaveLength(6)
-    // 这些块编码后 p2 会写成 0xF1F0/0xE4A8（无符号 61936/59056）—— 那是固件侧的待修点，
-    // 不是本文件的错；修法见文件头注释与 memory/DECISIONS.md 的 2026-10-07 条目。
   })
 
-  it('状态名带旧 black_num 段号，跟 renwu.c 一段一段对得上', () => {
-    expect(states.map((s) => s.name)).toEqual([
-      '台阶2(段0/1/2)', '木刺(段3)', '栅栏(段4/6/7)', '减速带空段(段9)', '草(段10)',
-      '方形通道(段11/13)', '洞口(段17)', '十字A(段18)', 'UUUUU(段19)', '路口B(段21)',
-      '路口C(段23)', '大坡(段24)', '路口D(段25)', '台阶3(段26)', '收尾(段27/28)',
-    ])
+  it('状态名 = 主页 + 段0..段20（段号与旧 black_num 链一一对应）', () => {
+    expect(states.map((s) => s.name)).toEqual(['主页', ...Array.from({ length: 21 }, (_, k) => `段${k}`)])
   })
 
   it('存下来再导入还是同一份（页面"导出 → 导入"不会走样）', () => {
     expect(loadTaskFile(serializeTaskFile(file))).toEqual(file)
+  })
+})
+
+/**
+ * 「第几次压线」—— 用户 2026-10-09 要的视角：旧代码是「一个主循环一直循迹 + 按 `black_num`
+ * 段号分派」，而 `black_num` 只在段尾被手动改。新结构里这条链就摊在**主页**上：
+ * 第 k+1 条「如果…就跳」= 第 k+1 次压线 → 段 k。
+ *
+ * 序号由块在链上的位置算出来（`crossingMarks`），**不进镜像**（`OP.IF_STAGE` 的 p0 是段号，
+ * 那才是运行时真正判的东西）—— 页面上的「第 N 次」徽章、「压线链」卡片都用它。
+ */
+describe('压线链：第几次压线 ↔ 哪一段', () => {
+  const marks = crossingMarks(prog)
+
+  it('全程 21 次压线，序号 1..21 连续', () => {
+    expect(marks).toHaveLength(21)
+    expect(marks.map((m) => m.n)).toEqual(Array.from({ length: 21 }, (_, i) => i + 1))
+  })
+
+  it('第 k 次压线都落在主页，第 k 次 → 段状态 k', () => {
+    for (const m of marks) {
+      expect(m.state).toBe(prog.main) // 全部在主页上（这就是"主页只放判断"）
+      expect(m.seq).toBe('body')
+      expect(m.index).toBe(m.n - 1) // 第 1 次在最前面
+    }
+  })
+
+  it('掩码与主页判断逐条一致', () => {
+    expect(marks.map((m) => m.mask)).toEqual(MASKS)
+    expect(marks.every((m) => !m.white)).toBe(true)
+  })
+
+  it('★大坡和台阶3 各挂了一块「爬台阶」：没上去就跳回本状态、上去后立刻停车', () => {
+    // 段16 = 大坡（状态 17）、段18 = 台阶3（状态 19）—— 用户 m 2026-10-09 指定的两处
+    const expectClimb = (segIdx: number, n: number) => {
+      const st = segments[segIdx]
+      const climbIdx = st.body.findIndex((b) => b.op === OP.CLIMB)
+      expect(climbIdx, `段${segIdx}（${st.name}）里没有「爬台阶」块`).toBeGreaterThan(0)
+      const c = st.body[climbIdx]
+      expect(c.p0, `段${segIdx} 要爬几节`).toBe(n)
+      expect(c.p1).toBe(150) // 先抬过 15° 才算"抬起过"
+      expect(c.p2).toBe(30) // 回落容差 3°
+      expect(c.p3, `段${segIdx} 没上去要跳回自己`).toBe(segIdx + 1)
+      // 紧接着必须是「停车」——就是用户要的"立马刹停"
+      expect(st.body[climbIdx + 1].op).toBe(OP.SET_MODE)
+      expect(st.body[climbIdx + 1].p0).toBe(MODE.IDLE)
+    }
+    expectClimb(16, 1) // 大坡：一整条坡，爬 1 节
+    expectClimb(18, 2) // ★台阶3：两节台阶 —— "设定两节就必须跑完两段之后才认"
+    // 全任务只有这两处
+    expect(allBlocks.filter((b) => b.op === OP.CLIMB)).toHaveLength(2)
+  })
+
+  it('序号不占镜像体积：编出来还是 2679 B', () => {
+    expect(encodeTask(prog).bytes.length).toBe(2679)
   })
 })
