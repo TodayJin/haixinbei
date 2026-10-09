@@ -1044,6 +1044,35 @@ export function TasksPage() {
             </div>
           ))}
         </Card>
+
+        {/* ★「第几次判断」的清单（用户 2026-10-10：放左边、紧挨着「车上现有」，
+            省得每次都要把右边的栏划好久才看得到） */}
+        {crossMarks.length > 0 && (
+          <Card
+            title="压线链"
+            right={<span className="text-[10px] text-slate-600">共 {crossMarks.length} 次</span>}
+          >
+            <div className="mb-1.5 text-[10px] leading-relaxed text-slate-500">
+              主页上「第几次判断」的清单 —— 点一行跳到那一块。
+            </div>
+            <div className="grid gap-0.5">
+              {crossMarks.map((m) => (
+                <button
+                  key={m.n}
+                  className="flex items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] hover:bg-white/[0.04]"
+                  onClick={() => {
+                    setSelState(m.state)
+                    setOpen({ state: m.state, seq: m.seq, index: m.index })
+                  }}
+                  title={`第 ${m.n} 次判断（在「${stateLabel(m.state, stateNames)}」里）：条件 = ${m.white ? '哪几路是白的' : '哪几路是黑的'} ${maskLabel(m.mask, m.white)}`}
+                >
+                  <span className="num w-9 shrink-0 text-neon-cyan/80">第{m.n}次</span>
+                  <span className="min-w-0 flex-1 truncate text-slate-500">{maskLabel(m.mask, m.white)}</span>
+                </button>
+              ))}
+            </div>
+          </Card>
+        )}
       </div>
 
       {/* 中：编译/烧写 + 状态卡片 */}
@@ -1283,37 +1312,6 @@ export function TasksPage() {
             快捷键：拖块改顺序；◀▶ 微调；点块展开改参数；同一块再点一下收起。
           </div>
         </Card>
-
-        {crossMarks.length > 0 && (
-          <Card
-            title="压线链"
-            right={<span className="text-[10px] text-slate-600">共 {crossMarks.length} 次</span>}
-          >
-            <div className="mb-1.5 text-[11px] leading-relaxed text-slate-500">
-              旧流程是「车一直循迹，每压到一次黑线就看走到第几段」。这里把那条链摊开：
-              <b className="text-slate-400">第 N 次压线 → 做哪一段</b>。点一行能跳到那一块。
-              <br />
-              序号由块在链上的位置算出来，<b>不进镜像、不改车的行为</b>。
-            </div>
-            <div className="grid gap-0.5">
-              {crossMarks.map((m) => (
-                <button
-                  key={m.n}
-                  className="flex items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] hover:bg-white/[0.04]"
-                  onClick={() => {
-                    setSelState(m.state)
-                    setOpen({ state: m.state, seq: m.seq, index: m.index })
-                  }}
-                  title={`点一下跳到「${stateLabel(m.state, stateNames)}」的这一块（${m.white ? '哪几路是白的' : '哪几路是黑的'} = ${maskLabel(m.mask, m.white)}）`}
-                >
-                  <span className="num w-10 shrink-0 text-neon-cyan/80">第{m.n}次</span>
-                  <span className="w-24 shrink-0 truncate text-slate-500">{maskLabel(m.mask, m.white)}</span>
-                  <span className="min-w-0 flex-1 truncate text-slate-400">{stateLabel(m.state, stateNames)}</span>
-                </button>
-              ))}
-            </div>
-          </Card>
-        )}
       </div>
     </div>
   )

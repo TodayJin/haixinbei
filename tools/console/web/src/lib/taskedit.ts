@@ -795,9 +795,24 @@ export interface CrossingMark {
 }
 
 /** 按「状态 0..N，每个状态先 enter 后 body」的顺序给每个压线入口编号。
- *  状态数组的顺序就是执行顺序（`renwu-lap.json` 全程就是这个口径：GOTO 永远跳下一个状态）。 */
+ *
+ *  ★2026-10-10 起**分两种写法**，别混着数（混着数出来的"第几次"跟固件对不上）：
+ *   · **新版「主页分派」**（主页循环体里有「如果…就跳」）：只数**主页循环体里那些 IF_STAGE**，
+ *     序号就是它们在 body 里的下标 + 1 —— 固件正是拿"块下标 == 已分派次数"配对的
+ *     （见 `task_prog.h` 的 `TASK_OP_IF_STAGE`）。状态内部别的「等条件」**不算**。
+ *   · **老版**（入口条件散在各状态的 enter/body 里）：按状态顺序数「等条件：哪几路压黑/白」。 */
 export function crossingMarks(p: TaskProgram): CrossingMark[] {
   const out: CrossingMark[] = []
+  const home = p.states[p.main]
+  if (home && home.body.some((b) => b.op === OP.IF_STAGE)) {
+    let n = 0
+    home.body.forEach((b, index) => {
+      if (b.op !== OP.IF_STAGE) return
+      n += 1
+      out.push({ n, state: p.main, seq: 'body', index, mask: b.p1 & 0xff, white: false })
+    })
+    return out
+  }
   let n = 0
   p.states.forEach((st, state) => {
     ;(['enter', 'body'] as SeqName[]).forEach((seq) => {
