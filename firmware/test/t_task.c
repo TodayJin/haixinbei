@@ -725,19 +725,21 @@ int main(void)
     TaskRun_Stop();
 
     /* ===============================================================
-     * ★「主页分派」的两个新块（2026-10-09，用户要的"主页只放循迹 + 判断"）
-     *   TASK_OP_SET_STAGE(0x0C) = 旧代码的 `black_num = M`
-     *   TASK_OP_IF_STAGE(0x0D)  = 「如果 段号==p0 且 p1 那几路压黑 ⇒ 跳到 p2」，**不满足往下走**
-     * 这就是主页能并排写 21 条判断的原因（0x06「等条件」会停在那里等，写不出分派）。
+     * ★「主页分派」（2026-10-09 加，2026-10-10 **序号改成自动**）
+     *   TASK_OP_IF_STAGE(0x0D) = 主页里的一条判断：**第 k 个本块 = 第 k+1 次压线** ——
+     *     "现在是第几次"由解释器自己数（`s_dispatch_n` 每成功分派一次 +1，与块下标 `s_idx` 比对）。
+     *     ⇒ 用户**不用填任何序号**，只填"哪几路压黑 + 跳到哪"；`p0` 已废弃、固件不读它
+     *       （下面故意往 p0 里塞 99 来把这条钉死）。
+     *   TASK_OP_SET_STAGE(0x0C) = 记段号：块还在（老镜像兼容），主页分派不再需要它。
      * =============================================================== */
     {
         uint8_t i;
 
-        /* (a) SET_STAGE 真改段号；TaskRun_Start() 每次把它清 0 */
+        /* (a) SET_STAGE / TaskRun_Stage 本身还在（块没删，老镜像照跑） */
         pg_reset(2u, 0u);
         add_body(0u, TASK_OP_SET_STAGE, 7u, 0, 0u, 0xFFFFu, 0u);
         add_body(0u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);
-        add_body(1u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);      /* 自环：停在状态 1 */
+        add_body(1u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);
         len = pg_build();
         CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
         CHECK_EQ_I(TaskRun_Start(16u), 0);
@@ -746,21 +748,21 @@ int main(void)
         CHECK_EQ_I(TaskRun_Stage(), 7);                          /* 记段号生效 */
         CHECK_EQ_I(TaskRun_State(), 1);
         TaskRun_Stop();
-        CHECK_EQ_I(TaskRun_Start(16u), 0);
-        CHECK_EQ_I(TaskRun_Stage(), 0);                          /* 重跑必须回到第 0 段 */
-        TaskRun_Stop();
 
-        /* (b) IF_STAGE 的四条边界。主页的 enter 先把段号置成 5，body 里一条判断 + 自环。 */
+        /* (b) ★按位置自动分派：
+         *     主页 body = [判断0: 8路全黑 → 状态1] [判断1: 第1~5路黑 → 状态2] [跳到主页]
+         *     状态 1 干完立刻回主页（把第 1 条"用掉"），状态 2 自环停住（好观察跳到了哪）
+         *     —— p0 全填 99（废弃字段），照样必须按位置工作 */
         pg_reset(3u, 0u);
-        add_enter(0u, TASK_OP_SET_STAGE, 5u, 0, 0u, 0xFFFFu, 0u);
-        add_body(0u, TASK_OP_IF_STAGE, 5u, 0xFF, 1u, 0xFFFFu, 0u);   /* 段号5 且 8 路全黑 → 状态1 */
-        add_body(0u, TASK_OP_GOTO, 0u, 0, 0u, 0xFFFFu, 0u);          /* 不成立就自环（继续循迹） */
-        add_body(1u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);
-        add_body(2u, TASK_OP_GOTO, 2u, 0, 0u, 0xFFFFu, 0u);
+        add_body(0u, TASK_OP_IF_STAGE, 99u, 0xFF, 1u, 0xFFFFu, 0u);
+        add_body(0u, TASK_OP_IF_STAGE, 99u, 0x1F, 2u, 0xFFFFu, 0u);
+        add_body(0u, TASK_OP_GOTO, 0u, 0, 0u, 0xFFFFu, 0u);
+        add_body(1u, TASK_OP_GOTO, 0u, 0, 0u, 0xFFFFu, 0u);      /* 状态1：立刻回主页 */
+        add_body(2u, TASK_OP_GOTO, 2u, 0, 0u, 0xFFFFu, 0u);      /* 状态2：自环停住 */
         len = pg_build();
         CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
 
-        /* b1 默认灰度（全 <128 = 一路都没压黑）⇒ 不成立 ⇒ 停在主页、还在跑（自环不卡死） */
+        /* b1 一路都没压黑 ⇒ 两条都不成立 ⇒ 停在主页、还在跑（自环不卡死） */
         for (i = 0u; i < 8u; i++) stub_gray[i] = 50u;
         CHECK_EQ_I(TaskRun_Start(17u), 0);
         TaskRun_Tick(80000u);
@@ -768,75 +770,48 @@ int main(void)
         CHECK_EQ_I(TaskRun_IsRunning(), 1);
         TaskRun_Stop();
 
-        /* b2 8 路全黑 ⇒ 成立 ⇒ 跳状态 1 */
+        /* b2 8 路全黑 ⇒ 一拍里连走两步：第 1 条 → 状态1 →（立刻回主页）→
+         *    第 1 条已被用掉 ⇒ 轮到第 2 条 → 状态2 停住。
+         *    ★能停在状态 2，同时证明了"第 1 条先被用掉"和"第 2 条接着生效" ——
+         *      也就是"第几次"完全由位置决定，跟 p0 一点关系都没有。 */
         for (i = 0u; i < 8u; i++) stub_gray[i] = 200u;
-        CHECK_EQ_I(TaskRun_Start(17u), 0);
+        CHECK_EQ_I(TaskRun_Start(18u), 0);
         TaskRun_Tick(81000u);
-        CHECK_EQ_I(TaskRun_State(), 1);
+        CHECK_EQ_I(TaskRun_State(), 2);
         TaskRun_Stop();
 
-        /* b3 只有第 1~4 路黑：掩码 0xFF 要 8 路 ⇒ 不成立（这是"哪几路"真正的意义） */
-        for (i = 0u; i < 4u; i++) stub_gray[i] = 200u;
-        for (i = 4u; i < 8u; i++) stub_gray[i] = 50u;
-        CHECK_EQ_I(TaskRun_Start(17u), 0);
+        /* b3 只有第 6~8 路黑：第 1 条（要 8 路）不成立 ⇒ 它没被用掉
+         *    ⇒ 第 2 条**轮不到**（`s_idx(1) != s_dispatch_n(0)`）⇒ 停在主页。
+         *    这就是"顺序分派"：前一条没成功，后一条不许抢先 */
+        for (i = 0u; i < 5u; i++) stub_gray[i] = 50u;
+        for (i = 5u; i < 8u; i++) stub_gray[i] = 200u;
+        CHECK_EQ_I(TaskRun_Start(19u), 0);
         TaskRun_Tick(82000u);
         CHECK_EQ_I(TaskRun_State(), 0);
         TaskRun_Stop();
 
-        /* b4 同样的灰度 + 掩码 0x0F（只看第 1~4 路）⇒ 成立 */
-        pg_reset(3u, 0u);
-        add_enter(0u, TASK_OP_SET_STAGE, 5u, 0, 0u, 0xFFFFu, 0u);
-        add_body(0u, TASK_OP_IF_STAGE, 5u, 0x0F, 1u, 0xFFFFu, 0u);
+        /* b4 掩码 0 ⇒ 恒不成立（空真陷阱，与条件 10/11 同一口径） */
+        pg_reset(2u, 0u);
+        add_body(0u, TASK_OP_IF_STAGE, 99u, 0x00, 1u, 0xFFFFu, 0u);
         add_body(0u, TASK_OP_GOTO, 0u, 0, 0u, 0xFFFFu, 0u);
         add_body(1u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);
-        add_body(2u, TASK_OP_GOTO, 2u, 0, 0u, 0xFFFFu, 0u);
-        len = pg_build();
-        CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
-        CHECK_EQ_I(TaskRun_Start(18u), 0);
-        TaskRun_Tick(83000u);
-        CHECK_EQ_I(TaskRun_State(), 1);
-        TaskRun_Stop();
-
-        /* b5 段号不匹配（要 6、实际 5）⇒ 不成立，哪怕 8 路全黑 */
-        pg_reset(3u, 0u);
-        add_enter(0u, TASK_OP_SET_STAGE, 5u, 0, 0u, 0xFFFFu, 0u);
-        add_body(0u, TASK_OP_IF_STAGE, 6u, 0xFF, 1u, 0xFFFFu, 0u);
-        add_body(0u, TASK_OP_GOTO, 0u, 0, 0u, 0xFFFFu, 0u);
-        add_body(1u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);
-        add_body(2u, TASK_OP_GOTO, 2u, 0, 0u, 0xFFFFu, 0u);
         len = pg_build();
         CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
         for (i = 0u; i < 8u; i++) stub_gray[i] = 200u;
-        CHECK_EQ_I(TaskRun_Start(19u), 0);
-        TaskRun_Tick(84000u);
-        CHECK_EQ_I(TaskRun_State(), 0);
-        TaskRun_Stop();
-
-        /* b6 掩码 0 ⇒ 恒不成立（空真陷阱，与条件 10/11 同一口径） */
-        pg_reset(3u, 0u);
-        add_enter(0u, TASK_OP_SET_STAGE, 5u, 0, 0u, 0xFFFFu, 0u);
-        add_body(0u, TASK_OP_IF_STAGE, 5u, 0x00, 1u, 0xFFFFu, 0u);
-        add_body(0u, TASK_OP_GOTO, 0u, 0, 0u, 0xFFFFu, 0u);
-        add_body(1u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);
-        add_body(2u, TASK_OP_GOTO, 2u, 0, 0u, 0xFFFFu, 0u);
-        len = pg_build();
-        CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
         CHECK_EQ_I(TaskRun_Start(20u), 0);
-        TaskRun_Tick(85000u);
+        TaskRun_Tick(83000u);
         CHECK_EQ_I(TaskRun_State(), 0);
         TaskRun_Stop();
 
-        /* b7 目标状态越界 ⇒ 当不成立（绝不越界跳） */
-        pg_reset(3u, 0u);
-        add_enter(0u, TASK_OP_SET_STAGE, 5u, 0, 0u, 0xFFFFu, 0u);
-        add_body(0u, TASK_OP_IF_STAGE, 5u, 0xFF, 99u, 0xFFFFu, 0u);
+        /* b5 目标状态越界 ⇒ 当不成立（绝不越界跳），而且**不消耗**分派计数 */
+        pg_reset(2u, 0u);
+        add_body(0u, TASK_OP_IF_STAGE, 99u, 0xFF, 99u, 0xFFFFu, 0u);
         add_body(0u, TASK_OP_GOTO, 0u, 0, 0u, 0xFFFFu, 0u);
         add_body(1u, TASK_OP_GOTO, 1u, 0, 0u, 0xFFFFu, 0u);
-        add_body(2u, TASK_OP_GOTO, 2u, 0, 0u, 0xFFFFu, 0u);
         len = pg_build();
         CHECK_EQ_I(TaskRun_Load(g_prog, len), 0);
         CHECK_EQ_I(TaskRun_Start(21u), 0);
-        TaskRun_Tick(86000u);
+        TaskRun_Tick(84000u);
         CHECK_EQ_I(TaskRun_State(), 0);
         TaskRun_Stop();
 

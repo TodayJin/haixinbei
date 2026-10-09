@@ -542,9 +542,10 @@ def test_task_run_refused_while_host_is_driving(pipe, task_image):
 # ---------------------------------------------------------------------
 #  旧内置比赛流程（已删的 `renwu.c`，赛道 11 个障碍）转出来的**长任务**：
 #  `web/src/lib/tasks/renwu-lap.json`。
-#  ★2026-10-09 **第四版「主页分派」+「爬台阶」**：22 状态 / **239 块** / **2679 字节**（用户要的
-#  "主页只放一直循迹的 + 一串判断"：主页 = 21 条「如果 段号=k 且 哪几路压黑 → 段k」+ 跳回自己，
-#  每段一个状态、末尾「记段号 + 回主页」；**大坡与台阶3 额外挂了「爬台阶（循环到车平）」块**）。
+#  ★2026-10-09 **第四版「主页分派」+「爬台阶」**；2026-10-10 又把「记段号」去掉（序号改成固件自己数）
+#  ⇒ 22 状态 / **219 块** / **2479 字节**（用户要的
+#  "主页只放一直循迹的 + 一串判断"：主页 = 21 条「如果 哪几路压黑 → 跳到段k」+ 跳回自己，
+#  每段一个状态、末尾回主页；**大坡与台阶3 额外挂了「爬台阶（循环到车平）」块**）。
 #  换算基准 HP_TASK_SPEED=7000。
 #  历史版本：第三版 15/208/2434 B 留在 `out/renwu-lap.json.bak-v3-fenpai`，
 #  第一版 15/190/2127 B 在 `web/src/lib/tasks/renwu-lap.json.bak`。
@@ -553,13 +554,13 @@ def test_task_run_refused_while_host_is_driving(pipe, task_image):
 #  ② 真 `host_link.c` + 真 `task_store.c` 必须**收下**它（旧的 2048 上限会拒收，
 #     这正是把 TASK_STORE_CAP 提到 4096 的原因）；
 #  ③ 目录里的 len/crc/名字对得上，GET 逐字节回读一致。
-#  ★2639 B 已超过"回读基本不丢帧"的经验线（约 2487 B，见 memory/DECISIONS.md 2026-10-07 条目）
-#  —— 管道测试里不丢（同步收发），但**真车串口回读要重读一两次核对**。
+#  ★2479 B **回到"回读基本不丢帧"的经验线（约 2487 B）以内**了 —— 把「记段号」那 20 块去掉
+#  顺带省下 200 B（带段号那版一度 2679 B，见 memory/DECISIONS.md 2026-10-10 的段号定案）。
 # ---------------------------------------------------------------------
 
 LAP_JSON = os.path.join(HERE, "..", "web", "src", "lib", "tasks", "renwu-lap.json")
 TASK_HDR_LEN, TASK_STATE_LEN, TASK_BLOCK_LEN = 12, 8, 10   # 与 firmware/App/Svc/task_prog.h 同口径
-LAP_LEN = 2679                     # 与 `renwu-lap.test.ts` 里钉的字节数一致（第四版 + 爬台阶）
+LAP_LEN = 2479                     # 与 `renwu-lap.test.ts` 里钉的字节数一致（主页分派 + 爬台阶）
 
 
 def _encode_prog(prog: dict) -> bytes:
@@ -635,7 +636,7 @@ def lap_image() -> bytes:
 
 
 def test_lap_program_is_accepted_by_the_real_firmware(pipe, lap_image):
-    """用户那份 2679 B 的全程任务（主页分派 + 爬台阶）：真固件必须收下、列得出来、回读一致。"""
+    """用户那份 2479 B 的全程任务（主页分派 + 爬台阶）：真固件必须收下、列得出来、回读一致。"""
     img = lap_image
     crc = pr.crc16_ccitt(img[12:])
     name = "旧全程·主页分派版"
@@ -645,7 +646,7 @@ def test_lap_program_is_accepted_by_the_real_firmware(pipe, lap_image):
     ack = _acks(frames)
     assert all(ack.get(s) == pr.ST_OK for s in puts), f"有 PUT 片被真固件拒了：{ack}"
     assert ack.get(commit_seq) == pr.ST_OK, \
-        f"真固件拒收这条长任务（2679B/22 状态/4096 上限）——COMMIT 状态码 {ack.get(commit_seq)}：{ack}"
+        f"真固件拒收这条长任务（2479B/22 状态/4096 上限）——COMMIT 状态码 {ack.get(commit_seq)}：{ack}"
 
     items = [pr.decode_task_list_r(f.payload) for f in frames if f.type == pr.T_TASK_LIST_R]
     assert items and items[0] is not None, f"目录里没列出刚烧的任务：{items}"
@@ -665,4 +666,4 @@ def test_lap_program_is_accepted_by_the_real_firmware(pipe, lap_image):
         assert off == len(got), f"回读分片顺序不对：off={off} 期望 {len(got)}"
         got += data
     assert end == len(img), f"回读没收尾（end={end}，期望 {len(img)}）"
-    assert bytes(got) == img, "2679 B 的长任务逐字节回读不一致"
+    assert bytes(got) == img, "2479 B 的长任务逐字节回读不一致"

@@ -87,13 +87,15 @@ describe('旧全程流程转出来的任务文件（renwu-lap.json · 主页分�
   it('编码后的字节数：能装进 4096 的单任务上限（这也正是把上限从 2048 提上来的原因）', () => {
     const enc = encodeTask(prog)
     expect(enc.errors).toEqual([])
-    expect(enc.bytes.length).toBe(2679) // 尺寸护栏：改瘦身规则/增删块就会在这里报到
+    expect(enc.bytes.length).toBe(2479) // 尺寸护栏：改瘦身规则/增删块就会在这里报到
     expect(enc.bytes.length).toBeGreaterThan(2048)
     expect(enc.bytes.length).toBeLessThanOrEqual(4096)
     // 程序区 6144 B 里还能再放一个短任务
     expect(enc.bytes.length).toBeLessThan(6144)
-    // CRC 护栏：加了「爬台阶」之后是 0xB95A（第四版初版 0x5E7B；第三版 0xE021；第二版全白 0x7319）
-    expect(enc.bytes[6] | (enc.bytes[7] << 8)).toBe(0xb95a)
+    // ★2479 还在"串口回读基本不丢帧"的经验线（约 2487 B）以内 —— 把「记段号」那 20 块去掉
+    //   顺带省了 200 B（带段号那版一度 2679 B，见 memory/DECISIONS.md 2026-10-10 的段号定案）
+    // CRC 护栏：段号参数删掉之后是 0x95CD（带段号那版 0xB95A；第四版初版 0x5E7B；第三版 0xE021）
+    expect(enc.bytes[6] | (enc.bytes[7] << 8)).toBe(0x95cd)
   })
 
   it('名字都不超 32 字节，单序列都不超 64 块', () => {
@@ -120,16 +122,16 @@ describe('旧全程流程转出来的任务文件（renwu-lap.json · 主页分�
     expect(home.enter.some((b) => b.op === OP.SET_MODE && b.p0 === MODE.TRACE_GYRO)).toBe(true)
   })
 
-  it('★每条判断：段号 k、掩码按旧代码、目标就是第 k+1 个段状态', () => {
+  it('★每条判断：掩码按旧代码、目标就是第 k+1 个段状态（序号不用填）', () => {
     ifs.forEach((b, k) => {
-      expect(b.p0).toBe(k) // 段号：第 k 段
+      expect(b.p0).toBe(0) // ★p0 已废弃（曾经是手填的段号）—— 固件不再读它
       expect(b.p1 & 0xff).toBe(MASKS[k]) // 那几路压黑
       expect(b.p1 & 0xff).not.toBe(0) // 掩码 0 = 恒不成立（固件 task_run.c 明确定死）
       expect(b.p2).toBe(k + 1) // 跳到段 k 的状态
     })
   })
 
-  it('★段号闭环：段 k 末尾把段号记成 k+1，主页下一拍就轮到第 k+1 条判断', () => {
+  it('★每段末尾只要「跳回主页」——第几次由解释器自己数，不用再记段号', () => {
     segments.forEach((st, k) => {
       const body = st.body
       const last = body[body.length - 1]
@@ -139,13 +141,12 @@ describe('旧全程流程转出来的任务文件（renwu-lap.json · 主页分�
         return
       }
       expect(last.op).toBe(OP.GOTO)
-      expect(last.p0).toBe(prog.main) // 干完活回主页
-      const set = body[body.length - 2]
-      expect(set.op).toBe(OP.SET_STAGE)
-      // 段 k 记的段号 == 主页里"目标指向本状态"的那条判断所要求的段号 + 1
-      expect(set.p0).toBe(k + 1)
-      expect(ifs[set.p0].p2).toBe(k + 2) // 下一条判断的目标就是下一个段状态
+      expect(last.p0).toBe(prog.main) // 干完活回主页；回去后自然轮到下一条判断
+      // ★末尾**不再**有「记段号」：固件拿"块在主页里的下标"和"已经分派过几次"自己配对
+      expect(body.some((b) => b.op === OP.SET_STAGE)).toBe(false)
     })
+    // 全任务一个「记段号」都不该有（块本身还在块库里，只是这条任务不需要）
+    expect(allBlocks.filter((b) => b.op === OP.SET_STAGE)).toHaveLength(0)
   })
 
   it('掩码分布：16 处 8 路全压黑 + 5 处只看一半探头（0x1F×2 / 0xF8×2 / 0x0F×1）', () => {
@@ -272,7 +273,7 @@ describe('压线链：第几次压线 ↔ 哪一段', () => {
     expect(allBlocks.filter((b) => b.op === OP.CLIMB)).toHaveLength(2)
   })
 
-  it('序号不占镜像体积：编出来还是 2679 B', () => {
-    expect(encodeTask(prog).bytes.length).toBe(2679)
+  it('序号不占镜像体积：编出来还是 2479 B', () => {
+    expect(encodeTask(prog).bytes.length).toBe(2479)
   })
 })

@@ -250,16 +250,8 @@ export const OP_SPECS: OpSpec[] = [
     name: 'IF_STAGE',
     label: '如果…就跳',
     group: '流程',
-    doc: '看一眼就走：段号对**而且**那几路压着黑线 ⇒ 跳到那个状态；不满足继续往下（不等待）',
+    doc: '看一眼就走：**那几路压着黑线** ⇒ 跳到那个状态；不满足继续往下（不等待）。"这是第几条判断"由它在主页里的位置自动决定，不用填',
     fields: [
-      {
-        key: 'p0',
-        label: '段号',
-        hint: '要求"现在走到第几段"。主页里一条判断对一个段号，所以同一时刻最多只有一条会成立。',
-        kind: 'int',
-        lo: 0,
-        hi: 255,
-      },
       {
         key: 'p1',
         label: '哪几路',
@@ -432,7 +424,7 @@ export function defaultsFor(op: number): TaskBlock {
     case OP.SET_STAGE:
       return blk(OP.SET_STAGE, 0)
     case OP.IF_STAGE:
-      /* 默认给"段号 0 + 8 路全压黑"—— 一块就能用的最常见形态 */
+      /* p0 已废弃（曾经是手填的段号；序号现在由块在主页里的位置自动定）；默认"8 路全压黑 → 状态 0" */
       return blk(OP.IF_STAGE, 0, 0xff, 0)
     case OP.CLIMB:
       /* 默认：爬 2 节、先抬过 15°、回落容差 3°、没上去就跳回状态 0（用户一般改成"本状态自己"） */
@@ -478,7 +470,7 @@ export function describeBlock(b: TaskBlock, stateCount: number, names?: string[]
     case OP.SET_STAGE:
       return `段号 = ${b.p0}`
     case OP.IF_STAGE:
-      return `如果 段号=${b.p0} 且 ${maskLabel(b.p1, false)} → 跳到 ${st(b.p2)}（不成立就往下走）`
+      return `如果 ${maskLabel(b.p1, false)} → 跳到 ${st(b.p2)}（不成立就往下走）`
     case OP.CLIMB:
       return `爬 ${b.p0} 节，车头抬过 ${(b.p1 / 10).toFixed(1)}° 又落回 ±${((b.p2 || 30) / 10).toFixed(1)}° 才算上去；否则跳回 ${st(b.p3)} 再来一遍`
     case OP.GOTO:
