@@ -87,16 +87,16 @@ describe('旧全程流程转出来的任务文件（renwu-lap.json · 主页分�
   it('编码后的字节数：能装进 4096 的单任务上限（这也正是把上限从 2048 提上来的原因）', () => {
     const enc = encodeTask(prog)
     expect(enc.errors).toEqual([])
-    expect(enc.bytes.length).toBe(2559) // 尺寸护栏：改瘦身规则/增删块就会在这里报到
+    expect(enc.bytes.length).toBe(2549) // 尺寸护栏：改瘦身规则/增删块就会在这里报到
     expect(enc.bytes.length).toBeGreaterThan(2048)
     expect(enc.bytes.length).toBeLessThanOrEqual(4096)
     // 程序区 6144 B 里还能再放一个短任务
     expect(enc.bytes.length).toBeLessThan(6144)
     // ★2026-10-10 按用户方案改完（草地/减速带改成"等回到线上"、方通/U型隧道改切亚克力标定）
-    //   ⇒ 219 → 227 块、2479 → 2559 B，**又超了"回读基本不丢帧"的经验线（约 2487 B）72 B**
+    //   ⇒ 219 → 226 块、2479 → 2549 B，**又超了"回读基本不丢帧"的经验线（约 2487 B）62 B**
     //   ⇒ 真车串口回读要重读一两次核对（见 memory/DECISIONS.md 2026-10-07 那条）
-    // CRC 护栏：本轮改完是 0x01B7（段号删掉那版 0x95CD；带段号那版 0xB95A；第四版初版 0x5E7B）
-    expect(enc.bytes[6] | (enc.bytes[7] << 8)).toBe(0x01b7)
+    // CRC 护栏：本轮改完是 0x6CA9（段号删掉那版 0x95CD；带段号那版 0xB95A；第四版初版 0x5E7B）
+    expect(enc.bytes[6] | (enc.bytes[7] << 8)).toBe(0x6ca9)
   })
 
   it('名字都不超 32 字节，单序列都不超 64 块', () => {
@@ -257,29 +257,35 @@ describe('压线链：第几次压线 ↔ 哪一段', () => {
     expect(marks.every((m) => !m.white)).toBe(true)
   })
 
-  it('★大坡和台阶3 各挂了一块「爬台阶」：没上去就跳回本状态、上去后立刻停车', () => {
-    // 段16 = 大坡（状态 17）、段18 = 台阶3（状态 19）—— 用户 m 2026-10-09 指定的两处
-    const expectClimb = (segIdx: number, n: number) => {
-      const st = segments[segIdx]
-      const climbIdx = st.body.findIndex((b) => b.op === OP.CLIMB)
-      expect(climbIdx, `段${segIdx}（${st.name}）里没有「爬台阶」块`).toBeGreaterThan(0)
-      const c = st.body[climbIdx]
-      expect(c.p0, `段${segIdx} 要爬几节`).toBe(n)
-      expect(c.p1).toBe(150) // 先抬过 15° 才算"抬起过"
-      expect(c.p2).toBe(30) // 回落容差 3°
-      expect(c.p3, `段${segIdx} 没上去要跳回自己`).toBe(segIdx + 1)
-      // 紧接着必须是「停车」——就是用户要的"立马刹停"
-      expect(st.body[climbIdx + 1].op).toBe(OP.SET_MODE)
-      expect(st.body[climbIdx + 1].p0).toBe(MODE.IDLE)
-    }
-    expectClimb(16, 1) // 大坡：一整条坡，爬 1 节
-    expectClimb(18, 2) // ★台阶3：两节台阶 —— "设定两节就必须跑完两段之后才认"
+  it('★两处「爬台阶」：段16 判"上到窄桥顶了"、段18 判"登上大台阶"', () => {
+    // ── 段16（窄桥+高台，状态 17）：**只有上窄桥用俯仰角** —— 用户 m 2026-10-10 原话
+    //    "登高台是不需要这个俯仰角的，只有上窄桥是需要的" ⇒ 块插在**冲上坡之后**，
+    //    等到 pitch 回到平地就往下去做"右转上高台"那一串，**后面不是停车**。
+    const s16 = segments[16].body
+    const i16 = s16.findIndex((b) => b.op === OP.CLIMB)
+    expect(i16).toBe(5) // 冲坡那 5 块（速度/角度环/等600ms/『大坡1』/等500ms）之后
+    expect(s16[i16]).toMatchObject({ p0: 1, p1: 150, p2: 30, p3: 17 }) // 没上去跳回本状态
+    expect(s16[i16 - 1]).toMatchObject({ op: OP.WAIT_MS, p0: 500 })
+    expect(s16[i16 + 1].op).toBe(OP.SET_MODE)
+    expect(s16[i16 + 1].p0).not.toBe(MODE.IDLE) // 不是"刹停"，是继续上高台
+    // 段16 末尾恢复成"回循迹 → 回主页"（登高台不做俯仰角判断）
+    expect(s16[s16.length - 2]).toMatchObject({ op: OP.SET_MODE, p0: MODE.TRACE_GYRO })
+    expect(s16[s16.length - 1]).toMatchObject({ op: OP.GOTO, p0: 0 })
+
+    // ── 段18（大台阶，状态 19）：两节台阶 ⇒ N=2，**后面紧跟停车**
+    //    （"设定两节，就必须跑完两段之后才认"）
+    const s18 = segments[18].body
+    const i18 = s18.findIndex((b) => b.op === OP.CLIMB)
+    expect(i18).toBeGreaterThan(0)
+    expect(s18[i18]).toMatchObject({ p0: 2, p1: 150, p2: 30, p3: 19 })
+    expect(s18[i18 + 1]).toMatchObject({ op: OP.SET_MODE, p0: MODE.IDLE })
+
     // 全任务只有这两处
     expect(allBlocks.filter((b) => b.op === OP.CLIMB)).toHaveLength(2)
   })
 
-  it('序号不占镜像体积：编出来还是 2559 B', () => {
-    expect(encodeTask(prog).bytes.length).toBe(2559)
+  it('序号不占镜像体积：编出来还是 2549 B', () => {
+    expect(encodeTask(prog).bytes.length).toBe(2549)
   })
 
   it('★2026-10-10 的五处改进都在：草地/减速带改成"等回到线上"，方通/U型隧道切亚克力标定', () => {
