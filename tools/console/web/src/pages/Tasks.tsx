@@ -254,7 +254,7 @@ function FieldEditor({
                同一个控件伺候两条镜像条件（黑 / 白）：标题与方块提示都跟着 b.p0 改口。 */
             const mask = b[f.key] & 0xff
             /* 只有「等条件 + 条件 11」才是"白"的口径；「如果…就跳」的掩码永远是"压黑"，
-               而它的 p0 是段号（可能正好等于 11）⇒ 必须连 op 一起判。 */
+               而它的 p0 是"满足时间(ms)"（那一格填 11 也是有的）⇒ 必须连 op 一起判。 */
             const white = b.op === OP.WAIT_COND && b.p0 === COND.CH_WHITE
             return (
               <div key={f.key} className="grid gap-0.5">

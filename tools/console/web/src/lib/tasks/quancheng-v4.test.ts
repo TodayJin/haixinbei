@@ -3,7 +3,12 @@
  * 10 条问题**全部修掉**之后的副本。这个文件把每一条修复都钉成断言，防止以后又被改回去。
  *
  * ★ 这份测试**只看 v4**，一个字都不碰 v3（v3 是"未修的对照版"）。
- *   v4 的产物与佐证：**2687 B / 242 块 / 15 状态 / CRC `0x651C`**。
+ *   v4 的产物与佐证：**2767 B / 250 块 / 15 状态 / CRC `0xE251`**
+ *   （2026-10-10 与 `Haixin/Hardware/renwu.c`（旧板 `A()`）**逐段等价核对**后更新：
+ *     补回 5 道老门 + 补回段28 的「停车 / 速度7000 / 角度环」；当天又给主页 13 条
+ *     「如果…就跳」加上了**满足时间 100ms 的滤波**（p0；固件 `TASK_OP_IF_STAGE`）。
+ *     改前是 2687 B / 242 块 / `0x651C`；只补段1 = 2697 B / 243 块 / `0x9ECE`；
+ *     补完 5 道门 = 2737 B / 247 块 / `0xAD57`；补完段28 = 2767 B / 250 块 / `0x1D0F`）。
  *
  * ★★ **2026-10-10：v4 又按用户要求改成了「主页分派 + 爬台阶」写法**，所以下面每条的
  *    *定位方式*变了（断言本身要验的事没变）：
@@ -80,15 +85,86 @@ describe('全程 v4（quancheng-v4.json）：逐句对照查出的 10 条问题�
     expect(v.warnings).toEqual([])
   })
 
-  it('编码：2687 B / CRC 0x651C / ≤4096（尺寸与 CRC 护栏）', () => {
+  it('编码：2767 B / CRC 0xE251 / ≤4096（尺寸与 CRC 护栏）', () => {
     const enc = encodeTask(prog)
     expect(enc.errors).toEqual([])
-    expect(enc.bytes.length).toBe(2687)
+    expect(enc.bytes.length).toBe(2767)
     expect(enc.bytes.length).toBeLessThanOrEqual(4096)
     const crc = enc.bytes[6] | (enc.bytes[7] << 8)
-    expect(crc).toBe(0x651c)
+    expect(crc).toBe(0xe251)
     // CRC 自洽（独立复算一遍，与真固件 task_prog.c 同一算法）
     expect(crc16Ccitt(enc.bytes.subarray(12))).toBe(crc)
+  })
+
+  // ------------------------------------- ★补回 5 道老门（2026-10-10）
+  it('★补回 5 道老门（段1 / 段7 / 段18 / 段27 / 段28）：与旧 renwu.c「一段一道门」对齐', () => {
+    // 旧板 `A()`（`Haixin/Hardware/renwu.c`，955 行）是**一段一道门**，活链 21 道「8 路全黑」。
+    // v4 把连续几段合并进一个状态时，把中间那次「8 路全黑」丢了 ⇒ 只吃 17 次黑带事件；
+    // 补回这 5 道后（减速带多吃 1 次是**有意重设计**，两片减速带各一次）账目对上 21 次。
+    const doorsOf = (name: string) =>
+      st(name)
+        .body.map((x, i) => (x.op === OP.WAIT_COND && x.p0 === COND.CH_BLACK && x.p1 === 0xff ? i : -1))
+        .filter((i) => i >= 0)
+
+    // ★段 1 的门（第一优先）：旧段0（L70）只做 Buzzer + Servo_Move(2) + HAL_Delay(300)，
+    //   这 300ms 里循迹没停、角度环还没开 ⇒ 车按原速冲过【第一个路口】；
+    //   旧段1（L77）要**再等一次** 8 路全黑才开角度环、做爬台阶的一串舵机动作。
+    //   v4 原来两段连在一起 ⇒ 车一到路口就把整套爬台阶动作做完了。
+    const b = st('上台阶').body
+    expect(b[0]).toMatchObject({ op: OP.ACTION, p0: 2, p2: 300 })   // 段 0：过路口
+    expect(b[1]).toMatchObject({ op: OP.WAIT_COND, p0: COND.CH_BLACK, p1: 0xff, p2: 8000, p3: 0xffff })
+    expect(doorsOf('上台阶')).toEqual([1, 16])                      // 段1 的门 + 段2 的门（原锚点）
+    const gyroIdx = b.findIndex((x) => x.op === OP.SET_MODE && x.p0 === MODE.GYRO)
+    expect(gyroIdx).toBeGreaterThan(1)                              // 段1 的动作夹在两门之间
+    expect(gyroIdx).toBeLessThan(16)
+
+    // 段 7 的门：旧段6（L271，栅栏里 前进450ms + 转70°）之后、旧段7（L283，Load+500ms+Servo1）之前
+    expect(doorsOf('栅栏右转')).toEqual([6])
+    // 段 18 的门：旧段17（L642，前进400 + 转60 + 倒车600）之后、旧段18（L659，前进400 + 转-90）之前
+    expect(doorsOf('十字A')).toEqual([8])
+    // 段 27 / 段 28 的门：台阶3收尾里，旧段26 末尾（舵机#11，后等3000ms）之后
+    expect(doorsOf('台阶3收尾')).toEqual([23, 27])
+    const s14 = st('台阶3收尾').body
+    expect(s14[22]).toMatchObject({ op: OP.ACTION, p0: 11, p2: 3000 })  // 段26 末块：舵机#11
+    expect(s14[24]).toMatchObject({ op: OP.ACTION, p0: 1 })             // 段27：舵机#1（在两门之间）
+    expect(s14[31]).toMatchObject({ op: OP.WAIT_MS, p0: 10000 })        // 段28：保持 10 秒
+  })
+
+  // ------------------------- ★「如果…就跳」的满足时间（滤波，2026-10-10 用户要求）
+  it('★13 条「如果…就跳」都带「满足时间 100ms」滤波，用来滤掉十字路口那一下', () => {
+    // 为什么要它：探头排**横着**装 ⇒ 十字路口的横向黑线与探头排平行、**8 路也会同时压黑**，
+    // 与"骑上障碍的黑砂面"是同一个信号。路口那一下很短（3.8cm 线 @0.5m/s ≈ 76ms），
+    // 障碍前的黑带面积大得多 ⇒ 要求"**连续**成立 ≥ 100ms"就把路口滤掉。
+    // 固件侧：`TASK_OP_IF_STAGE` 的 p0 = 满足时间 ms，中途断一次重新计时；
+    //         **p0 = 0 = 不滤波**，与加这个功能之前逐字节等价（老任务 p0 全是 0）。
+    expect(ifs).toHaveLength(13)
+    expect(ifs.every((b) => b.p0 === 100)).toBe(true)
+    // 主页之外不许有「如果…就跳」：固件按"块下标 == 已分派次数"配对，
+    // 状态内部的下标会撞号（task_prog.h 的 TASK_OP_IF_STAGE 注释里写了）
+    const elsewhere = states
+      .filter((s) => s !== home)
+      .flatMap((s) => [...s.enter, ...s.body].filter((b) => b.op === OP.IF_STAGE))
+    expect(elsewhere).toHaveLength(0)
+  })
+
+  // ------------------------------- ★段28 的「停车 / 速度 / 角度环」（2026-10-10 补回）
+  it('★「台阶3收尾」在「保持 10 秒」之前必须先停车再前进 7000，不能带着倒车状态空转', () => {
+    // 旧 renwu.c L935-938（段28）：`Load(0,0); Buzzer_blink(); Toggle_Gyro_Control(1, 900, 900);
+    //   HAL_Delay(10000);` ⇒ **停车 → 开角度环以 900/900（=前进 7000）轰 10 秒**。
+    // v4 原来那一块前面是 `两轮直给 -7000/-7000`（段27 的倒车）+ `等1000ms`，
+    // 门通过之后**直接等 10000ms** ⇒ 那 10 秒车一直在【倒车】。
+    const s14 = st('台阶3收尾').body
+    const wIdx = s14.findIndex((b) => b.op === OP.WAIT_MS && b.p0 === 10000)
+    expect(wIdx).toBeGreaterThan(0)
+    // 紧挨着它的前三块必须是 停车 → 速度7000 → 角度环
+    expect(s14[wIdx - 1]).toMatchObject({ op: OP.SET_MODE, p0: MODE.GYRO })
+    expect(s14[wIdx - 2]).toMatchObject({ op: OP.SET_SPEED, p0: 7000 })
+    expect(s14[wIdx - 3]).toMatchObject({ op: OP.SET_MODE, p0: MODE.IDLE })
+    // 而它前面第四块是段28 的门
+    expect(s14[wIdx - 4]).toMatchObject({ op: OP.WAIT_COND, p0: COND.CH_BLACK, p1: 0xff })
+    // 再往前才是段27 的倒车
+    expect(s14[wIdx - 5]).toMatchObject({ op: OP.WAIT_MS, p0: 1000 })
+    expect(s14[wIdx - 6]).toMatchObject({ op: OP.SET_MODE, p0: MODE.WHEELS })
   })
 
   // ---------------------------------------------------------------- 主页分派
@@ -98,8 +174,10 @@ describe('全程 v4（quancheng-v4.json）：逐句对照查出的 10 条问题�
     expect(home.body).toHaveLength(14) // 13 条判断 + 1 条跳回
     expect(ifs).toHaveLength(13)
     expect(home.body[home.body.length - 1]).toMatchObject({ op: OP.GOTO, p0: prog.main })
-    // ★序号不用填：p0 已废弃，固件不读它（一律 0）
-    expect(ifs.every((b) => b.p0 === 0)).toBe(true)
+    // ★序号不用填：靠"块下标 == 已分派次数"配对，p0 **不装序号**。
+    //   （p0 现在是「满足时间（ms）」= 100ms 滤波，2026-10-10 起；见下面那条用例。
+    //     它以前确实是废弃的段号字段，所以老断言是 `p0 === 0`。）
+    expect(ifs.every((b) => b.p0 === 100)).toBe(true)
     // ★没有兜底：判断块没有"超时"这一出（p3 恒 0xFFFF = 不用）
     expect(ifs.every((b) => b.p3 === 0xffff)).toBe(true)
     // 每段末尾都回主页（「过减速带」由「栅栏右转」直接跳进去，不进主页判断）

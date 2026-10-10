@@ -250,8 +250,17 @@ export const OP_SPECS: OpSpec[] = [
     name: 'IF_STAGE',
     label: '如果…就跳',
     group: '流程',
-    doc: '看一眼就走：**那几路压着黑线** ⇒ 跳到那个状态；不满足继续往下（不等待）。"这是第几条判断"由它在主页里的位置自动决定，不用填',
+    doc: '看一眼就走：**那几路压着黑线**、且**连续**压够"满足时间" ⇒ 跳到那个状态；不满足继续往下（不等待）。"这是第几条判断"由它在主页里的位置自动决定，不用填',
     fields: [
+      {
+        key: 'p0',
+        label: '满足时间',
+        hint: '要**连续**压黑这么久才算成立（中途松开一次就重新计时）。**0 = 不滤波**（一压到就算）。为什么要它：十字路口的横向黑线与探头排平行，8 路也会同时压黑，但只持续几十毫秒；填 100 就能把路口滤掉，只在真障碍前才分派。',
+        kind: 'int',
+        lo: 0,
+        hi: 60000,
+        unit: 'ms',
+      },
       {
         key: 'p1',
         label: '哪几路',
@@ -424,8 +433,10 @@ export function defaultsFor(op: number): TaskBlock {
     case OP.SET_STAGE:
       return blk(OP.SET_STAGE, 0)
     case OP.IF_STAGE:
-      /* p0 已废弃（曾经是手填的段号；序号现在由块在主页里的位置自动定）；默认"8 路全压黑 → 状态 0" */
-      return blk(OP.IF_STAGE, 0, 0xff, 0)
+      /* 默认"连续压黑 100ms + 8 路全压黑 → 状态 0"（序号由块在主页里的位置自动定）。
+       * p0 = 满足时间 ms（用户 m 2026-10-10："加上滤波，就是满足时间，默认 100ms"），
+       * 用来滤掉十字路口那一下（横向黑线与探头排平行，8 路也会同时压黑，只持续几十毫秒）。 */
+      return blk(OP.IF_STAGE, 100, 0xff, 0)
     case OP.CLIMB:
       /* 默认：爬 2 节、先抬过 15°、回落容差 3°、没上去就跳回状态 0（用户一般改成"本状态自己"） */
       return blk(OP.CLIMB, 2, 150, 30, 0)
@@ -470,7 +481,7 @@ export function describeBlock(b: TaskBlock, stateCount: number, names?: string[]
     case OP.SET_STAGE:
       return `段号 = ${b.p0}`
     case OP.IF_STAGE:
-      return `如果 ${maskLabel(b.p1, false)} → 跳到 ${st(b.p2)}（不成立就往下走）`
+      return `如果 ${maskLabel(b.p1, false)}${b.p0 > 0 ? ` 连续 ${b.p0}ms` : ''} → 跳到 ${st(b.p2)}（不成立就往下走）`
     case OP.CLIMB:
       return `爬 ${b.p0} 节，车头抬过 ${(b.p1 / 10).toFixed(1)}° 又落回 ±${((b.p2 || 30) / 10).toFixed(1)}° 才算上去；否则跳回 ${st(b.p3)} 再来一遍`
     case OP.GOTO:
@@ -483,8 +494,8 @@ export function describeBlock(b: TaskBlock, stateCount: number, names?: string[]
 }
 
 /** 「哪几路」这一格是不是"白"的口径。★只有 **0x06 等条件 + 条件 11** 才是；
- *  「如果…就跳」(0x0D) 的掩码语义固定是"压黑"，而它的 `p0` 是**段号** ——
- *  段号正好等于 11 也是有的（第 11 段），光看 `p0` 会把标题误显示成"哪几路是白的"。 */
+ *  「如果…就跳」(0x0D) 的掩码语义固定是"压黑"，而它的 `p0` 是**满足时间(ms)** ——
+ *  那一格填 11（= 11ms）也是有的，光看 `p0` 会把标题误显示成"哪几路是白的"。 */
 function isWhiteMask(b: TaskBlock): boolean {
   return b.op === OP.WAIT_COND && b.p0 === COND.CH_WHITE
 }

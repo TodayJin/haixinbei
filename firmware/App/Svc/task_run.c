@@ -61,6 +61,17 @@ static uint32_t s_elapsed;
  *   「等条件」会继承上一块的起始时刻、第二块当场就"持续够久"了。 */
 static uint8_t  s_hold_run;
 static uint32_t s_hold_from;
+/* ★「如果…就跳」的满足时间（`TASK_OP_IF_STAGE` 的 p0，用户 2026-10-10："加上滤波，就是
+ *   满足时间，默认 100ms"）。**刻意不复用上面的 s_hold_run**，因为 0x0D 是"看一眼就走"：
+ *   成立/不成立都返回 1 ⇒ 解释器 `s_idx++` 并把 `s_started = 0`，下一遍重进这一块时
+ *   TaskRun_Tick 的 `if (!s_started) s_hold_run = 0` 会把计时清零 —— 拿它计时永远到不了。
+ *   这里用独立计时器，时基是 `s_now`（毫秒），所以"一拍里主页 body 被走几遍"
+ *   （GOTO 自环 + TICK_MAX_BLOCKS）都不影响读数。
+ *   `s_if_dn` = 正在计时的是**哪一次分派**（s_dispatch_n）；换了下一条判断就重新计时。
+ *   p0 = 0 ⇒ 需持续 0ms ⇒ 本拍成立即分派，**与加这个功能之前逐字节等价**（老任务 p0 全是 0）。 */
+static uint8_t  s_if_run;
+static uint32_t s_if_from;
+static uint8_t  s_if_dn;
 static float    s_dist_mm;
 static uint16_t s_cross_n;
 static uint8_t  s_cross_last;
@@ -425,25 +436,49 @@ static int block_step(const task_block_t *b)
         /* ★主页的分派判断（旧代码 `if (8路全黑 && black_num==N) {...} else if ...`）：
          *   **这是第几条判断** = 块在主页循环体里的下标（`s_idx`）；**现在是第几次压线** =
          *   `s_dispatch_n`（每成功分派一次 +1）—— 两者相等才有资格成立。
-         *   ⇒ 用户**不用填任何序号**（用户 2026-10-10 定案：手填的段号那一格删掉），
-         *     只填"哪几路压黑 + 跳到哪"；`p0` 已废弃、不再读。
+         *   ⇒ 用户**不用填任何序号**：只填"哪几路压黑 + 跳到哪"。
          *   不成立就**往下走一块**，这就是"看一眼就走"，也是主页能并排写 N 条的原因
          *   （0x06「等条件」会停在那里等，写不了分派）。
          *   判据复用 ch_black()，与条件 10 是同一份；掩码 0 当不成立（空真陷阱）；
-         *   目标状态号越界也当不成立（绝不越界跳）。 */
-        uint16_t m = (uint16_t)b->p1 & 0xFFu;
+         *   目标状态号越界也当不成立（绝不越界跳）。
+         *
+         * ★★`p0` = **满足时间（毫秒）**（用户 2026-10-10："加上滤波，就是满足时间，默认 100ms"）。
+         *   为什么需要它：探头排是横着装，**十字路口的横向黑线与探头排平行 ⇒ 8 路也会同时压黑**，
+         *   与"骑上障碍的黑砂面"是同一个信号；路口那一下很短（3.8cm 线 @1m/s ≈ 38ms），
+         *   而障碍前的黑带面积大得多 ⇒ 要求"连续成立 ≥ p0 毫秒"就能把路口滤掉。
+         *   · `p0 = 0` ⇒ 不滤波（本拍成立即分派）—— **与加这个功能之前逐字节等价**（老任务 p0 全是 0）。
+         *   · 中途断一次就**重新计时**（与 0x06「需持续」同一口径）。
+         *   · 计时用 s_now（毫秒），不是"被走了多少次"—— GOTO 自环让一拍里 body 会被走好几遍
+         *     （TICK_MAX_BLOCKS），按次数计会快好几倍。
+         *   · 时间没到之前本块仍然"往下走"，所以主页不会因此卡住。 */
+        uint16_t m    = (uint16_t)b->p1 & 0xFFu;
+        uint32_t need = (uint32_t)b->p0;         /* 满足时间 ms（0 = 不滤波） */
         uint8_t  i;
 
         if (s_phase != 1u || s_idx != (uint16_t)s_dispatch_n) {
             return 1;                            /* 还没轮到这一条（或不在循环体里）⇒ 往下走 */
         }
         if (m == 0u) {
+            s_if_run = 0u;
             return 1;
         }
         for (i = 0u; i < 8u; i++) {
             if ((m & (uint16_t)(1u << i)) != 0u && ch_black(i) == 0u) {
+                s_if_run = 0u;                   /* 断了 ⇒ 这一轮作废，下次重记起点 */
                 return 1;                        /* 勾中的某一路没压黑 ⇒ 这条不成立，往下走 */
             }
+        }
+        /* 条件成立 */
+        if (need != 0u) {
+            if (s_if_run == 0u || s_if_dn != s_dispatch_n) {
+                s_if_run  = 1u;
+                s_if_from = s_now;               /* 这一拍刚开始连续成立 */
+                s_if_dn   = (uint8_t)s_dispatch_n;
+            }
+            if ((uint32_t)(s_now - s_if_from) < need) {
+                return 1;                        /* 还没持续够 ⇒ 这一拍先不分派，往下走 */
+            }
+            s_if_run = 0u;                       /* 分派了：下一条判断重新计时 */
         }
         if (b->p2 < s_n_states) {
             if (s_dispatch_n < 0xFFu) {
@@ -544,6 +579,9 @@ int TaskRun_Start(uint16_t id)
     s_turn_target = 0.0f;
     s_hold_run  = 0u;                            /* 「需持续」计时：新任务从零开始 */
     s_hold_from = 0u;
+    s_if_run    = 0u;                            /* ★「如果…就跳」的满足时间计时：同样从零开始 */
+    s_if_from   = 0u;
+    s_if_dn     = 0xFFu;
     s_stage     = 0u;                            /* ★段号清 0：主页从"第 0 段"开始分派 */
     s_dispatch_n    = 0u;                        /* ★分派计数清 0：主页从第 1 条判断开始 */
     s_climb_on      = 0u;                        /* ★爬台阶会话：新任务从零开始 */
