@@ -49,7 +49,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { COND, MODE, OP, crc16Ccitt, encodeTask, validateTask, type TaskBlock } from '../task'
-import { loadTaskFile } from '../taskedit'
+import { crossingMarks, dispatchNOfState, loadTaskFile } from '../taskedit'
 
 const file = loadTaskFile(readFileSync(new URL('./quancheng-v4.json', import.meta.url), 'utf8'))
 const task = file.tasks[0]
@@ -368,5 +368,37 @@ describe('全程 v4（quancheng-v4.json）：逐句对照查出的 10 条问题�
     expect(Math.max(...speeds)).toBeLessThanOrEqual(7200)
     expect(7200 - 7000).toBe(200)
     expect((200 / 7200) * 100).toBeCloseTo(2.78, 1) // ≈2.8%
+  })
+
+  // ------------------------- ★「第几次 → 哪个状态」（2026-10-10 用户要求，界面左栏靠它高亮）
+  it('★「第几次 → 哪个状态」对得上：13 条判断各跳一个段状态，左栏据此高亮', () => {
+    // 背景：用户要"从主页跳出来、当我切换到对应的状态时，要在左边那一栏显示是第几次"。
+    // 界面靠 `CrossingMark.target` 判 —— **新版「主页分派」下判断块都坐在主页里**
+    // （`m.state` 全是主页），必须用"它跳到的状态"(`p2`) 才能跟"现在显示的是哪个状态"
+    // 对上；老写法（条件散在各状态里）才是 `m.state`。搞错的话每个段状态一个入口都取不到。
+    const marks = crossingMarks(prog)
+
+    expect(marks).toHaveLength(13)
+    // 每条判断记下的 target = 它跳到的状态
+    expect(marks.map((m) => m.target)).toEqual(ifs.map((b) => b.p2))
+    // 13 条各跳一个**不同的**段状态 ⇒「状态 ↔ 第几次」是一一对应的
+    const targets = marks.map((m) => m.target)
+    expect(new Set(targets).size).toBe(13)
+    expect(targets.every((t) => t >= 1 && t < states.length)).toBe(true)
+
+    // 正查：状态 1 是「上台阶」，正是第 1 条判断的目标
+    expect(dispatchNOfState(marks, 1)).toBe(1)
+    // 反查：每条判断的 target 都能查回它自己的序号
+    for (const m of marks) expect(dispatchNOfState(marks, m.target)).toBe(m.n)
+
+    // 主页不是被哪条判断"分派"进去的 ⇒ 没有序号（界面上就不该亮、不该有徽章）
+    expect(dispatchNOfState(marks, prog.main)).toBeUndefined()
+    // 「过减速带」也不进主页判断（它的入口是条件 3「又看见黑线」，由「栅栏右转」直接跳进去）
+    // ⇒ 同样没有"第几次"。★这条正好钉住"14 段里只有 13 段有入口"这个账。
+    expect(dispatchNOfState(marks, 5)).toBeUndefined()
+    // 换个说法：14 个段状态里，恰好 13 个有"第几次"（缺的就是过减速带）
+    const withN = states.map((_, i) => i).filter((i) => dispatchNOfState(marks, i) !== undefined)
+    expect(withN).toHaveLength(13)
+    expect(withN).not.toContain(5)
   })
 })

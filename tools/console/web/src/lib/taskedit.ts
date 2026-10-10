@@ -803,6 +803,11 @@ export interface CrossingMark {
   mask: number
   /** true = 条件 11「哪几路是白的」；false = 条件 10「哪几路是黑的」 */
   white: boolean
+  /** ★这个压线块**守的是哪个状态**（用户 2026-10-10："从主页跳出来，要能看出是第几次"）：
+   *   · 新版「主页分派」= 那条「如果…就跳」的 `p2`（**它跳到的状态**）；
+   *   · 老版 = 条件所在的状态（条件在哪个状态里就守哪个）。
+   *  界面上的「第 n 次 → 哪个状态」全靠它。**纯静态，不进镜像、不依赖固件状态。** */
+  target: number
 }
 
 /** 按「状态 0..N，每个状态先 enter 后 body」的顺序给每个压线入口编号。
@@ -820,7 +825,7 @@ export function crossingMarks(p: TaskProgram): CrossingMark[] {
     home.body.forEach((b, index) => {
       if (b.op !== OP.IF_STAGE) return
       n += 1
-      out.push({ n, state: p.main, seq: 'body', index, mask: b.p1 & 0xff, white: false })
+      out.push({ n, state: p.main, seq: 'body', index, mask: b.p1 & 0xff, white: false, target: b.p2 })
     })
     return out
   }
@@ -830,7 +835,7 @@ export function crossingMarks(p: TaskProgram): CrossingMark[] {
       st[seq].forEach((b, index) => {
         if (!isCrossingBlock(b)) return
         n += 1
-        out.push({ n, state, seq, index, mask: b.p1 & 0xff, white: isWhiteMask(b) })
+        out.push({ n, state, seq, index, mask: b.p1 & 0xff, white: isWhiteMask(b), target: state })
       })
     })
   })
@@ -847,9 +852,19 @@ export function crossingIndexOf(
   return marks.find((m) => m.state === state && m.seq === seq && m.index === index)?.n
 }
 
-/** 某个状态里的压线入口（按出现顺序）—— 用来在状态卡片上写"入口：第 4 次压线 · 8 路全压黑" */
+/** 某个状态的**压线入口**（= 守这个状态的那些压线块），按出现顺序。
+ *  用来在状态卡片上写「压线入口：第 4 次 · 8 路全压黑」。
+ *
+ *  ★2026-10-10 起按 `mark.target` 过滤而**不是** `mark.state`：新版「主页分派」下判断块
+ *  都坐在主页里（`m.state` 全是主页），按 `m.state` 过滤的话每个段状态的卡片一个入口都取不到。 */
 export function crossingsOfState(marks: CrossingMark[], state: number): CrossingMark[] {
-  return marks.filter((m) => m.state === state)
+  return marks.filter((m) => m.target === state)
+}
+
+/** 状态 `state` 是"**第几次判断**"进来的（1 基）；不是被压线判断分派进来的返回 undefined。
+ *  用户 2026-10-10："从主页跳出来，当我切换到对应的状态时，要在左边那一栏显示是第几次"。 */
+export function dispatchNOfState(marks: CrossingMark[], state: number): number | undefined {
+  return crossingsOfState(marks, state)[0]?.n
 }
 
 /** 掩码 → 人话：「8 路全压黑」「第 1~5 路压黑」「第 4、8 路压黑」 */

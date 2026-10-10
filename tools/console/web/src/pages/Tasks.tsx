@@ -41,6 +41,7 @@ import {
   crossingIndexOf,
   crossingMarks,
   crossingsOfState,
+  dispatchNOfState,
   decodeDrag,
   defaultsFor,
   describeBlock,
@@ -503,6 +504,8 @@ function StateCard({
 }) {
   const st = prog.states[i]
   const cross = crossingsOfState(marks, i)
+  /** 这个状态是主页第几条判断跳进来的（老写法：条件就坐在这个状态里） */
+  const crossN = dispatchNOfState(marks, i)
   const isMain = prog.main === i
   const live = cur?.state === i
   const seqs: Array<[SeqName, string]> = [
@@ -520,6 +523,7 @@ function StateCard({
           onChange={(e) => upd((p) => renameState(p, i, e.target.value))}
         />
         {isMain && <Badge tone="mint">主页</Badge>}
+        {!isMain && crossN !== undefined && <Badge tone="cyan">第 {crossN} 次判断进来</Badge>}
         <span className="text-[11px] text-slate-600">
           {st.enter.length}+{st.body.length} 块 · 名字 {nameBytes(st.name)}/32 B
         </span>
@@ -630,12 +634,28 @@ export function TasksPage() {
       }
     }
     void tick()
-    const id = window.setInterval(() => void tick(), 1000)
+    /* ★「监视」打开时把轮询加快（用户 2026-10-10："打开监控后要实时跟踪"）：
+       1s 一拍跟手性不够（换状态最多要等 1 秒才反映出来），监视时提到 250ms(4Hz)。
+       **关掉监视就回到 1s** —— 只影响这一个页面，不碰固件、不碰别的页。 */
+    const id = window.setInterval(() => void tick(), monitor ? 250 : 1000)
     return () => {
       alive = false
       window.clearInterval(id)
     }
   }, [monitor])
+
+  /* ★「监视」打开时：界面跟着车跑（用户 2026-10-10）。
+     车一**换状态**就把显示切过去 —— 中栏那张卡片自动换成正在跑的状态，绿框随之出现。
+     没有这个的话，中栏只渲染"你选中的那一个状态"，车跑到别处就只剩一个小绿点，看不出跑到哪。
+     ★只在状态**真的变了**时才切（followed 记着上次的）：否则每一拍都会把用户的手动选择
+     抢回来，想边跑边看别的状态就看不成了。 */
+  const followed = React.useRef<number | null>(null)
+  React.useEffect(() => {
+    if (!monitor || !status?.running) return
+    if (followed.current === status.state) return
+    followed.current = status.state
+    setSelState(status.state)
+  }, [monitor, status?.running, status?.state])
 
   /* 拖到一半放手（丢在空白处/参数区、按 Esc、拖出窗口）时蓝线必须自己消失：
      只在 DropLine 的 onDrop 里清是不够的 —— 没落在任何蓝线上时浏览器只发 dragend，
@@ -1056,20 +1076,29 @@ export function TasksPage() {
               主页上「第几次判断」的清单 —— 点一行跳到那一块。
             </div>
             <div className="grid gap-0.5">
-              {crossMarks.map((m) => (
-                <button
-                  key={m.n}
-                  className="flex items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] hover:bg-white/[0.04]"
-                  onClick={() => {
-                    setSelState(m.state)
-                    setOpen({ state: m.state, seq: m.seq, index: m.index })
-                  }}
-                  title={`第 ${m.n} 次判断（在「${stateLabel(m.state, stateNames)}」里）：条件 = ${m.white ? '哪几路是白的' : '哪几路是黑的'} ${maskLabel(m.mask, m.white)}`}
-                >
-                  <span className="num w-9 shrink-0 text-neon-cyan/80">第{m.n}次</span>
-                  <span className="min-w-0 flex-1 truncate text-slate-500">{maskLabel(m.mask, m.white)}</span>
-                </button>
-              ))}
+              {crossMarks.map((m) => {
+                /* ★这一行是不是"当前显示的那个状态"的入口（用户 2026-10-10："从主页跳出来、
+                   当我切换到对应的状态时，要在左边那一栏显示是第几次"）。
+                   口径是**当前选中的状态** ⇒ 手动点状态会亮，开着监视时界面跟着车跑、车跑到哪就亮哪一行。 */
+                const hot = m.target === activeState
+                return (
+                  <button
+                    key={m.n}
+                    className={`flex items-center gap-1.5 rounded px-1 py-0.5 text-left text-[11px] ${
+                      hot ? 'bg-neon-mint/15 text-neon-mint ring-1 ring-neon-mint/50' : 'hover:bg-white/[0.04]'
+                    }`}
+                    onClick={() => {
+                      setSelState(m.state)
+                      setOpen({ state: m.state, seq: m.seq, index: m.index })
+                    }}
+                    title={`第 ${m.n} 次判断：条件 = ${m.white ? '哪几路是白的' : '哪几路是黑的'} ${maskLabel(m.mask, m.white)} ⇒ 跳到「${stateLabel(m.target, stateNames)}」`}
+                  >
+                    <span className={`num w-9 shrink-0 ${hot ? '' : 'text-neon-cyan/80'}`}>第{m.n}次</span>
+                    <span className={`min-w-0 flex-1 truncate ${hot ? '' : 'text-slate-500'}`}>{maskLabel(m.mask, m.white)}</span>
+                    <span className={`shrink-0 ${hot ? '' : 'text-slate-600'}`}>→ {stateLabel(m.target, stateNames)}</span>
+                  </button>
+                )
+              })}
             </div>
           </Card>
         )}
@@ -1234,7 +1263,7 @@ export function TasksPage() {
                 title={prog.main === i ? `任务启动时从这个状态开始（${stateLabel(i, stateNames)}）` : stateLabel(i, stateNames)}
                 className={`flex items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] ${
                   activeState === i ? 'border-neon-cyan/50 bg-neon-cyan/10 text-neon-cyan' : 'border-white/10 text-slate-400 hover:border-neon-cyan/30'
-                }`}
+                }${!!cur && cur.state === i ? ' ring-1 ring-neon-mint/60' : ''}`}
               >
                 {prog.main === i && <Badge tone="mint">主页</Badge>}
                 <span className="num text-slate-500">{i}</span>
@@ -1242,6 +1271,16 @@ export function TasksPage() {
                 <span className="num text-slate-600">
                   {prog.states[i].enter.length}+{prog.states[i].body.length}
                 </span>
+                {(() => {
+                  /* ★「第 n 次」小徽章（用户 2026-10-10 要）：主页第 n 条判断跳进来的状态就标 n，
+                     不用滚左栏也能看出"这个状态是第几次出来的"。 */
+                  const n = dispatchNOfState(crossMarks, i)
+                  return n === undefined ? null : (
+                    <span className="shrink-0 rounded bg-neon-cyan/15 px-1 text-[10px] text-neon-cyan" title={`这个状态是主页第 ${n} 条判断跳进来的`}>
+                      第{n}次
+                    </span>
+                  )
+                })()}
                 {!!cur && cur.state === i && <span className="h-1.5 w-1.5 rounded-full bg-neon-mint" title="正在跑这个状态" />}
               </button>
             ))}
