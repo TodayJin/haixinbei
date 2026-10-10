@@ -297,7 +297,9 @@ describe('全程 v4（quancheng-v4.json）：逐句对照查出的 10 条问题�
     const a5 = st('上台阶')
     expect(a5.body.some((b) => b.op === OP.ACTION && b.p0 === 5)).toBe(false)
     const i5 = a5.body.findIndex((b) => b.op === OP.SET_SERVO)
-    expect(i5).toBe(7) // 主页分派把 S0 的入口条件搬走后，下标 8→7；展开块仍占 7 块
+    // 下标：主页分派把 S0 的入口条件搬走后 8→7；★2026-10-10 又在 body[1] 插了段1 的
+    // 「8 路全黑」门（与 renwu.c 逐段核对后补回），后面的全体 +1 ⇒ 7→8。展开块仍占 7 块。
+    expect(i5).toBe(8)
     const seq5 = a5.body.slice(i5, i5 + 7).map((b) => [b.op, b.p0, b.p1])
     expect(seq5).toEqual([
       [OP.SET_SERVO, 1, 135], [OP.SET_SERVO, 2, 170],
@@ -358,8 +360,11 @@ describe('全程 v4（quancheng-v4.json）：逐句对照查出的 10 条问题�
     // v4 用 7000（97.2%）。7000 是用户设定的 HP_TASK_SPEED，本次**不动数值**，
     // 只在 docs/全程v4修订说明.md 里记一句"整体慢约 2.8%"。
     const speeds = allBlocks.filter((b) => b.op === OP.SET_SPEED).map((b) => b.p0)
-    // 12 = 原来 11 处 + 主页进门块里的"设定速度 7000"（主页分派把它提到最前面了）
-    expect(speeds.filter((x) => x === 7000).length).toBe(12)
+    // 13 = 原来 11 处 + 主页进门块里的"设定速度 7000"（主页分派把它提到最前面了）
+    //      + ★2026-10-10 补回的段28「停车 → 速度7000 → 角度环」里的那一块
+    //        （老 renwu.c L935-938：Load(0,0) 之后是 Toggle_Gyro_Control(1,900,900) =
+    //        前进 7000 轰 10 秒；v4 原来缺这一段，那 10 秒车一直在倒车）
+    expect(speeds.filter((x) => x === 7000).length).toBe(13)
     expect(Math.max(...speeds)).toBeLessThanOrEqual(7200)
     expect(7200 - 7000).toBe(200)
     expect((200 / 7200) * 100).toBeCloseTo(2.78, 1) // ≈2.8%
