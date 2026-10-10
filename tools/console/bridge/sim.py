@@ -499,6 +499,7 @@ class SimCar:
     # 单条 ≤ TASK_STORE_CAP 4096 B（= pr.TASK_SLOT_BYTES，解释器 RAM 上限）。
     TASK_SLOTS = 8
     TASK_PROG_BYTES = 6144
+    FAKE_BLOCK_MS = 300          # 假任务"每块走多久"（纯为让界面动起来，不参与任何真逻辑）
 
     def _task_status_payload(self) -> bytes:
         return pr.payload_task_status(self.task_run)
@@ -626,12 +627,43 @@ class SimCar:
         self._task_stop_run()
         self._ack(seq, pr.ST_OK)
 
+    def _prog_shape(self, buf: bytes) -> list[tuple[int, int]]:
+        """从任务镜像里读出"每个状态各有多少块" —— 照固件口径（task_prog.h）：
+
+        `TASK_HDR_LEN=12`、`TASK_STATE_LEN=8`，每状态 8 字节 =
+        `name_off u16 | enter_off u16 | body_off u16 | n_enter u8 | n_body u8`。
+        """
+        if len(buf) < 12 or pr.u16(buf, 0) != 0x4B54:
+            return []
+        n = buf[3]
+        if n == 0 or len(buf) < 12 + n * 8:
+            return []
+        return [(buf[12 + i * 8 + 6], buf[12 + i * 8 + 7]) for i in range(n)]
+
     def _task_tick(self, now_ms: int):
-        """假任务往前走：状态/块号一变就推一帧，没变时 1Hz 心跳（和固件同口径）。"""
+        """假任务往前走：状态/块号一变就推一帧，没变时 1Hz 心跳（和固件同口径）。
+
+        ★2026-10-10 修：以前是 `block = 已跑毫秒 // 400`、`state` 写死 1 ——
+        块号会涨到任务根本没有的地方（在"上台阶只有 18 块"的任务上实测报到 **第 77 块**），
+        拿它调界面时看到的是假数字。
+        现在**照这份任务镜像的真实状态表逐块走**（每块 `FAKE_BLOCK_MS` 毫秒，走完循环）：
+          · 块号永远落在该状态的真实块数之内（enter/body 分开算，和固件的 `s_idx` 同口径）；
+          · 状态号在 0..n-1 之内，并且会真的换状态 ⇒ 界面上的「监控跟随」也能在模拟器里试。
+        它**仍然是假的**（没有真解释器，不跑块），只是不再报出结构上不可能的数字。
+        """
         st = self.task_run
         if st["running"]:
             st["elapsed_ms"] = max(0, int(now_ms - self.task_run_t0))
-            st["block"] = int(st["elapsed_ms"] // 400)
+            shape = self._prog_shape(self.tasks.get(st["id"], b""))
+            total = sum(ne + nb for ne, nb in shape)
+            if total:
+                k = (st["elapsed_ms"] // self.FAKE_BLOCK_MS) % total
+                for si, (ne, nb) in enumerate(shape):
+                    if k < ne + nb:
+                        # 和固件一样的口径：block = 在当前序列（enter/body）里的下标
+                        st["state"], st["block"] = si, (k if k < ne else k - ne)
+                        break
+                    k -= ne + nb
         sig = (st["id"], st["state"], 1 if st["running"] else 0, st["block"])
         if sig != self.task_sig or now_ms - self.task_last_push >= 1000:
             self.task_sig = sig

@@ -1140,19 +1140,19 @@ export function TasksPage() {
           }
         >
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <Stat label="镜像长度" value={String(info.len)} unit="B" hint={`车上程序区 6 KB 里占 ${info.budgetPct}%`} />
-            <Stat label="校验和" value={`0x${info.crc16.toString(16).toUpperCase().padStart(4, '0')}`} hint="从头 12 字节之后算起，烧完和车上回读的对比" />
-            <Stat label="状态 / 块" value={`${prog.states.length} / ${blockCount(prog)}`} hint={`主页（任务从这里开始）= ${stateLabel(prog.main, stateNames)}`} />
+            <Stat label="镜像长度" value={String(info.len)} unit="B" hint={`车上 6 KB 里占 ${info.budgetPct}%`} />
+            <Stat label="校验和" value={`0x${info.crc16.toString(16).toUpperCase().padStart(4, '0')}`} hint="头 12 字节之后算起" />
+            <Stat label="状态 / 块" value={`${prog.states.length} / ${blockCount(prog)}`} hint={`主页 = ${stateLabel(prog.main, stateNames)}`} />
             <Stat
               label="烧到哪个槽"
               value={plan.kind === 'full' ? '没空槽' : `#${plan.slot}${plan.kind === 'same-name' ? ' 覆盖' : ' 空槽'}`}
               tone={plan.kind === 'full' ? 'rose' : plan.kind === 'same-name' ? 'amber' : 'slate'}
               hint={
                 plan.kind === 'full'
-                  ? '车上 8 个槽都满了，先删一个'
+                  ? '8 个槽都满了，先删一个'
                   : plan.kind === 'same-name'
-                    ? '车上有同名任务：烧写=覆盖它'
-                    : '车上没有同名任务：写进第一个空槽'
+                    ? '有同名任务：覆盖它'
+                    : '写进第一个空槽'
               }
               title={describeSlotPlan(plan, task.name)}
             />
@@ -1160,7 +1160,7 @@ export function TasksPage() {
 
           {supported && (
             <div
-              className={`mt-2 rounded-lg p-2 text-[11px] leading-relaxed ${
+              className={`mt-1.5 rounded-lg px-2 py-1 text-[11px] leading-snug ${
                 plan.kind === 'full'
                   ? 'bg-neon-rose/10 text-neon-rose'
                   : plan.kind === 'same-name'
@@ -1169,35 +1169,21 @@ export function TasksPage() {
               }`}
             >
               {describeSlotPlan(plan, task.name)}
-              {sameNameInEditor > 1 && (
-                <>
-                  {' '}
-                  <b>编辑器里有 {sameNameInEditor} 条同名任务</b> —— 它们都算"同一个任务"、都烧到这个槽，
-                  后烧的覆盖先烧的。
-                </>
-              )}
-              {nameOver && (
-                <>
-                  {' '}
-                  名字有 {nameBytes(task.name)} 字节，车上目录页只存得下 {CAR_NAME_MAX} 字节 —— 会存成「
-                  {fitCarName(task.name)}」。
-                </>
-              )}
-              {plan.kind !== 'full' && <span className="text-slate-500">（点「烧写到车」会先重读一次车上目录再定槽位。）</span>}
+              {sameNameInEditor > 1 && <>　编辑器里另有 {sameNameInEditor - 1} 条同名，都烧到同一槽</>}
+              {nameOver && <>　名字超长，车上存成「{fitCarName(task.name)}」</>}
             </div>
           )}
 
           {status?.running && (
-            <div className="mt-2 rounded-lg bg-neon-mint/10 p-2 text-[11px] text-neon-mint">
-              正在跑：任务 #{status.id} · {stateLabel(status.state, stateNames)} · 第 {status.block} 块 · 已跑 {status.elapsedMs} ms
-              <span className="text-neon-amber">　跑着的时候车上拒收「烧写到车」和「删除」——先按「停车」。</span>
+            <div className="mt-1.5 rounded-lg bg-neon-mint/10 px-2 py-1 text-[11px] text-neon-mint">
+              正在跑 #{status.id} · {stateLabel(status.state, stateNames)} · 第 {status.block} 块 · {status.elapsedMs} ms
             </div>
           )}
 
           {info.errors.length > 0 && (
-            <div className="mt-2 rounded-lg bg-neon-rose/10 p-2">
-              <div className="mb-1 flex items-center gap-1.5 text-[12px] text-neon-rose">
-                <AlertTriangle size={13} /> 固件会拒收这 {info.errors.length} 条（烧写按钮已禁用）
+            <div className="mt-1.5 rounded-lg bg-neon-rose/10 px-2 py-1">
+              <div className="flex items-center gap-1.5 text-[11px] text-neon-rose">
+                <AlertTriangle size={12} /> 固件会拒收这 {info.errors.length} 条
               </div>
               <ul className="ml-4 list-disc text-[11px] text-neon-rose/90">
                 {info.errors.map((e) => (
@@ -1207,8 +1193,8 @@ export function TasksPage() {
             </div>
           )}
           {info.warnings.length > 0 && (
-            <div className="mt-2 rounded-lg bg-neon-amber/10 p-2">
-              <div className="mb-1 text-[12px] text-neon-amber">能编过，但多半不是本意：</div>
+            <div className="mt-1.5 rounded-lg bg-neon-amber/10 px-2 py-1">
+              <div className="text-[11px] text-neon-amber">能编过，但多半不是本意：</div>
               <ul className="ml-4 list-disc text-[11px] text-neon-amber/90">
                 {info.warnings.map((w) => (
                   <li key={w}>{w}</li>
@@ -1217,16 +1203,8 @@ export function TasksPage() {
             </div>
           )}
           {info.errors.length === 0 && info.warnings.length === 0 && (
-            <div className="mt-2 text-[11px] text-slate-500">校验通过，可以烧。{busy ? `（${busy}中…）` : ''}</div>
+            <div className="mt-1.5 text-[11px] text-slate-500">校验通过，可以烧。{busy ? `（${busy}中…）` : ''}</div>
           )}
-          <div className="mt-2 text-[10px] leading-relaxed text-slate-600">
-            车上只认二进制。任务名随 COMMIT 帧一起下发、存在车上目录页里（见 docs/任务编程.md §5）；
-            烧写后会立刻回读比对，不一致会红字报出来。
-            <br />
-            烧到哪个槽的规则：车上有<b>同名</b>任务就覆盖它那个槽（不会多出一条副本）；没有同名就写进
-            <b>第一个空槽</b>；8 个槽全满又没有同名会被拦下来，先删一个再烧。
-            跑任务：车上按任务页中键（离线），或这里按「开始」跑车上那个槽。
-          </div>
         </Card>
 
         <Card
