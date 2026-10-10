@@ -56,7 +56,7 @@ export type FieldKey = 'p0' | 'p1' | 'p2' | 'p3' | 'flags'
  *  - `condjump` ★「等条件」满足后去哪（存 `flags` 的 bit7 + 低 7 位；见 task.ts 的 WAIT_COND_JUMP_ON）
  *  - `hold`     ★「等条件」的「需持续」（存**同一个** `flags` 的低 7 位，只在 bit7 = 0 时有效；
  *                见 `waitCondHoldMs()` / `withWaitCondHoldMs()`；渲染在 `pages/Tasks.tsx` 的 HoldField） */
-export type FieldKind = 'int' | 'mode' | 'cond' | 'state' | 'servo' | 'chmask' | 'condjump' | 'hold'
+export type FieldKind = 'int' | 'mode' | 'cond' | 'state' | 'servo' | 'chmask' | 'condjump' | 'hold' | 'action'
 
 export interface FieldSpec {
   key: FieldKey
@@ -181,7 +181,7 @@ export const OP_SPECS: OpSpec[] = [
       { key: 'p2', label: '容差', hint: '误差比它小就算"转到位了"，单位 0.1°：填 10 = 允许差 1.0°。', kind: 'int', lo: 0, hi: 100, unit: '0.1°' },
     ],
   },
-  { op: OP.ACTION, name: 'ACTION', label: '舵机动作', group: '动作', doc: '按**编号**播车上那套舵机动作；角度由「舵机与动作」页的动作表决定（不在这里填）', fields: [{ key: 'p0', label: '动作号', hint: '车上动作表里的第几套（**1~20**）。角度不在这儿填：第 N 号对应哪两路角度，去「舵机与动作」页看/改，改完写回车，这里跟着变。', kind: 'int', lo: 1, hi: 20 }, { key: 'p2', label: '之后等待', hint: '动作播完后先等这么久再往下走（舵机自己在动，程序不等它）。', kind: 'int', lo: 0, hi: 60000, unit: 'ms' }] },
+  { op: OP.ACTION, name: 'ACTION', label: '舵机动作', group: '动作', doc: '按**编号**播车上那套舵机动作；角度由「舵机与动作」页的动作表决定（不在这里填）', fields: [{ key: 'p0', label: '动作', hint: '**下拉里直接写动作名**，不用记编号。名字来自车上的动作表 —— 去「舵机与动作」页改名、写回车，这里跟着变。**1~20 号，15~20 是空位**。角度不在这儿填。', kind: 'action', lo: 1, hi: 20 }, { key: 'p2', label: '之后等待', hint: '动作播完后先等这么久再往下走（舵机自己在动，程序不等它）。', kind: 'int', lo: 0, hi: 60000, unit: 'ms' }] },
   { op: OP.CAL_SET, name: 'CAL_SET', label: '切换灰度标定套', group: '流程', doc: '换用另一套 8 路黑白标定（同一个探头，两种地面/反光条件各标一套）', fields: [{ key: 'p0', label: '第几套', hint: '0 = 普通（宝丽布）；1 = 亚克力。两套标定要在车上分别标好（循迹页右键可预览另一套）。', kind: 'int', lo: 0, hi: 1 }] },
   { op: OP.SET_SERVO, name: 'SET_SERVO', label: '直接摆舵机', group: '动作', doc: '不经过动作表，直接给舵机一个角度', fields: [{ key: 'p0', label: '通道', hint: '车上的第 1 号或第 2 号舵机通道。', kind: 'servo', lo: 1, hi: 2 }, { key: 'p1', label: '角度', hint: '舵机摆到多少度（0~180），调试用。', kind: 'int', lo: 0, hi: 180, unit: '度' }] },
   { op: OP.WAIT_MS, name: 'WAIT_MS', label: '等待', group: '等待', doc: '死等一段时间，什么都不改', fields: [{ key: 'p0', label: '时间', hint: '等多久。1000 = 1 秒；等的时候车保持当前速度和模式继续跑。', kind: 'int', lo: 0, hi: 60000, unit: 'ms' }] },
@@ -456,7 +456,7 @@ export function speedPct(v: number): string {
 
 /** 一行摘要（列表、块卡片用）。同样只写人话：该带单位的带上，别只丢一个裸数字。
  *  names = 状态名（跳到哪个状态用名字说，别只给编号）。 */
-export function describeBlock(b: TaskBlock, stateCount: number, names?: string[]): string {
+export function describeBlock(b: TaskBlock, stateCount: number, names?: string[], actionNames?: string[]): string {
   const st = (n: number) => (n === NO_STATE ? '继续往下跑' : n < stateCount ? stateLabel(n, names) : `状态 ${n}（已不存在）`)
   switch (b.op) {
     case OP.SET_SPEED:
@@ -465,8 +465,12 @@ export function describeBlock(b: TaskBlock, stateCount: number, names?: string[]
       return b.p0 === MODE.WHEELS ? `两轮直给 左 ${b.p1} 右 ${b.p2}` : `模式：${modeLabel(b.p0)}`
     case OP.TURN_DEG:
       return `${b.flags & 1 ? '从当前朝向转' : '转到固定角度'} ${b.p1}°（±${(b.p2 / 10).toFixed(1)}° 内算到位，最多 ${b.p0}ms）`
-    case OP.ACTION:
-      return `摆第 ${b.p0} 套舵机动作${b.p2 ? `，然后等 ${b.p2}ms` : ''}`
+    case OP.ACTION: {
+      /* 动作名来自**车上动作表**（用户 2026-10-10："不要只显示一个动作号，要把对应的名字也显示出来"）。
+         拿不到表（没连车/表没加载）就退回只写编号 —— 不能因为查不到名字就不显示这一块。 */
+      const an = actionNames?.[b.p0 - 1]
+      return `摆第 ${b.p0} 套舵机动作${an ? `「${an}」` : ''}${b.p2 ? `，然后等 ${b.p2}ms` : ''}`
+    }
     case OP.SET_SERVO:
       return `${b.p0} 号舵机 → ${b.p1}°`
     case OP.WAIT_MS:
@@ -865,6 +869,19 @@ export function crossingsOfState(marks: CrossingMark[], state: number): Crossing
  *  用户 2026-10-10："从主页跳出来，当我切换到对应的状态时，要在左边那一栏显示是第几次"。 */
 export function dispatchNOfState(marks: CrossingMark[], state: number): number | undefined {
   return crossingsOfState(marks, state)[0]?.n
+}
+
+/** 「舵机动作」下拉的选项。**名字来自车上的动作表**（`/api/actions`），
+ *  用户在「舵机与动作」页改名并写回车后，这里跟着变。
+ *
+ *  故意用**结构类型**而不是 import `ActionItem`：只用到 n/name/a1/a2 四个字段，
+ *  不引 `lib/types` 能少一条依赖（也是这文件的风格 —— 它只依赖 `lib/task`）。 */
+export function actionChoices(items: { n: number; name: string; a1: number; a2: number }[] | null | undefined) {
+  return (items ?? []).map((a) => ({
+    value: a.n,
+    label: `${a.n} ${a.name}`,
+    hint: `1 号舵机 ${a.a1}° · 2 号舵机 ${a.a2}°`,
+  }))
 }
 
 /** 掩码 → 人话：「8 路全压黑」「第 1~5 路压黑」「第 4、8 路压黑」 */

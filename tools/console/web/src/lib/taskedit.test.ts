@@ -16,6 +16,7 @@ import {
   OP_SPECS,
   WAIT_COND_HOLD_MAX_MS,
   WAIT_COND_HOLD_UNIT_MS,
+  actionChoices,
   addState,
   addTaskDef,
   blockCount,
@@ -553,5 +554,33 @@ describe('编译预览', () => {
     expect(info.errors.some((e) => e.includes('最后一块'))).toBe(true);
     expect(info.warnings.some((w) => w.includes('没有名字'))).toBe(true);
     expect(info.warnings.some((w) => w.includes('没有 body'))).toBe(false);
+  });
+
+  it('★「舵机动作」那一格要带动作名，不能只给编号（用户 2026-10-10）', () => {
+    // 名字来自**车上的动作表**（/api/actions → useMeta().actions.items）。
+    // 下拉和块摘要都要显示它 —— 否则用户还得跑到「舵机与动作」页对着表数"第 5 号是哪个"。
+    const items = [
+      { n: 1, name: '收回', a1: 0, a2: 0 },
+      { n: 5, name: '台阶2收回', a1: 80, a2: 170 },
+    ];
+    const ch = actionChoices(items);
+    expect(ch).toHaveLength(2);
+    expect(ch[0]).toEqual({ value: 1, label: '1 收回', hint: '1 号舵机 0° · 2 号舵机 0°' });
+    expect(ch[1].label).toBe('5 台阶2收回');
+    // 表没读到（没连车 / 还没加载）⇒ 空数组，界面会退回数字输入（不能因此填不了）
+    expect(actionChoices(null)).toEqual([]);
+    expect(actionChoices(undefined)).toEqual([]);
+
+    // 摘要：拿得到名字就写出来；拿不到就退回只写编号（别留半截引号）
+    const names = ['收回', '打下准备', '打下1', '打下2', '台阶2收回'];
+    const withName = describeBlock(blk(OP.ACTION, 5, 0, 1500), 3, undefined, names);
+    expect(withName).toContain('摆第 5 套舵机动作');
+    expect(withName).toContain('「台阶2收回」');
+    expect(withName).toContain('然后等 1500ms');
+    const noName = describeBlock(blk(OP.ACTION, 5, 0, 1500), 3);
+    expect(noName).toContain('摆第 5 套舵机动作');
+    expect(noName).not.toContain('「');
+    // 编号超出名字表长度时也不能崩（动作表更新滞后于任务文件是可能的）
+    expect(describeBlock(blk(OP.ACTION, 20, 0, 0), 3, undefined, names)).toContain('摆第 20 套舵机动作');
   });
 });

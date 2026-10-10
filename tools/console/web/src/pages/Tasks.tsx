@@ -24,6 +24,7 @@ import {
   humanizeTaskError,
   planTaskSlot,
   store,
+  useMeta,
   type SlotPlan,
 } from '../lib/store'
 import { COND, MODE, OP, TASK_MAX_STATES, decodeTask, encodeTask, waitCondJumpTarget, withWaitCondJumpTarget, WAIT_COND_JUMP_ON, type TaskBlock, type TaskProgram } from '../lib/task'
@@ -33,6 +34,7 @@ import {
   EDIT_MAX_TASKS,
   OP_BY_CODE,
   OP_SPECS,
+  actionChoices,
   addState,
   addTaskDef,
   blockCount,
@@ -169,6 +171,10 @@ function FieldEditor({
   stateNames: string[]
   onChange: (patch: Partial<TaskBlock>) => void
 }) {
+  /* 动作名来自**车上的动作表**（用户 2026-10-10："不要只显示一个动作号，要把对应的名字也显示出来"）。
+     用 `useMeta` 而**不是** `useStore`：动作表是低频状态，没必要被 20Hz 遥测拖着重渲染
+     （store.ts 的注释也是这么分的：params/actions/presets 走 useMeta）。 */
+  const { actions } = useMeta()
   const spec = OP_BY_CODE.get(b.op)
   if (!spec) return <div className="text-[12px] text-neon-rose">这个块网页不认识（编号 {b.op}），固件会当非法程序拒收</div>
 
@@ -347,6 +353,36 @@ function FieldEditor({
               </select>,
             )
           }
+          if (f.kind === 'action') {
+            /* ★下拉里**带动作名**（用户 2026-10-10）。光给编号的话，用户还得跑到「舵机与动作」页
+               对着表数"第 5 号到底是哪个"。名字和角度都来自车上那张表。
+               ★表没读到（没连车/还没加载）时退回数字输入 —— **不能因为查不到名字就填不了**。 */
+            const ch = actionChoices(actions?.items)
+            if (!ch.length) {
+              return fieldRow(
+                f,
+                <>
+                  <NumberField value={v} min={f.lo} max={f.hi} onChange={(nv) => setField(f.key, nv)} className="w-24" />
+                  <span className="text-[11px] text-neon-amber">没读到车上动作表 —— 只能填编号</span>
+                </>,
+              )
+            }
+            return fieldRow(
+              f,
+              <select
+                className="field flex-1"
+                value={v}
+                title={fieldLegend(f, b, stateCount, stateNames)}
+                onChange={(e) => setField(f.key, Number(e.target.value))}
+              >
+                {ch.map((c) => (
+                  <option key={c.value} value={c.value} title={c.hint}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>,
+            )
+          }
           if (f.kind === 'servo') {
             return fieldRow(
               f,
@@ -412,6 +448,8 @@ function BlockChip({
   onDuplicate: () => void
   onMove: (dir: -1 | 1) => void
 }) {
+  /* 摘要里也带动作名（同一份车上动作表） */
+  const { actions } = useMeta()
   const spec = OP_BY_CODE.get(b.op)
   return (
     <div
@@ -435,7 +473,7 @@ function BlockChip({
         )}
         <button className="min-w-0 flex-1 truncate text-left text-[12px] text-slate-200" onClick={onToggle} title="点一下改参数">
           <span className="text-neon-cyan/90">{spec?.label ?? `不认识的块（编号 ${b.op}）`}</span>
-          <span className="ml-1.5 text-slate-400">{describeBlock(b, stateCount, stateNames)}</span>
+          <span className="ml-1.5 text-slate-400">{describeBlock(b, stateCount, stateNames, (actions?.items ?? []).map((a) => a.name))}</span>
         </button>
         <button className="text-slate-600 hover:text-slate-300" title="左移" onClick={() => onMove(-1)}>
           <ArrowLeft size={12} />
