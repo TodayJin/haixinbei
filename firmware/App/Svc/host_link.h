@@ -108,7 +108,9 @@
                               HOST_CAP_TASK)
 
 #define HOST_PROTO_VERSION   2u      /* 协议版本：v2 加了扩展帧/动作表/驾驶/看门狗 */
-#define HOST_FW_VERSION      0x0002u /* 固件版本 0.0.2 */
+#define HOST_FW_VERSION      0x0003u /* 固件版本：HELLO 按"高字节.低字节.0"显示 ⇒ 0.3.0。
+                                      * v3 起 `TASK_OP_IF_STAGE` 的 `p0` 是**满足时间(ms)**
+                                      * （0 = 不滤波）——**老固件不读它**，所以烧任务前先看这里。 */
 
 /* ---------------- 生命周期 ---------------- */
 void host_link_init(void);                 /* 初始化 LPUART1 + 参数表，发一条启动横幅 */

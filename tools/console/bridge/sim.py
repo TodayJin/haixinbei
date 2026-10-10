@@ -298,7 +298,7 @@ class SimCar:
 
     def _hello(self, seq: int):
         p = bytearray(24)
-        p[0:2] = pr.pack_u16(0x0002)
+        p[0:2] = pr.pack_u16(0x0003)   # 跟固件 HOST_FW_VERSION 保持一致
         p[2] = 2
         p[4:6] = pr.pack_u16(_param_crc())
         p[6:8] = pr.pack_u16(self.hz)

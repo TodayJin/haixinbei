@@ -38,7 +38,7 @@ def test_hello_and_caps():
     assert h["proto"] == 2
     assert h["name"] == "quandi-car"
     assert h["caps"] == 0x7F | pr.CAP_TASK
-    assert h["fw_raw"] == 0x0002
+    assert h["fw_raw"] == 0x0003
     assert h["telem_hz"] == 50
 
 

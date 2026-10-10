@@ -141,7 +141,7 @@ def test_hello_from_real_firmware(pipe):
     assert hello is not None, "真固件没回 HELLO"
     h = pr.decode_hello(hello.payload)
     assert h["proto"] == 2
-    assert h["version"] == "0.2.0"
+    assert h["version"] == "0.3.0"   # HOST_FW_VERSION 0x0003：v3 起 IF_STAGE 的 p0 = 满足时间(ms)
     assert h["name"] == "quandi-car"
     # 固件默认遥测 200Hz（2026-10-05 定档：链路提到 921600 后 200Hz 只占约 15% 带宽，
     # 且 5ms 一格正好跟 200Hz 的控制环同拍；改默认值要连这条断言一起改）

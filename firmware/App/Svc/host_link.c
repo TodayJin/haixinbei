@@ -473,7 +473,7 @@ static void send_hello(uint8_t seq)
   uint32_t crc = param_table_crc();
   uint16_t hz = s_stats.telem_hz;
   memset(p, 0, sizeof(p));
-  p[0] = (uint8_t)(HOST_FW_VERSION & 0xFFu);   /* fw version 0x0002 */
+  p[0] = (uint8_t)(HOST_FW_VERSION & 0xFFu);   /* fw version 0x0003（v3 起 IF_STAGE 的 p0 = 满足时间 ms）*/
   p[1] = (uint8_t)(HOST_FW_VERSION >> 8);
   p[2] = (uint8_t)HOST_PROTO_VERSION;          /* proto version 2 */
   p[3] = 0x00;                                 /* reserved */
