@@ -106,6 +106,7 @@ class SimCar:
         self.task_run = {"id": 0xFFFF, "state": 0xFF, "running": False, "block": 0,
                          "elapsed_ms": 0, "flags": 0}
         self.task_run_t0 = 0
+        self.task_timeline: list[tuple[int, int, int]] = []   # 假任务的时间线（开跑时算，见 _prog_timeline）
         self.task_sig = None
         self.task_last_push = 0
 
@@ -500,6 +501,7 @@ class SimCar:
     TASK_SLOTS = 8
     TASK_PROG_BYTES = 6144
     FAKE_BLOCK_MS = 300          # 假任务"每块走多久"（纯为让界面动起来，不参与任何真逻辑）
+    FAKE_MAIN_MS = 800           # 假任务"每次回主页停多久"（主页是靠分派瞬间跳走的，给一点停留才看得见）
 
     def _task_status_payload(self) -> bytes:
         return pr.payload_task_status(self.task_run)
@@ -617,6 +619,8 @@ class SimCar:
         self.task_run = {"id": tid, "state": 1, "running": True, "block": 0,
                          "elapsed_ms": 0, "flags": 0}
         self.task_run_t0 = self.now
+        # ★开跑时把"假时间线"算好（按真实执行流排，见 _prog_timeline）
+        self.task_timeline = self._prog_timeline(self.tasks.get(tid, b""))
         self._ack(seq, pr.ST_OK)
 
     def _task_stop_run(self):
@@ -640,6 +644,65 @@ class SimCar:
             return []
         return [(buf[12 + i * 8 + 6], buf[12 + i * 8 + 7]) for i in range(n)]
 
+    def _gate_targets(self, buf: bytes) -> list[int]:
+        """主页循环体里那一串「如果…就跳」(`TASK_OP_IF_STAGE = 0x0D`) 各自跳到哪个状态，按出现顺序。
+
+        块头 10 字节：`op u8 | flags u8 | p0 u16 | p1 i16 | p2 u16 | p3 u16` ⇒ **p2 在 +6**。
+        """
+        if len(buf) < 12 or pr.u16(buf, 0) != 0x4B54:
+            return []
+        n, main = buf[3], buf[4]
+        if n == 0 or main >= n or len(buf) < 12 + n * 8:
+            return []
+        base = 12 + main * 8
+        boff, nb = pr.u16(buf, base + 4), buf[base + 7]
+        out: list[int] = []
+        for i in range(nb):
+            o = boff + i * 10
+            if o + 10 > len(buf):
+                break
+            if buf[o] == 0x0D:                       # TASK_OP_IF_STAGE
+                tgt = pr.u16(buf, o + 6)             # p2 = 目标状态
+                if tgt < n:
+                    out.append(tgt)
+        return out
+
+    def _prog_timeline(self, buf: bytes) -> list[tuple[int, int, int]]:
+        """把任务摊成假任务要依次经过的 `[(状态号, 该序列内第几块, 停多久ms), ...]`。
+
+        ★★**按真实执行流排，不是按镜像里块的物理顺序排**（用户指出的错）：
+            主页循环体那是一串**分派**判断 —— 固件在**一拍之内**把它们全走完，走到第 k 条成立
+            就 `seq_begin(目标)` **立刻跳走**，那些判断块**一点时间都不占**。
+            真正的顺序是：
+                主页(停 FAKE_MAIN_MS) → 状态A 的 enter 逐块 → 状态A 的 body 逐块
+                → 主页(停 FAKE_MAIN_MS) → 状态B … → 回到第一条，循环
+            所以这里**不把主页的块铺进时间线**，主页只作为"每次跳转之间的一小段停留"出现。
+        （以前是按物理顺序铺的 ⇒ 看起来像"主页 14 块全走完才轮到第一个状态"，那是假的。）
+        """
+        shape = self._prog_shape(buf)
+        if not shape:
+            return []
+        main = buf[4]
+        tl: list[tuple[int, int, int]] = []
+        for tgt in self._gate_targets(buf):
+            ne, nb = shape[tgt]
+            for k in range(ne):
+                tl.append((tgt, k, self.FAKE_BLOCK_MS))
+            for k in range(nb):
+                tl.append((tgt, k, self.FAKE_BLOCK_MS))
+            tl.append((main, 0, self.FAKE_MAIN_MS))     # 这一段做完，跳回主页再判下一条
+        if not tl:
+            # 没有分派门（**不是**"主页分派"写法）⇒ 退回按状态表的物理顺序铺。
+            # 这种任务本来就是"一个状态跑完接下一个"的顺序结构，所以这就是它的真实流。
+            # ★必须有这条兜底：否则块号永远不动 ⇒ _task_tick 的 sig 不变 ⇒ 一帧状态都不推
+            #   （test_task.py 那条 RUN→STATUS 的测试就是靠"内容变了推一帧"拿到状态的）。
+            for si, (ne, nb) in enumerate(shape):
+                for k in range(ne):
+                    tl.append((si, k, self.FAKE_BLOCK_MS))
+                for k in range(nb):
+                    tl.append((si, k, self.FAKE_BLOCK_MS))
+        return tl
+
     def _task_tick(self, now_ms: int):
         """假任务往前走：状态/块号一变就推一帧，没变时 1Hz 心跳（和固件同口径）。
 
@@ -654,16 +717,15 @@ class SimCar:
         st = self.task_run
         if st["running"]:
             st["elapsed_ms"] = max(0, int(now_ms - self.task_run_t0))
-            shape = self._prog_shape(self.tasks.get(st["id"], b""))
-            total = sum(ne + nb for ne, nb in shape)
+            tl = getattr(self, "task_timeline", None) or []
+            total = sum(d for _, _, d in tl)
             if total:
-                k = (st["elapsed_ms"] // self.FAKE_BLOCK_MS) % total
-                for si, (ne, nb) in enumerate(shape):
-                    if k < ne + nb:
-                        # 和固件一样的口径：block = 在当前序列（enter/body）里的下标
-                        st["state"], st["block"] = si, (k if k < ne else k - ne)
+                t = st["elapsed_ms"] % total
+                for si, blk, dur in tl:
+                    if t < dur:
+                        st["state"], st["block"] = si, blk
                         break
-                    k -= ne + nb
+                    t -= dur
         sig = (st["id"], st["state"], 1 if st["running"] else 0, st["block"])
         if sig != self.task_sig or now_ms - self.task_last_push >= 1000:
             self.task_sig = sig

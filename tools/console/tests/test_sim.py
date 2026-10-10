@@ -397,3 +397,37 @@ def test_base_turn_angle_loop_converges_and_holds_base():
     req(car, pr.T_DRIVE, bytes([2]) + pr.pack_i16(0) + pr.pack_i16(-20), seq=seq, now=3220)
     assert car.yaw_base == pytest.approx(yaw1, abs=1e-6)
     assert car.yaw_ref == pytest.approx(norm180(yaw1 - 20.0), abs=1e-6)
+
+
+def test_fake_timeline_follows_the_real_dispatch_flow():
+    """★2026-10-10 修：假任务的时间线必须按**真实执行流**排，不是按镜像里块的物理顺序。
+
+    用户发现的错：以前直接把状态表里的块按顺序铺开 ⇒ 看起来像
+    "主页那 14 块全走完，才轮到第一个段状态"。
+    可固件里主页的循环体是一串**分派**判断：**一拍之内全走完**，走到第 k 条成立就
+    `seq_begin(目标)` 立刻跳走，那些判断块**一点时间都不占**。真正的顺序是：
+        主页(瞬时) → 状态A 的 enter 逐块 → 状态A 的 body 逐块 → 主页(瞬时) → 状态B …
+    所以主页**不该**作为"要逐块走完的段"进时间线，它只作为两次跳转之间的一小段停留出现。
+    """
+    car = SimCar()
+    # 用替身喂一个假结构：主页(enter 2 body 14) / 状态1(enter 2 body 19) / 状态2(enter 0 body 8)
+    car._prog_shape = lambda buf: [(2, 14), (2, 19), (0, 8)]
+    car._gate_targets = lambda buf: [1, 2]        # 主页有两条判断，分别跳到状态1 / 状态2
+
+    # buf 只要头部够读主页号（buf[4]）；状态表和门都被替身了
+    tl = car._prog_timeline(bytes([0x54, 0x4B, 1, 3, 0]))                  # 结构都被替身了，buf 用不上
+
+    step, stay, main = SimCar.FAKE_BLOCK_MS, SimCar.FAKE_MAIN_MS, 0
+    want = (
+        [(1, 0, step), (1, 1, step)]                        # 状态1 的 enter（2 块）
+        + [(1, k, step) for k in range(19)]                 # 状态1 的 body（19 块，下标重新从 0 起）
+        + [(main, 0, stay)]                                # 完事回主页停一下
+        + [(2, k, step) for k in range(8)]                  # 状态2 的 body（enter 为 0）
+        + [(main, 0, stay)]
+    )
+    assert tl == want, f"时间线不对：\n  得到 {tl}\n  期望 {want}"
+
+    # 主页自己那 14 块**一个都不该**出现在时间线里（它们不占时间）
+    assert all(not (s == main and d == step) for s, _, d in tl)
+    # 但每次跳转之后都要回一次主页
+    assert sum(1 for s, _, _ in tl if s == main) == 2
