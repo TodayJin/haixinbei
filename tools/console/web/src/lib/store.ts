@@ -507,14 +507,26 @@ class ConsoleStore {
   }
 
   // ---- 动作 ----
-  setAction(n: number, a1: number, a2: number): void {
+  /** 本地改一个动作角度：先本地立刻生效，**同时真的发给车**（写车的 RAM）。
+   *
+   *  ★★2026-10-10 修的 bug（用户："改了这个动作，保存之后就又回到原值了"）：
+   *  这个函数原来**只改本地快照、从头到尾没有 `api.actionSet()`** —— 车根本收不到新角度。
+   *  后果：改完点「固化到车」，固化的还是**车里的旧值**；而 `saveActions()` 结尾会
+   *  `refreshActions()` 从车重读 ⇒ 界面**弹回原值**。
+   *  这和 2026-10-03 那个 `setParam` 只改快照、从不调 `api.paramSet()` 的 bug 是**同一类**
+   *  （见 store.test.ts 开头那段），所以这里也补了同样的回归断言。
+   *
+   *  走 `op()` 是为了**排队**：改完立刻点「固化」时，下发必须先于固化跑完，否则固化的还是旧值
+   *  （队列见 `op()` 上面的注释）。故意**不给成功 toast**（不然每改一格都弹一次）。 */
+  setAction(n: number, a1: number, a2: number): Promise<void> {
     const a = this.snap.actions
-    if (!a) return
+    if (!a) return Promise.resolve()
     this.snap = {
       ...this.snap,
       actions: { ...a, items: a.items.map((it) => (it.n === n ? { ...it, a1, a2, dirty: true } : it)) },
     }
     this.emit()
+    return this.op('下发动作', () => api.actionSet(n, a1, a2)).then(() => undefined)
   }
 
   async playAction(n: number): Promise<void> {

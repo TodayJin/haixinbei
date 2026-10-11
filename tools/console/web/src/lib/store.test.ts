@@ -196,4 +196,32 @@ describe('操控报错的文案与弹幕', () => {
     // 第一条整条走完（+ 和 -）才轮到第二条
     expect(writes.slice(0, 2)).toEqual(['+actions/save', '-actions/save'])
   });
+
+describe('动作编辑也要真的发给车（和 setParam 同一类 bug）', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('★setAction 必须 POST 到 /api/actions/set —— 只改本地快照的话车根本收不到', async () => {
+    // 用户 2026-10-10 报的 bug：改了动作角度、点「固化到车」之后**又弹回原值**，改不动。
+    // 根因（就是这条断言钉的东西）：`store.setAction()` 原来**只改本地快照、
+    // 从头到尾没有 `api.actionSet()`** ⇒ 车永远收不到新角度；而 `saveActions()` 结尾会
+    // `refreshActions()` **从车重读** ⇒ 界面弹回原值。
+    // ★和 2026-10-03 那个 `setParam` 只改快照、从不调 `api.paramSet()`（本文件开头那段）
+    //   是**同一类**，所以用同一种方式钉住。
+    const seen: Seen[] = []
+    stubFetch(seen)
+    await store.refreshActions() // 先把动作表灌进快照，否则 setAction 会因为 actions 为空直接 return
+    seen.length = 0
+
+    await store.setAction(3, 111, 22) // 现在返回 Promise：等串行队列跑完
+
+    const hit = seen.find((s) => s.url.includes('/api/actions/set'))
+    expect(hit, 'setAction 没把值发给车 ⇒ 车收不到新角度、固化后又弹回').toBeTruthy()
+    expect(hit?.method).toBe('POST')
+    expect(hit?.body).toEqual({ n: 3, a1: 111, a2: 22 })
+
+  })
+});
 })
