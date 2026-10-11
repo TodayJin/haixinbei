@@ -280,10 +280,26 @@ class ConsoleStore {
     }
   }
 
+  /** 写操作串行队列。
+   *
+   *  ★为什么必须有（用户 2026-10-10 报的 bug）：串口一次只能跑一条命令，而这个界面可能
+   *  连着发两条 —— 最典型的是**失焦自动下发**紧跟**固化**：用户在角度那一格敲完数字直接点
+   *  「固化到车」，blur 触发的 `setAction` 和点击触发的 `saveActions` 会抢串口。
+   *  固化先跑到的话，它固化的是**车里还没更新的旧值**，紧接着 `refreshActions()` 从车重读
+   *  ⇒ 界面**弹回原值**，用户看到的就是"改了保存不了"。
+   *  排队之后：后一条一定等前一条的 ACK 回来才发。 */
+  private q: Promise<unknown> = Promise.resolve()
+
   /** 统一包一层：成功给 ok toast，失败把后端 error 原样抛给用户 */
   private async op<T>(label: string, fn: () => Promise<T>, okText?: string): Promise<T | null> {
+    /* 挂到队尾：不管前一条成功还是失败都要继续跑下一条（hence 两个 then 分支） */
+    const run = this.q.then(() => fn(), () => fn())
+    this.q = run.then(
+      () => undefined,
+      () => undefined,
+    )
     try {
-      const r = await fn()
+      const r = await run
       if (okText) this.toast('ok', okText)
       return r
     } catch (e) {

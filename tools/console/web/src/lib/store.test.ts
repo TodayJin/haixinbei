@@ -161,4 +161,39 @@ describe('操控报错的文案与弹幕', () => {
     expect(toasts[0].kind).toBe('ok')
     expect(toasts[0].text).toContain('已停车')
   })
+
+  it('★写操作必须串行：两条写命令不能同时飞（改完角度直接点固化会抢串口）', async () => {
+    // 用户 2026-10-10 报的 bug：在舵机页改了动作角度 → 点「固化到车」→ 界面**弹回原值**。
+    // 根因之一是写操作没排队：blur 触发的"自动下发"和点击触发的"固化"同时飞，
+    // 固化先跑到的话它固化的是**车里还没更新的旧值**，紧接着 refreshActions() 从车重读
+    // ⇒ 弹回原值。修法：store.op() 统一挂到串行队列上（后一条等前一条的 ACK）。
+    // 这里只盯**写**请求（GET 读不参与排队，refreshActions 插在中间是正常的）。
+    let inflight = 0
+    let overlapped = false
+    const writes: string[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const u = String(url)
+        const isWrite = String(init?.method ?? 'GET').toUpperCase() !== 'GET'
+        if (isWrite) {
+          inflight += 1
+          if (inflight > 1) overlapped = true
+          writes.push('+' + u.split('/api/')[1])
+        }
+        await new Promise((r) => setTimeout(r, 12))
+        if (isWrite) {
+          inflight -= 1
+          writes.push('-' + u.split('/api/')[1])
+        }
+        return { ok: true, json: async () => ({ ok: true, items: [] }) } as unknown as Response
+      }),
+    )
+
+    await Promise.all([store.saveActions(), store.saveActions()])
+
+    expect(overlapped).toBe(false)
+    // 第一条整条走完（+ 和 -）才轮到第二条
+    expect(writes.slice(0, 2)).toEqual(['+actions/save', '-actions/save'])
+  });
 })

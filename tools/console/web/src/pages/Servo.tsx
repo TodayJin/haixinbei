@@ -4,7 +4,7 @@ import { Badge, Card, NumberField, Slider, Stat, StatusDot } from '../components
 import { MiniTrend } from '../components/Trend'
 import { store, useStore } from '../lib/store'
 import { fmt, fmtInt } from '../lib/format'
-import type { ActionItem } from '../lib/types'
+import { NVRAM_TEXT, type ActionItem } from '../lib/types'
 
 function ServoCard({ ch }: { ch: 1 | 2 }) {
   const { telem } = useStore()
@@ -72,11 +72,36 @@ function ActionRow({ a }: { a: ActionItem }) {
         {a.compound && <Badge tone="amber">复合</Badge>}
         {a.dirty && <Badge tone="rose">未保存</Badge>}
       </td>
+      {/* ★改完**立刻下发到车的 RAM**（用户 2026-10-10 报的 bug："改了这个动作，
+          保存之后就又回到原值了"）。原因：这两个 NumberField 原来只写本地 state，
+          必须再手按「下发」才到车；而「固化到车」固化的是**车里的值**，结尾又会
+          refreshActions() 从车重读 ⇒ 没按过「下发」的话，界面**弹回原值**。
+          NumberField 是**失焦时 commit**（不是每敲一个键），所以这里不会刷屏。 */}
       <td className="py-1 pr-2">
-        <NumberField value={a1} onChange={setA1} min={0} max={180} step={5} decimals={0} />
+        <NumberField
+          value={a1}
+          onChange={(v) => {
+            setA1(v)
+            void store.setAction(a.n, v, a2)
+          }}
+          min={0}
+          max={180}
+          step={5}
+          decimals={0}
+        />
       </td>
       <td className="py-1 pr-2">
-        <NumberField value={a2} onChange={setA2} min={0} max={180} step={5} decimals={0} />
+        <NumberField
+          value={a2}
+          onChange={(v) => {
+            setA2(v)
+            void store.setAction(a.n, a1, v)
+          }}
+          min={0}
+          max={180}
+          step={5}
+          decimals={0}
+        />
       </td>
       <td className="py-1 pr-2 text-right text-[11px] text-slate-500 num">
         {a.preset_a1}/{a.preset_a2}
@@ -86,7 +111,7 @@ function ActionRow({ a }: { a: ActionItem }) {
           <button
             className="btn-ghost !px-2 !py-0.5 text-[11px]"
             onClick={() => void store.setAction(a.n, a1, a2)}
-            title="把这一行的角度下发到车的 RAM（立刻生效）"
+            title="把这一行的角度重新下发到车的 RAM（改完数字失焦就会自动下发，这个是重发/兜底）"
           >
             下发
           </button>
@@ -138,10 +163,31 @@ export function ServoPage() {
           right={
             <div className="flex items-center gap-1">
               {dirty > 0 && <Badge tone="rose">{dirty} 项改了</Badge>}
+              {/* ★把"车到底写了没有"摆出来（用户 2026-10-10："舵机页面保存不了"）。
+                  固件对 T_ACTION_SAVE **一律回 ACK OK**，真正写不写由 nvram_poll() 决定：
+                    · 「车在动绝不擦写」—— 速度环使能 / 角度环开着 / 运动模式非 IDLE 就**拒**；
+                    · 内容和 Flash 里那份已经一样时也什么都不做（照样回 OK）。
+                  ⇒ **光看 ACK 判断不了成没成**。取值来自遥测（TELEM2 第 56 字节）：
+                    0 空闲 / 1 待保存 / 2 保存中 / 3 已保存 / 4 失败。
+                  和「操控页」「总览页」用的是同一个 NVRAM_TEXT、同一个来源，口径一致。 */}
+              <Badge
+                tone={(telem?.nvram ?? 0) === 3 ? 'mint' : (telem?.nvram ?? 0) === 4 ? 'rose' : 'slate'}
+                title={
+                  (telem?.nvram ?? 0) === 1
+                    ? '已收到请求，**还没写进 Flash**（车在动时固件会一直拒；先停车/等电机停）'
+                    : (telem?.nvram ?? 0) === 3
+                      ? '已经写进车的 Flash 了（掉电不丢）'
+                      : (telem?.nvram ?? 0) === 4
+                        ? '写 Flash 失败了'
+                        : '车的 NVRAM 保存状态'
+                }
+              >
+                NVRAM {NVRAM_TEXT[telem?.nvram ?? 0] ?? '--'}
+              </Badge>
               <button
                 className="btn-ghost"
                 onClick={() => void store.saveActions()}
-                title="让车把整张动作表写进自己的 Flash（掉电不丢）"
+                title="让车把整张动作表写进自己的 Flash（掉电不丢）。★固件只在车不动时才真写 —— 按完看左边的 NVRAM 徽章：走到「已保存」才算成"
               >
                 <Save size={13} /> 固化到车
               </button>
@@ -177,7 +223,7 @@ export function ServoPage() {
             <button
               className="btn-ghost"
               onClick={() => void store.paramsDefaults()}
-              title="把参数表的默认值拉回来（不含动作表）"
+              title="把**参数表**的默认值拉回来（不含动作表）—— 参数的事在「参数」页；这里留着是老界面的遗留入口"
             >
               <RotateCcw size={13} /> 参数回默认
             </button>
