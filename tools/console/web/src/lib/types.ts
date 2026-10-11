@@ -102,11 +102,16 @@ export interface CalChannel {
 
 export interface CalResponse {
   ok: true
-  /** 当前在用第几套标定。**固件没上报这个**（T_CAL_REPORT 只带标定数据）
-   *  ⇒ 桥返回 null，界面显示「当前套 ?」。别再当数字用。 */
+  /** 当前在用第几套标定（0 = 普通 / 1 = 亚克力）。
+   *  来源：固件的第二帧 `T_CAL_REPORT_B`（★2026-10-11 加）。**老固件不回这一帧 ⇒ 是 null**，
+   *  界面要显示成「当前套 ?」而不是当成 0。 */
   active_set: number | null
   quality: number
+  /** **当前那套**的 8 路标定。 */
   ch: CalChannel[]
+  /** ★**另一套**的 8 路标定（T_CAL_REPORT_B 带来）。老固件 / 没拿到时是空数组。
+   *  传感器页把两套并排画图，就是为了在两种地面之间对比标定是否真的分开。 */
+  other?: CalChannel[]
 }
 
 export interface PresetItem {

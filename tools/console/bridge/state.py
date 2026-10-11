@@ -104,6 +104,9 @@ class Console:
         self.action_preset = self._load_action_preset()
         self._rebuild_actions()
         self.cal: dict = {}
+        # ★2026-10-11：第二套标定（T_CAL_REPORT_B 带来）+ 真实的当前套号
+        self.cal_other: dict = {}
+        self.cal_active: int | None = None
         # 车上任务程序（docs/任务编程.md §5）：目录只在握手后请求一次，状态由车推
         self.tasks: list[dict] = []
         self.task_status: dict | None = None
@@ -411,6 +414,19 @@ class Console:
             with self.lock:
                 self.cal = pr.decode_cal(f.payload)
             self.emit({"n": "cal", "src": self.cal})
+        elif f.type == pr.T_CAL_REPORT_B:
+            # ★第二套 + 真实套号（用户 2026-10-11 要传感器页同时看两套）。合并进 self.cal，
+            #   这样 /api/cal 一个响应就把两套都给了（前端不用发两次请求）。
+            try:
+                active, other = pr.decode_cal_other(f.payload)
+            except ValueError:
+                active, other = None, {}
+            with self.lock:
+                self.cal_active = active
+                self.cal_other = other
+                if self.cal:
+                    self.cal = {**self.cal, "active_set": active, "other": other.get("ch", [])}
+                self.emit({"n": "cal", "src": self.cal or other})
         elif f.type == pr.T_DRIVE_REPORT:
             d = pr.decode_drive_report(f.payload)
             with self.lock:
@@ -1172,13 +1188,22 @@ class Console:
         return r
 
     def cal_refresh(self) -> dict:
+        with self.lock:
+            self.cal = {}          # ★清掉上一轮，否则会把旧的"另一套"当成新的
+            self.cal_other = {}
+            self.cal_active = None
         seq = self.send(pr.T_CAL_GET)
         t0 = time.time()
         while time.time() - t0 < 0.8:
             with self.lock:
-                if self.cal:
+                if self.cal and self.cal_other:
                     return {"ok": True, "seq": seq, "cal": self.cal}
             time.sleep(0.03)
+        # ★老固件只回一帧（没有 T_CAL_REPORT_B）⇒ 超时也算成功，只是"另一套"是空的。
+        #   不能因为拿不到第二套就把整个标定页判成失败。
+        with self.lock:
+            if self.cal:
+                return {"ok": True, "seq": seq, "cal": self.cal, "partial": True}
         return {"ok": False, "seq": seq, "error": "没收到标定数据"}
 
     def hello_req(self, timeout: float = 0.6) -> dict:

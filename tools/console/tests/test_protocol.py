@@ -7,11 +7,34 @@ firmware/App/Svc/host_link.c 的偏移手写一遍 —— 这样布局写错才�
 """
 from __future__ import annotations
 
+import pytest
+
 import struct
 
 from bridge import protocol as pr
 
 
+
+
+def test_decode_cal_other_carries_active_and_second_set():
+    """★2026-10-11：T_CAL_REPORT_B = [当前套号 u8][另一套 trace_cal_data_t]。
+
+    固件一帧装不下两套（82×2=164 > MAX_PAYLOAD 128）所以分成两帧；这一帧既补"另一套"，
+    也第一次把"到底哪套是当前"带回来（T_CAL_REPORT 里没有这个字节）。
+    传感器页要同时画两套，全靠它。
+    """
+    body = bytearray(82)
+    body[0] = 1          # valid
+    body[18] = 200       # blk[0] 低字节
+    body[34] = 44        # wht[0]
+    active, other = pr.decode_cal_other(bytes([1]) + bytes(body))
+    assert active == 1
+    assert other["ch"][0]["blk"] == 200 and other["ch"][0]["wht"] == 44
+    assert other["ch"][0]["ok"] is True
+
+    # 长度不够要明确报错，不能静默给半套数据
+    with pytest.raises(ValueError):
+        pr.decode_cal_other(bytes([0]) + bytes(80))
 def test_crc_matches_ccitt_false_check_value():
     # CRC-16/CCITT-FALSE 的标准校验值（poly 0x1021、init 0xFFFF、不反转）
     assert pr.crc16_ccitt(b"123456789") == 0x29B1

@@ -39,6 +39,10 @@ T_SERVO_PLAY = 0x1B
 T_DRIVE = 0x1C
 T_DRIVE_REPORT = 0x1D
 T_SERVO_DEV = 0x1E          # 舵机软件中位偏差 {ch u8, dev_us i16}（契约 /api/servo/deviation）
+# ★2026-10-11：第二套灰度标定 [当前套号 u8][另一套 trace_cal_data_t(82B)]。
+#   为什么分两帧：一帧装不下两套（82×2=164 > 固件 MAX_PAYLOAD 128）。
+#   老固件不回这一帧，桥要能忍（见 state.cal_refresh 的超时分支）。
+T_CAL_REPORT_B = 0x1F
 T_CMD = 0x20
 T_ACK = 0x21
 T_HELLO = 0x40
@@ -68,6 +72,7 @@ TYPE_NAMES = {
     T_ACTIONS: "actions", T_ACTION_SET: "action_set", T_ACTION_SAVE: "action_save",
     T_SERVO_SET: "servo_set", T_SERVO_PLAY: "servo_play", T_DRIVE: "drive",
     T_DRIVE_REPORT: "drive_report", T_SERVO_DEV: "servo_dev", T_CMD: "cmd", T_ACK: "ack", T_HELLO: "hello",
+    T_CAL_REPORT_B: "cal_report_b",
     T_HELLO_REQ: "hello_req", T_TEXT: "text",
     T_TASK_LIST: "task_list", T_TASK_LIST_R: "task_list_r", T_TASK_PUT: "task_put",
     T_TASK_COMMIT: "task_commit", T_TASK_GET: "task_get", T_TASK_DATA: "task_data",
@@ -371,6 +376,17 @@ def decode_param_report(p: bytes) -> tuple[int, float]:
     return u16(p, 0), f32(p, 2)
 
 
+def decode_cal_other(p: bytes) -> tuple[int, dict]:
+    """T_CAL_REPORT_B：[当前套号 u8][另一套 trace_cal_data_t] ⇒ (套号, 那一套的解码)。
+
+    ★2026-10-11 加：用户要传感器页**同时看两套**标定。当前套由 T_CAL_REPORT 给（格式没变），
+    这一帧只补"另一套 + 到底哪套是当前"。老固件不回它 —— 调用方要容忍（state.cal_refresh）。
+    """
+    if len(p) < 1 + 82:
+        raise ValueError("第二套标定回报长度不对：%d" % len(p))
+    return p[0], decode_cal(p[1:])
+
+
 def decode_actions(p: bytes) -> list[tuple[int, int]]:
     n = len(p) // 2
     return [(p[i * 2], p[i * 2 + 1]) for i in range(n)]
@@ -405,9 +421,9 @@ def decode_cal(p: bytes) -> dict:
                    "level": 0, "thr_level": 0})
     # ★2026-10-11：原来这里写死 `"active_set": 0` —— 于是界面上**永远显示"第 0 套（普通）"**，
     #   切到亚克力那套也看不出来（查"切套后循迹失效"时就被它误导过）。
-    #   真相：**固件的 T_CAL_REPORT 只发 trace_cal_data_t（82 字节），里面根本没有"当前是第几套"**
-    #   （车上只有 trace_cal_active_set()，只在 OLED 上显示）。所以这里**宁可说不知道，也不撒谎**：
-    #   返回 None，界面显示"当前套 ?"。要真显示出来得给固件的 T_CAL_REPORT 末尾加一个字节（要重烧）。
+    #   T_CAL_REPORT 这一帧本身确实没有"当前是第几套"（车上只有 trace_cal_active_set()，
+    #   原先只在 OLED 上显示）。所以**这一帧解出来的 active_set 只能是 None**。
+    #   ★真值由 T_CAL_REPORT_B（第二帧）带回来，state.py 收到后会把它填进 self.cal。
     return {"active_set": None, "quality": sum(1 for c in ch if c["ok"]), "ch": ch}
 
 

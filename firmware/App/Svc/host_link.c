@@ -361,6 +361,12 @@ enum { T_TELEM = 0x01, T_TELEM2 = 0x03, T_PARAM_GET = 0x10, T_PARAM_SET = 0x11,
        T_ACTIONS_GET = 0x16, T_ACTIONS = 0x17, T_ACTION_SET = 0x18, T_ACTION_SAVE = 0x19,
        T_SERVO_SET = 0x1A, T_SERVO_PLAY = 0x1B, T_DRIVE = 0x1C, T_DRIVE_REPORT = 0x1D,
        T_SERVO_DEV = 0x1E,
+       /* ★2026-10-11（用户："传感器页把两种标定的值都用图显示"）：第二套标定。
+        * 一帧装不下两套（82×2=164 > MAX_PAYLOAD 128）⇒ 分两帧发：
+        *   · T_CAL_REPORT   = **当前在用的那套**（格式一个字没动，老上位机照旧能用）
+        *   · T_CAL_REPORT_B = [当前套号 u8][**另一套** trace_cal_data_t]
+        * 老上位机不认识这个帧类型，会按"不认识"忽略 —— 兼容是安全的。 */
+       T_CAL_REPORT_B = 0x1F,
        T_CMD = 0x20, T_ACK = 0x21, T_HELLO = 0x40, T_HELLO_REQ = 0x41, T_TEXT = 0x50,
        /* v2 上位机任务程序（docs/任务编程.md §5） */
        T_TASK_LIST = 0x60, T_TASK_LIST_R = 0x61, T_TASK_PUT = 0x62, T_TASK_COMMIT = 0x63,
@@ -660,9 +666,24 @@ static void send_actions(uint8_t type, uint8_t seq)
 /* v2：8 路黑白标定原文（trace_cal_data_t，82 字节） */
 static void send_cal_report(uint8_t seq)
 {
-  trace_cal_data_t d;
-  trace_cal_get_data(&d);
-  frame_send(T_CAL_REPORT, seq, (const uint8_t *)&d, (uint8_t)sizeof(d));
+  trace_cal_data_t cur;
+  trace_cal_data_t s0;
+  trace_cal_data_t s1;
+  trace_cal_data_t other;
+  uint8_t active = 0u;
+  uint8_t p[1u + sizeof(trace_cal_data_t)];
+
+  trace_cal_get_data(&cur);
+  frame_send(T_CAL_REPORT, seq, (const uint8_t *)&cur, (uint8_t)sizeof(cur));
+
+  /* ★2026-10-11：再补一帧把**另一套**也发出去（用户要传感器页同时看两套）。
+   * `trace_cal_export()` 按 `s_set` 自动摆位（set0 = 普通 / set1 = 亚克力）并回填当前套号，
+   * 所以这两个值就是"哪套是当前"的权威来源。分两帧是因为一帧塞不下 164 字节。 */
+  trace_cal_export(&s0, &s1, &active);
+  other = (active == 0u) ? s1 : s0;
+  p[0] = active;
+  memcpy(&p[1], &other, sizeof(other));
+  frame_send(T_CAL_REPORT_B, seq, p, (uint8_t)sizeof(p));
 }
 
 /* v2：驾驶状态回报（改完/查询都回一帧，上位机不用等下一次遥测） */

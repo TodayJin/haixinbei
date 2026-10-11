@@ -119,7 +119,13 @@ class SimCar:
             ch.append({"i": i, "blk": blk, "wht": wht, "thr": (blk + wht) // 2,
                        "jitter": 8 + i, "pol": 0, "bad": 0, "ok": True, "reason": 0,
                        "level": 0, "thr_level": 0})
-        self.cal = {"active_set": 0, "quality": 8, "ch": ch}
+                # ★2026-10-11：也发一套"另一套"（照固件 T_CAL_REPORT_B 的口径），
+        #   否则传感器页的两套对比图在模拟器下永远只有一半，没法调前端。
+        #   故意给一组**明显不同**的值（blk -35 / wht +45）—— 真车上"两套几乎一样"
+        #   是常见坑（第二套在同一种材料上标的），对比图要能把它显示出来。
+        other = [dict(c, blk=max(0, c["blk"] - 35), wht=c["wht"] + 45,
+                     thr=(max(0, c["blk"] - 35) + c["wht"] + 45) // 2) for c in ch]
+        self.cal = {"active_set": 0, "quality": 8, "ch": ch, "other": other}
 
     # ---------------------------------------------------------- 对外
     def start(self, now_ms: int):
