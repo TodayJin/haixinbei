@@ -57,3 +57,6 @@ desktop.ini
 memory/
 AGENTS.md
 .tmp/
+
+# pytest 的临时目录（跑 python -m pytest 会在 cwd 下生成，每跑一次变一次）
+tools/console/pytest-of-*/
