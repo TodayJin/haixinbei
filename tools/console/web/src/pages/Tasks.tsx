@@ -16,6 +16,7 @@ import {
   X,
 } from 'lucide-react'
 import { Badge, Card, NumberField, Stat, Toggle } from '../components/ui'
+import { RouteMap } from '../components/RouteMap'
 import {
   CAR_NAME_MAX,
   carNameKey,
@@ -1177,26 +1178,38 @@ export function TasksPage() {
             </div>
           }
         >
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            <Stat label="镜像长度" value={String(info.len)} unit="B" hint={`车上 6 KB 里占 ${info.budgetPct}%`} />
-            <Stat label="校验和" value={`0x${info.crc16.toString(16).toUpperCase().padStart(4, '0')}`} hint="头 12 字节之后算起" />
-            <Stat label="状态 / 块" value={`${prog.states.length} / ${blockCount(prog)}`} hint={`主页 = ${stateLabel(prog.main, stateNames)}`} />
-            <Stat
-              label="烧到哪个槽"
-              value={plan.kind === 'full' ? '没空槽' : `#${plan.slot}${plan.kind === 'same-name' ? ' 覆盖' : ' 空槽'}`}
-              tone={plan.kind === 'full' ? 'rose' : plan.kind === 'same-name' ? 'amber' : 'slate'}
-              hint={
-                plan.kind === 'full'
-                  ? '8 个槽都满了，先删一个'
-                  : plan.kind === 'same-name'
-                    ? '有同名任务：覆盖它'
-                    : '写进第一个空槽'
-              }
-              title={describeSlotPlan(plan, task.name)}
-            />
+          {/* ★2026-10-11 按用户要求精简：「实际上就几个按钮和数字」。
+              原来这里是 4 个带 hint 的 Stat 大盒子，占掉半屏；现在压成一行。 */}
+          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-[12px]">
+            <span title={`车上 6 KB 程序区里占 ${info.budgetPct}%`}>
+              <span className="text-slate-500">镜像 </span>
+              <span className="num text-slate-200">{info.len} B</span>
+              <span className="text-slate-600">（{info.budgetPct}%）</span>
+            </span>
+            <span title="头 12 字节之后算起">
+              <span className="text-slate-500">CRC </span>
+              <span className="num text-slate-200">0x{info.crc16.toString(16).toUpperCase().padStart(4, '0')}</span>
+            </span>
+            <span title={`主页 = ${stateLabel(prog.main, stateNames)}`}>
+              <span className="text-slate-500">状态/块 </span>
+              <span className="num text-slate-200">{prog.states.length} / {blockCount(prog)}</span>
+            </span>
+            <span title={describeSlotPlan(plan, task.name)}>
+              <span className="text-slate-500">槽 </span>
+              <span
+                className={`num ${plan.kind === 'full' ? 'text-neon-rose' : plan.kind === 'same-name' ? 'text-neon-amber' : 'text-slate-200'}`}
+              >
+                {plan.kind === 'full' ? '没空槽' : `#${plan.slot}${plan.kind === 'same-name' ? ' 覆盖' : ' 空槽'}`}
+              </span>
+            </span>
+            {info.errors.length === 0 && info.warnings.length === 0 && (
+              <span className="text-neon-mint">{busy ? `${busy}中…` : '✓ 可以烧'}</span>
+            )}
           </div>
 
-          {supported && (
+          {/* 槽位提示：**正常的「空槽」情况不出现**（用户要的是「几个按钮和数字」）——
+              只有真要留意时（没空槽 / 同名覆盖 / 名字超长 / 编辑器里多条同名）才占一行。 */}
+          {supported && (plan.kind !== 'free' || sameNameInEditor > 1 || nameOver) && (
             <div
               className={`mt-1.5 rounded-lg px-2 py-1 text-[11px] leading-snug ${
                 plan.kind === 'full'
@@ -1240,9 +1253,12 @@ export function TasksPage() {
               </ul>
             </div>
           )}
-          {info.errors.length === 0 && info.warnings.length === 0 && (
-            <div className="mt-1.5 text-[11px] text-slate-500">校验通过，可以烧。{busy ? `（${busy}中…）` : ''}</div>
-          )}
+        </Card>
+
+        {/* ★2026-10-11（用户："位置就在编译与烧写的下面"）：编码器 + IMU 航位推算的俯视轨迹。
+            只记**任务运行期间**的（桥侧门控），任务一开跑自动清零。 */}
+        <Card title="行进路线" right={<Badge tone="slate">编码器 + IMU</Badge>}>
+          <RouteMap />
         </Card>
 
         <Card

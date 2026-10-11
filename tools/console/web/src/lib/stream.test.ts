@@ -42,6 +42,7 @@ function mkHandlers() {
     onActions: vi.fn(),
     onParams: vi.fn(),
     onCal: vi.fn(),
+    onRoute: vi.fn(),
     onError: vi.fn(),
     onLinkChange: vi.fn(),
   }

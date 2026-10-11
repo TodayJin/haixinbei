@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import threading
 import time
@@ -79,6 +80,158 @@ class Subscriber:
             return out
 
 
+# ---------------------------------------------------------------- 航位推算（路线缩略图）
+# ★2026-10-11 加（用户："通过编码器以及 imu 的数据在上位机给我一个行进路线的缩略图"）。
+ROUTE_MIN_STEP_MM = 8.0     # 抽稀：挪够这么多才存一个点（按**距离**，不是按时间）
+ROUTE_MAX_DT_MS = 200       # dt 超过它就当断流/上电重置：**跨过去，绝不画一条直线**
+ROUTE_MAX_PTS = 20000       # 点数封顶（每 8mm 一点，够跑 160 m）
+ROUTE_EMIT_MS = 200         # SSE 推送节流到 5 Hz（200 Hz 会把浏览器刷死）
+
+
+class RouteTracker:
+    """用**编码器轮速 + IMU 航向**积分出俯视轨迹（dead reckoning）。
+
+    遥测里本来就有 `vl/vr`（`SpeedControl_SpeedMmps()`，mm/s）和 `yaw`（0.1°，JY61P），
+    所以这套东西**固件一行都不用动**。
+
+    为什么算在桥里而不是浏览器：桥看得到**每一帧** 200 Hz 遥测，而浏览器 SSE 会丢帧 ⇒
+    轨迹会缺一段；算在桥里还能**刷新页面不丢**、能导出。
+
+    三个必须做的保护（这种图最容易栽的地方）：
+      1. `dt<=0` 或 `dt>ROUTE_MAX_DT_MS` ⇒ **不积分**（断流/重置时跨过去画直线是错的）；
+      2. 按**距离**抽稀 ⇒ 车停着不涨点（按时间抽的话几十秒就几万个点）；
+      3. 点数封顶，满了丢最早的点（只影响图；累计里程另算）。
+
+    `v = (vl+vr)/2`、`x += v·cos(yaw)·dt`：**v=0 时天然不漂** —— 这正是用轮速而不是用
+    PWM/指令速度推算的好处（原地不动时积分严格为 0）。
+    """
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.pts: list[list[float]] = []
+        self.dist_mm = 0.0
+        self.x = 0.0
+        self.y = 0.0
+        self.head_deg = 0.0
+        # ★起点朝向（本次清零后第一帧的 yaw）。画板要把"起步朝向"摆成正右、
+        #   起点贴左边 —— 用**固定的 yaw0**而不是实时 yaw，否则车一转弯整张图跟着转，没法看。
+        self.yaw0: float | None = None
+        self.seq = 0                  # 累计点数（前端用它做增量拼接）
+        self.last_t = None
+        self.last_lost = False
+        self.last_state = None
+        self.marks: list[dict] = []   # 打点：状态切换 / 丢线
+        self._pts_new: list[list[float]] = []
+        self._marks_new: list[dict] = []
+        self._reset_flag = True
+
+    def _mark(self, kind: str, label) -> None:
+        m = {"x": round(self.x, 1), "y": round(self.y, 1), "k": kind, "v": label, "i": self.seq}
+        if len(self.marks) < 4000:
+            self.marks.append(m)
+        self._marks_new.append(m)
+
+    def feed(self, t: dict) -> None:
+        """吃一帧遥测（200 Hz）。只累加，不推送 —— 推送由 take() 按节流取走。"""
+        try:
+            tt = int(t.get("t", 0))
+            vl = float(t.get("vl", 0))
+            vr = float(t.get("vr", 0))
+            yaw = math.radians(float(t.get("yaw", 0.0)))
+        except (TypeError, ValueError):
+            return
+        self.head_deg = float(t.get("yaw", 0.0))
+        if self.yaw0 is None:
+            self.yaw0 = self.head_deg
+
+        # 打点：状态切换 / 丢线（都在积分**之前**用当前位置，标记才对得上路径）
+        st = t.get("state_id", 0xFF)
+        if self.last_state is None:
+            self.last_state = st
+        elif st != self.last_state:
+            self.last_state = st
+            if st != 0xFF:
+                self._mark("state", int(st))
+        lost = bool((t.get("flags") or {}).get("lost"))
+        if lost and not self.last_lost:
+            self._mark("lost", 1)
+        self.last_lost = lost
+
+        if self.last_t is None:
+            self.last_t = tt
+            return
+        # ★固件的 t 是 u32，会绕回（49.7 天），按位减就对
+        dt_ms = (tt - self.last_t) & 0xFFFFFFFF
+        self.last_t = tt
+        if dt_ms <= 0 or dt_ms > ROUTE_MAX_DT_MS:
+            return          # 断流 / 上电重置：跨过去，不积分
+        dt = dt_ms / 1000.0
+        v = (vl + vr) / 2.0                                  # mm/s
+        dx = v * math.cos(yaw) * dt
+        dy = v * math.sin(yaw) * dt
+        self.x += dx
+        self.y += dy
+        self.dist_mm += math.hypot(dx, dy)
+
+        # 按距离抽稀：够远才记一个点（车停着不会涨点）
+        if not self.pts:
+            self.pts.append([round(self.x, 1), round(self.y, 1)])
+            self._pts_new.append(self.pts[-1])
+            self.seq += 1
+        else:
+            lx, ly = self.pts[-1]
+            if math.hypot(self.x - lx, self.y - ly) >= ROUTE_MIN_STEP_MM:
+                self.pts.append([round(self.x, 1), round(self.y, 1)])
+                self._pts_new.append(self.pts[-1])
+                self.seq += 1
+                if len(self.pts) > ROUTE_MAX_PTS:
+                    self.pts = self.pts[-ROUTE_MAX_PTS:]
+
+    def take(self):
+        """取走"上次之后新增的"（前端按 from 增量拼接，不用每次重传整条）。没新东西就 None。"""
+        if not (self._reset_flag or self._pts_new or self._marks_new):
+            return None
+        win = self.pts[-4000:] or [[0.0, 0.0]]
+        xs = [p[0] for p in win]
+        ys = [p[1] for p in win]
+        out = {
+            "from": self.seq - len(self._pts_new),
+            "pts": self._pts_new,
+            "marks": self._marks_new,
+            "dist_mm": round(self.dist_mm, 1),
+            "n": self.seq,
+            "head": round(self.head_deg, 1),
+            "yaw0": round(self.yaw0 or 0.0, 1),
+            "cur": [round(self.x, 1), round(self.y, 1)],
+            "box": [round(min(xs), 1), round(min(ys), 1), round(max(xs), 1), round(max(ys), 1)],
+        }
+        if self._reset_flag:
+            # ★reset 必须带**全量**：页面可能是桥跑了几分钟之后才打开的，
+            #   那时 _pts_new 早就被取空了 ⇒ 只发增量的话新页面拿到的是空图。
+            out["reset"] = True
+            out["from"] = 0
+            out["pts"] = list(self.pts)
+            out["marks"] = list(self.marks)
+            self._reset_flag = False
+        self._pts_new = []
+        self._marks_new = []
+        return out
+
+    def snapshot(self) -> dict:
+        """整条轨迹（/api/route、导出用）。"""
+        return {
+            "pts": self.pts,
+            "marks": self.marks,
+            "dist_mm": round(self.dist_mm, 1),
+            "n": self.seq,
+            "head": round(self.head_deg, 1),
+            "yaw0": round(self.yaw0 or 0.0, 1),
+            "cur": [round(self.x, 1), round(self.y, 1)],
+        }
+
+
 class Console:
     def __init__(self, runner, log_dir: str, preset_dir: str, console_dir: str):
         self.runner = runner
@@ -93,6 +246,14 @@ class Console:
         self.telem: dict = {}
         self.telem_host_ms = 0
         self.telem_count = 0
+        # ★2026-10-11：航位推算轨迹（编码器 mm/s + IMU yaw）。固件不用改，遥测里本来就有。
+        self.route = RouteTracker()
+        self._route_emit_ms = 0
+        self._route_running = False      # 上一帧"任务在跑吗"，用来抓 0->1 的沿
+        # ★2026-10-11：桥自己发过 RUN、还没发 STOP 的记忆。**不能只看 task_status** ——
+        #   固件的 T_TASK_STATUS 是**查询式**的（host_link.c:898 只在收到查询时才回），
+        #   没人查的时候桥手里那份就是陈的、甚至是 None ⇒ 门控会把轨迹整个挡掉。
+        self._route_run_cmd = False
         self.link_note = ""
         self.drive_report: dict = {}
         self.servo = {"s1_us": 1500, "s2_us": 1500, "s1_deg": 0, "s2_deg": 0,
@@ -385,8 +546,26 @@ class Console:
                                          vr=t.get("vr"))
                 if self.drive_cmd:            # 车的遥测只带 mode/enabled，指令值由桥记住
                     self.drive_report = dict(self.drive_cmd, **self.drive_report)
+                # ★航位推算：每帧都喂（200 Hz）。它只累加，推送由下面按 5 Hz 节流取走 ——
+                #   200 Hz 全推会把浏览器刷死，而丢帧又会让轨迹缺一段，所以"算在桥、推得慢"。
+                #
+                # ★2026-10-11（用户："这个图只在执行任务时才画"）：**只记任务运行期间的轨迹**。
+                #   手动开车/调试时的乱窜不该混进任务图里。任务一开跑（0→1 沿）就自动清零，
+                #   所以每次跑都是干净的一张图，不用手动按"清零"。
+                _running = bool((self.task_status or {}).get("running")) or self._route_run_cmd
+                if _running and not self._route_running:
+                    self.route.reset()
+                self._route_running = _running
+                if _running:
+                    self.route.feed(t)
+                rp = None
+                if (int(now_ms) - self._route_emit_ms) >= ROUTE_EMIT_MS:
+                    self._route_emit_ms = int(now_ms)
+                    rp = self.route.take()
             ev = {"n": "telem", "src": t, "t_host": int(now_ms)}
             self.emit(ev)
+            if rp is not None:
+                self.emit({"n": "route", "src": rp})
         elif f.type == pr.T_HELLO:
             h = pr.decode_hello(f.payload)
             with self.lock:
@@ -468,6 +647,8 @@ class Console:
                 self.cv.notify_all()
         elif f.type == pr.T_TASK_STATUS:
             st = pr.decode_task_status(f.payload)
+            # ★车是权威：它说停了，桥那条"发过 RUN"的记忆就作废（任务可能自己跑完停在半路）
+            self._route_run_cmd = bool(st.get("running"))
             with self.lock:
                 self.task_status = st
             self.emit({"n": "task", "src": st})
@@ -745,15 +926,25 @@ class Console:
         g = self._cap_guard()
         if g:
             return g
-        return self._task_reply(self.send_wait(pr.T_TASK_RUN, pr.pack_u16(tid), timeout=1.5,
-                                               req="tasks.run"), "启动任务")
+        r = self._task_reply(self.send_wait(pr.T_TASK_RUN, pr.pack_u16(tid), timeout=1.5,
+                                             req="tasks.run"), "启动任务")
+        # ★只有**车真的接受了**才算"在跑"（见 _route_run_cmd 的说明）：
+        #   ① 不等 T_TASK_STATUS 回帧 —— 那个要有人查才来，等它轨迹永远不开始画；
+        #   ② 但也不能发帧**前**就置位 —— 车回「未就绪」（没烧任务）时根本没跑，
+        #      那样门控就白做了（实测：没任务时 /api/tasks/run 回 未就绪）。
+        if r.get("ok"):
+            self._route_run_cmd = True
+        return r
 
     def task_stop(self) -> dict:
         g = self._cap_guard()
         if g:
             return g
-        return self._task_reply(self.send_wait(pr.T_TASK_STOP, b"", timeout=1.2, req="tasks.stop"),
-                                "停止任务")
+        r = self._task_reply(self.send_wait(pr.T_TASK_STOP, b"", timeout=1.2, req="tasks.stop"),
+                             "停止任务")
+        if r.get("ok"):
+            self._route_run_cmd = False
+        return r
 
     def task_status_payload(self) -> dict:
         """`/api/tasks/status`：车一有变化就推、没变 1Hz 心跳，所以这里回镜像即可。"""

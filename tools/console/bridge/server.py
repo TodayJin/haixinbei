@@ -316,6 +316,10 @@ class Handler(BaseHTTPRequestHandler):
                         "dev2_us": con.servo.get("dev2_us", 0)})
         elif path == "/api/drive":
             self._json({"ok": True, "drive": con.drive_report})
+        elif path == "/api/route":
+            # ★2026-10-11：航位推算出来的整条轨迹（编码器 + IMU）。
+            #   平时前端走 SSE 的 route 事件拿增量；这个端点给"一次性拿全"/导出用。
+            self._json({"ok": True, **con.route.snapshot()})
         elif path == "/api/cal":
             force = self._query().get("refresh", "0") not in ("0", "", "false")
             if force or not con.cal:
@@ -389,6 +393,13 @@ class Handler(BaseHTTPRequestHandler):
             self._json(con.param_save())
         elif path == "/api/actions/set":
             self._json(con.action_set(int(body["n"]), int(body["a1"]), int(body["a2"])))
+        elif path == "/api/route/reset":
+            with con.lock:
+                con.route.reset()
+                con._route_emit_ms = 0
+                rp = con.route.take()
+            con.emit({"n": "route", "src": rp})
+            self._json({"ok": True, "reset": True})
         elif path == "/api/actions/save":
             self._json(con.action_save())
         elif path == "/api/actions/play":
@@ -514,6 +525,13 @@ class Handler(BaseHTTPRequestHandler):
         batch = max(0, int(getattr(self.bridge, "sse_batch_ms", 0) or 0)) / 1000.0
         try:
             self._sse(sub, "state", self.con.snapshot())
+            # ★2026-10-11：把**整条**航位推算轨迹单独喂给这个刚连上来的订阅者。
+            #   平时 route 只推**增量**（5 Hz）；而"全量"那个 reset 事件是在桥启动/清零那一下
+            #   广播的 —— 后连上来的浏览器只能拿到最近 200ms 的点，图会缺一大截
+            #   （实测就是这么发现的：新连接只收到 from=0 pts=5，而实际已经跑了几百毫米）。
+            with self.con.lock:
+                rs = self.con.route.snapshot()
+            self._sse(sub, "route", {"reset": True, "from": 0, **rs})
             last_ping = time.time()
             pending: list[dict] = []
             next_flush = time.monotonic() + batch

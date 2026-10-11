@@ -10,6 +10,7 @@ import type {
   AckItem,
   ActionsResponse,
   CalResponse,
+  RouteEvent,
   HealthInfo,
   LinkInfo,
   LogItem,
@@ -156,6 +157,9 @@ export const api = {
   /** 清桥侧日志（不是只清界面）：不然下一次 refreshAll() 会把旧日志原样拉回来 */
   logClear: () => post<{ ok: true }>('/api/log/clear'),
   cal: () => request<CalResponse>('/api/cal'),
+  /** 整条航位推算轨迹（平时走 SSE 增量；这个给「一次拿全」/导出用） */
+  route: () => request<RouteEvent>('/api/route'),
+  routeReset: () => post<{ ok: true }>('/api/route/reset'),
 
   presets: async () => {
     const r = await request<{ ok: true; items: PresetItem[] }>('/api/presets')
@@ -178,6 +182,7 @@ export function openStream(handlers: {
   onActions: (a: ActionsResponse) => void
   onParams: (p: ParamsResponse) => void
   onCal: (c: CalResponse) => void
+  onRoute: (r: RouteEvent) => void
   onError: (msg: string) => void
   onLinkChange: (state: 'connecting' | 'open' | 'closed') => void
 }): EventSource {
@@ -209,6 +214,7 @@ export function openStream(handlers: {
   es.addEventListener('log', (e) => handlers.onLog(JSON.parse((e as MessageEvent).data) as LogItem))
   es.addEventListener('ack', (e) => handlers.onAck(JSON.parse((e as MessageEvent).data) as AckItem))
   es.addEventListener('actions', (e) => handlers.onActions(JSON.parse((e as MessageEvent).data) as ActionsResponse))
+  es.addEventListener('route', (e) => handlers.onRoute(JSON.parse((e as MessageEvent).data) as RouteEvent))
   es.addEventListener('params', (e) => handlers.onParams(JSON.parse((e as MessageEvent).data) as ParamsResponse))
   es.addEventListener('cal', (e) => handlers.onCal(JSON.parse((e as MessageEvent).data) as CalResponse))
   return es

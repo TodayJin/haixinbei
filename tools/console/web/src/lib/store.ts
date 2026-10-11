@@ -19,6 +19,8 @@ import type {
   AckItem,
   ActionsResponse,
   CalResponse,
+  RouteEvent,
+  RouteMark,
   LinkInfo,
   LogItem,
   ParamItem,
@@ -91,6 +93,19 @@ function saveSettings(s: Settings): void {
   }
 }
 
+/** ★2026-10-11：航位推算出来的路线（编码器 + IMU）。
+ *  放在**低频**快照里（不是 telem 热路径）—— 桥只有 5 Hz 推它，地图也不用跟着 20 Hz 遥测重绘。*/
+export interface RouteState {
+  pts: [number, number][]
+  marks: RouteMark[]
+  dist_mm: number
+  head: number
+  /** 本次清零后**第一帧**的航向 —— 画板用固定的它当"正右"，所以车转弯整张图不会跟着转 */
+  yaw0: number
+  cur: [number, number]
+  n: number
+}
+
 export interface ConsoleSnapshot {
   version: number
   sse: 'connecting' | 'open' | 'closed'
@@ -100,6 +115,7 @@ export interface ConsoleSnapshot {
   cal: CalResponse | null
   presets: PresetItem[]
   telem: Telem | null
+  route: RouteState | null
   stats: StatsEvent | null
   logs: LogItem[]
   acks: AckItem[]
@@ -145,6 +161,7 @@ class ConsoleStore {
     cal: null,
     presets: [],
     telem: null,
+  route: null,
     stats: null,
     logs: [],
     acks: [],
@@ -364,7 +381,8 @@ class ConsoleStore {
         this.snap = { ...this.snap, params: p }
         this.emit()
       },
-      onCal: (c) => {
+      onRoute: (r) => this.onRoute(r),
+    onCal: (c) => {
         this.snap = { ...this.snap, cal: c }
         this.emit()
       },
@@ -380,6 +398,55 @@ class ConsoleStore {
   stop(): void {
     this.es?.close()
     this.es = null
+  }
+
+  /**
+   * 收航位推算的增量（桥 5 Hz 推）。
+   *
+   * ★2026-10-11 加（用户："通过编码器以及 imu 的数据在上位机上给我一个行进路线的缩略图"）。
+   *
+   * 拼接规则要经得住 SSE 断线重连（重连时桥会把 reset 事件重发一遍）：
+   *  · `reset` ⇒ **整条替换**（那一次桥带的是全量）；
+   *  · 否则按 `from` **截断到 from 再拼** —— 重复的批次不会把点画两遍；
+   *  · `n` 不比现在大就整个忽略（乱序/重放）。
+   */
+  private onRoute(r: RouteEvent): void {
+    const cur = this.snap.route
+    let next: RouteState
+    if (r.reset || !cur) {
+      next = { pts: r.pts.slice(), marks: r.marks.slice(), dist_mm: r.dist_mm, head: r.head, yaw0: r.yaw0, cur: r.cur, n: r.n }
+    } else if (r.n > cur.n) {
+      const keep = r.from <= cur.pts.length ? cur.pts.slice(0, r.from) : cur.pts
+      const seen = new Set(cur.marks.map((m) => m.i))
+      next = {
+        pts: [...keep, ...r.pts],
+        marks: [...cur.marks, ...r.marks.filter((m) => !seen.has(m.i))],
+        dist_mm: r.dist_mm,
+        head: r.head,
+        yaw0: cur.yaw0,
+        cur: r.cur,
+        n: r.n,
+      }
+    } else {
+      return
+    }
+    this.snap = { ...this.snap, route: next }
+    this.emit()          // ★走低频：地图不用跟着 20 Hz 遥测重绘
+  }
+
+  /**
+   * 把一条路线事件塞进来（走的是和 SSE 完全相同的那条路径）。
+   *
+   * 只给一种场合用：离线测试 —— 真机数据一律走 `openStream()`，不要在这里造假数据。
+   * （和 `feedTelem` 同样的理由：拼接规则很容易写错，而它错了图就画歪了。）
+   */
+  feedRoute(r: RouteEvent): void {
+    this.onRoute(r)
+  }
+
+  /** 把路线清零（重新从当前位置起算）。车不动也能清。 */
+  async resetRoute(): Promise<void> {
+    await this.op('路线清零', () => api.routeReset(), '路线已清零')
   }
 
   private onTelem(t: Telem): void {

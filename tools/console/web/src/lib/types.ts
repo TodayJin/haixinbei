@@ -114,6 +114,34 @@ export interface CalResponse {
   other?: CalChannel[]
 }
 
+/** ★2026-10-11：航位推算轨迹（编码器 mm/s + IMU yaw 积分出来的俯视路线）。
+ *  桥按 5 Hz 通过 SSE 的 route 事件推**增量**（from = 这批点从第几个开始），
+ *  reset: true 那一次带**全量**（新打开的页面靠它一次拿全）。
+ *  坐标单位 mm，原点 = 清零那一刻车的位置，x 右 / y 前（数学系，画图时 y 要翻）。 */
+export interface RouteMark {
+  x: number
+  y: number
+  /** state = 状态切换，lost = 丢线 */
+  k: 'state' | 'lost'
+  /** state 时是状态号 */
+  v: number
+  i: number
+}
+
+export interface RouteEvent {
+  from: number
+  pts: [number, number][]
+  marks: RouteMark[]
+  dist_mm: number
+  n: number
+  head: number
+  /** 本次清零后第一帧的航向（画板拿它当"正右"） */
+  yaw0: number
+  cur: [number, number]
+  box?: [number, number, number, number]
+  reset?: boolean
+}
+
 export interface PresetItem {
   name: string
   kind: 'actions' | 'params' | 'servo' | 'mixed'
