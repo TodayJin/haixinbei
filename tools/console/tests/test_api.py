@@ -325,7 +325,9 @@ def test_cal_endpoint(live):
     for ch in j["ch"]:
         assert {"i", "blk", "wht", "thr", "jitter", "pol", "ok", "reason",
                 "level", "thr_level"} <= set(ch)
-    assert j["active_set"] == 0 and 0 <= j["quality"] <= 8
+    # ★2026-10-11：active_set 现在**故意返回 None**（固件不上报当前套号）——原来这里钉的是
+    # 写死的 0，等于把一个谎话钉成契约。见 bridge/protocol.py 的 decode_cal。
+    assert j["active_set"] is None and 0 <= j["quality"] <= 8
 
 
 def test_state_and_log_endpoints(live):

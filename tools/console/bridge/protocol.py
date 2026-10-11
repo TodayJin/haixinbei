@@ -403,7 +403,12 @@ def decode_cal(p: bytes) -> dict:
         ch.append({"i": i, "blk": blk, "wht": wht, "thr": thr, "jitter": jit,
                    "pol": p[1 + i], "bad": bad, "ok": ok, "reason": reason,
                    "level": 0, "thr_level": 0})
-    return {"active_set": 0, "quality": sum(1 for c in ch if c["ok"]), "ch": ch}
+    # ★2026-10-11：原来这里写死 `"active_set": 0` —— 于是界面上**永远显示"第 0 套（普通）"**，
+    #   切到亚克力那套也看不出来（查"切套后循迹失效"时就被它误导过）。
+    #   真相：**固件的 T_CAL_REPORT 只发 trace_cal_data_t（82 字节），里面根本没有"当前是第几套"**
+    #   （车上只有 trace_cal_active_set()，只在 OLED 上显示）。所以这里**宁可说不知道，也不撒谎**：
+    #   返回 None，界面显示"当前套 ?"。要真显示出来得给固件的 T_CAL_REPORT 末尾加一个字节（要重烧）。
+    return {"active_set": None, "quality": sum(1 for c in ch if c["ok"]), "ch": ch}
 
 
 def decode_drive_report(p: bytes) -> dict:

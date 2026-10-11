@@ -222,8 +222,31 @@ class Handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self._send(204, b"")
 
+    # ---------------------------------------------------------------- 请求日志
+    # ★2026-10-11 加：排查"上位机改了动作角度、固化后又弹回原值"时，需要知道
+    #   **浏览器到底有没有把 \`POST /api/actions/set\` 发出来** —— 前端请求层没有超时，
+    #   一旦某发 fetch 卡住，store 的写队列会永久堵死，之后所有写操作静默失效（不报错、不弹提示）。
+    #   这份日志就是那种情况下的唯一证据。写在 \`data/logs/requests.log\`，超过 2MB 自动截断。
+    def _reqlog(self, method: str, path: str, extra: str = "") -> None:
+        try:
+            import time as _t
+            base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            d = os.path.join(base, "data", "logs")
+            os.makedirs(d, exist_ok=True)
+            fp = os.path.join(d, "requests.log")
+            if os.path.exists(fp) and os.path.getsize(fp) > 2 * 1024 * 1024:
+                with open(fp, "w", encoding="utf-8") as f:
+                    f.write("")
+            with open(fp, "a", encoding="utf-8") as f:
+                tail = ("  " + extra) if extra else ""
+                f.write(f"{_t.strftime('%H:%M:%S')}  {method:6s} {path}{tail}\n")
+        except Exception:
+            pass
+
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
+        if path not in ("/api/health", "/api/stream"):
+            self._reqlog("GET", path)
         try:
             self._route_get(path)
         except BrokenPipeError:
@@ -233,6 +256,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        self._reqlog("POST", path)
         try:
             self._route_post(path)
         except BrokenPipeError:
@@ -332,6 +356,14 @@ class Handler(BaseHTTPRequestHandler):
     def _route_post(self, path: str):
         con = self.con
         body = self._body()
+        # ★2026-10-11：把写请求的**请求体**也记下来。
+        #   排查"改了角度、固化后又弹回"时，光看 "POST /api/actions/set" 分不清
+        #   **发的是哪个号、什么值** —— 而"发了个和当前一样的值"和"根本没发"在路径日志里长得一模一样。
+        if path.startswith("/api/actions") or path.startswith("/api/params"):
+            try:
+                self._reqlog("POST", path, json.dumps(body, ensure_ascii=False)[:200])
+            except Exception:
+                pass
         if path == "/api/link/connect":
             mode = body.get("mode") or ("serial" if body.get("port") or self.bridge.port else "serial")
             r = self.bridge.switch(mode, body.get("port", ""), int(body.get("baud", 0) or 0))

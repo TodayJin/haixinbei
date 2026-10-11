@@ -96,9 +96,11 @@ export function SensorsPage() {
         <Card
           title="标定数据"
           right={
-            <Badge tone={cal?.quality === 0 ? 'mint' : 'amber'}>
-              第 {cal?.active_set ?? 0} 套 · 质量 {cal?.quality ?? '--'}
-            </Badge>
+            <span title="固件的 T_CAL_REPORT 只带标定数据、不带「当前用第几套」，所以这里显示不出来 —— 要看当前套，看车上的屏幕（循迹页左上角「普 / 亚」）或任务程序里的「切换灰度标定套」块">
+              <Badge tone={cal?.quality === 0 ? 'mint' : 'amber'}>
+                {cal?.active_set == null ? '当前套 ?' : `第 ${cal.active_set} 套`} · 质量 {cal?.quality ?? '--'}
+              </Badge>
+            </span>
           }
         >
           {cal?.ch?.length ? <CalTable ch={cal.ch} /> : <div className="text-[13px] text-slate-500">暂无标定数据（后端没返回 /api/cal）。</div>}

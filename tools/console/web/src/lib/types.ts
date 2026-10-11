@@ -102,7 +102,9 @@ export interface CalChannel {
 
 export interface CalResponse {
   ok: true
-  active_set: number
+  /** 当前在用第几套标定。**固件没上报这个**（T_CAL_REPORT 只带标定数据）
+   *  ⇒ 桥返回 null，界面显示「当前套 ?」。别再当数字用。 */
+  active_set: number | null
   quality: number
   ch: CalChannel[]
 }

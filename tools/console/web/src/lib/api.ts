@@ -45,6 +45,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     res = await fetch(path, {
       ...init,
       headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+      /* ★必须带超时（2026-10-11 查"改了动作、固化后又弹回"时踩到的）：
+       * 原来这里是**裸 fetch，没有超时** —— 桥一旦卡住（串口在等车、或某发请求永远不回），
+       * 这个 Promise 就**永远不 settle**。而 store 的写操作是**串行排队**的（store.ts 的 op()）
+       * ⇒ 一发卡住会把**之后所有写操作**永久堵死，界面表现是"点了没反应、也不报错"，极难查。
+       * 20s 足够覆盖最慢的操作（任务分片上传每片只 64 字节）。 */
+      signal: init?.signal ?? AbortSignal.timeout(20000),
     })
   } catch (e) {
     // 网络层失败（桥没起来 / 端口不通）

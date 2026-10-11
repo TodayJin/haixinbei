@@ -482,6 +482,10 @@ export function describeBlock(b: TaskBlock, stateCount: number, names?: string[]
     }
     case OP.CROSS_CLEAR:
       return '把横线计数清零'
+    /* ★2026-10-11 补：这个 case 原来漏了 ⇒ 块条上 CAL_SET 显示成"这块网页不认识"
+     * （标签是对的、字段编辑器也认得它，只有摘要落到 default 去了）。 */
+    case OP.CAL_SET:
+      return `换用第 ${b.p0 & 1} 套标定（${(b.p0 & 1) === 1 ? '亚克力' : '普通'}）`
     case OP.SET_STAGE:
       return `段号 = ${b.p0}`
     case OP.IF_STAGE:

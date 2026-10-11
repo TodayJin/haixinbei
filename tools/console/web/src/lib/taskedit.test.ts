@@ -583,4 +583,20 @@ describe('编译预览', () => {
     // 编号超出名字表长度时也不能崩（动作表更新滞后于任务文件是可能的）
     expect(describeBlock(blk(OP.ACTION, 20, 0, 0), 3, undefined, names)).toContain('摆第 20 套舵机动作');
   });
+
+  it('★describeBlock 必须认识每一个 op（漏一个，块条上就写成"这块网页不认识"）', () => {
+    // 2026-10-11 的真 bug：\`CAL_SET(0x0B)\` 在 describeBlock 里**漏了 case** ⇒ 任务页那个块
+    // 的摘要写着「这块网页不认识（固件会当非法程序拒收）」，可它明明认得（标签对、字段编辑器也对）。
+    // 标签和字段走的是 OP_SPECS 表，摘要走的是这个 switch —— 两处对不上就会出这种"半个认识"。
+    // 这条断言遍历 OP 枚举，**漏一个就红**（以后加新块忘了加 case 也会当场发现）。
+    const names = ['状态0', '状态1', '状态2', '状态3']
+    for (const [name, code] of Object.entries(OP)) {
+      const text = describeBlock(blk(code as number), 4, names)
+      expect(text, 'op ' + name + '(0x' + (code as number).toString(16) + ') 没被 describeBlock 处理').not.toContain('不认识')
+      expect(text.length, 'op ' + name + ' 的摘要不该是空串').toBeGreaterThan(0)
+    }
+    // 顺带把 CAL_SET 那句钉住（它原来就是漏的那个）
+    expect(describeBlock(blk(OP.CAL_SET, 1), 4, names)).toContain('亚克力')
+    expect(describeBlock(blk(OP.CAL_SET, 0), 4, names)).toContain('普通')
+  });
 });
