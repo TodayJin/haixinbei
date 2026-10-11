@@ -560,6 +560,23 @@ class ConsoleStore {
     if (r) await this.refreshParams()
   }
 
+  /**
+   * 重新从**车上**读一遍灰度标定（不读桥的缓存）。
+   *
+   * ★2026-10-11 加：桥的 `/api/cal` 会缓存（只在本地没数据时才去读车），而页面原来调的是
+   * 不带 force 的那版 ⇒ **在车上重新标定之后，上位机一直显示旧值**。
+   * 传感器页现在打开就强制读一次、之后每 3 秒再读一次，并且给了一个手动「重读」按钮。
+   */
+  async refreshCal(): Promise<void> {
+    try {
+      const c = await api.cal(true)
+      this.snap = { ...this.snap, cal: c }
+      this.emit()
+    } catch (e) {
+      this.toast('err', `重读标定失败：${(e as Error).message}`)
+    }
+  }
+
   async refreshParams(): Promise<void> {
     try {
       this.snap = { ...this.snap, params: await api.params() }

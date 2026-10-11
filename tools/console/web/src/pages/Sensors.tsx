@@ -131,6 +131,16 @@ export function SensorsPage() {
   const gray = t?.gray ?? Array(8).fill(0)
   const lit = line.reduce((a, b) => a + (b ? 1 : 0), 0)
 
+  // ★2026-10-11：**打开就强制重读一次**，之后每 3 秒再读一次。
+  //   为什么必须强制：桥的 `/api/cal` 会缓存，不带 force 只在桥本地没数据时才读车 ⇒
+  //   用户在车上重新标定完之后，页面永远显示第一次读到的那份旧值（用户报的 bug）。
+  //   一次标定重读只花两帧（T_CAL_GET + 两帧回报），3 秒一次可以忽略。
+  React.useEffect(() => {
+    void store.refreshCal()
+    const id = window.setInterval(() => void store.refreshCal(), 3000)
+    return () => window.clearInterval(id)
+  }, [])
+
   // ★把桥给的两套摆正：ch 是"当前在用那套"，other 是另一套；active_set 说明哪套是当前。
   const sets = React.useMemo(() => {
     const ch = cal?.ch ?? []
@@ -196,9 +206,18 @@ export function SensorsPage() {
         <Card
           title="两套标定对比"
           right={
-            <Badge tone={cal?.quality === 0 ? 'mint' : 'amber'}>
-              {cal?.active_set == null ? '当前套 ?' : `第 ${cal.active_set} 套`} · 质量 {cal?.quality ?? '--'}
-            </Badge>
+            <div className="flex items-center gap-2">
+              <Badge tone={cal?.quality === 0 ? 'mint' : 'amber'}>
+                {cal?.active_set == null ? '当前套 ?' : `第 ${cal.active_set} 套`} · 质量 {cal?.quality ?? '--'}
+              </Badge>
+              <button
+                className="btn-ghost !px-2 !py-0.5 text-[11px]"
+                onClick={() => void store.refreshCal()}
+                title="从车上重读一遍两套标定（在车上标完就点这个，页面不会自动看到）"
+              >
+                重读
+              </button>
+            </div>
           }
         >
           {!sets ? (
@@ -207,6 +226,7 @@ export function SensorsPage() {
             <>
               <p className="text-[12px] leading-relaxed text-slate-500">
                 每条是那一路的<b>黑→白量程</b>，竖线是阈值。两套分开画，方便看它们到底差多少。
+                <b>在车上标完之后，这一页每 3 秒会自动重读一次</b>（也可以点右上角「重读」立刻刷新）。
               </p>
               {sets.s0 && (
                 <CalSetBars

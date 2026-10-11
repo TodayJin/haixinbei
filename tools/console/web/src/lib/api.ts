@@ -156,7 +156,10 @@ export const api = {
   log: (limit = 200) => request<{ ok: true; items: LogItem[] }>(`/api/log${qs({ limit })}`),
   /** 清桥侧日志（不是只清界面）：不然下一次 refreshAll() 会把旧日志原样拉回来 */
   logClear: () => post<{ ok: true }>('/api/log/clear'),
-  cal: () => request<CalResponse>('/api/cal'),
+  /** 标定数据。★`force` 一定要用对：桥**会缓存**上一份，不带 force 的请求
+   *  只在桥本地没有数据时才去读车 ⇒ **用户在车上重新标定之后，页面看到的还是旧值**
+   *  （2026-10-11 用户报的"标定了之后上位机还是不变"就是这个）。 */
+  cal: (force = false) => request<CalResponse>(force ? '/api/cal?refresh=1' : '/api/cal'),
   /** 整条航位推算轨迹（平时走 SSE 增量；这个给「一次拿全」/导出用） */
   route: () => request<RouteEvent>('/api/route'),
   routeReset: () => post<{ ok: true }>('/api/route/reset'),
