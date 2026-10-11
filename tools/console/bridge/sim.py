@@ -109,6 +109,8 @@ class SimCar:
         self.task_timeline: list[tuple[int, int, int]] = []   # 假任务的时间线（开跑时算，见 _prog_timeline）
         self.task_sig = None
         self.task_last_push = 0
+        self.task_fx: list[str] = []      # 与 task_timeline 一一对应：这一步该做什么
+        self.task_fx_step = None          # 上次应用过的步骤号（只在变化时应用）
 
     # ---------------------------------------------------------- 标定假数据
     def _build_cal(self):
@@ -673,6 +675,41 @@ class SimCar:
                     out.append(tgt)
         return out
 
+    def _block_fx(self, buf: bytes, si: int, ne: int, k: int) -> str:
+        """第 si 状态第 k 块对**轮子/舵机**的效果（`k < ne` ⇒ 在 enter 序列，否则 body）。
+
+        ★2026-10-11 加。以前这个模拟器的"假任务"**只走时间线、根本不跑块**（见 _task_tick 的
+        说明）⇒ 任务跑着时 `vl_t/vr_t` 恒为 0 ⇒ **航位推算的路线图在模拟器里永远是空的**，
+        没法验证「只在跑任务时才画」那套东西。现在真的按块改轮速目标。
+
+        只实现**影响运动/舵机**的那几块（SET_SPEED / SET_MODE / END / 动作 / 舵机），
+        其余块照旧"只占时间" —— 够让模拟器里的任务动起来、够验轨迹了。
+        """
+        n = buf[3]
+        if si >= n or len(buf) < 12 + n * 8:
+            return ""
+        base = 12 + si * 8
+        off = pr.u16(buf, base + (2 if k < ne else 4))
+        idx = k if k < ne else k - ne
+        if off == 0:
+            return ""
+        o = off + idx * 10
+        if o + 10 > len(buf):
+            return ""
+        op = buf[o]
+        p0 = pr.u16(buf, o + 2)
+        if op == 0x01:                      # SET_SPEED：p0 = 目标速度（mm/s，两轮同速）
+            return "spd:%d" % p0
+        if op == 0x02:                      # SET_MODE：0 停 / 1 前进 / 2 后退 / 3 左转 / 4 右转
+            return "mode:%d" % p0
+        if op == 0x04:                      # ACTION：摆某个舵机动作
+            return "act:%d" % p0
+        if op == 0x09:                      # SET_SERVO：p0 = 通道，p1 = 角度
+            return "servo:%d:%d" % (p0, int(pr.i16(buf, o + 4)))
+        if op == 0x08:                      # END：停车
+            return "stop"
+        return ""
+
     def _prog_timeline(self, buf: bytes) -> list[tuple[int, int, int]]:
         """把任务摊成假任务要依次经过的 `[(状态号, 该序列内第几块, 停多久ms), ...]`。
 
@@ -690,13 +727,17 @@ class SimCar:
             return []
         main = buf[4]
         tl: list[tuple[int, int, int]] = []
+        fx: list[str] = []
         for tgt in self._gate_targets(buf):
             ne, nb = shape[tgt]
             for k in range(ne):
                 tl.append((tgt, k, self.FAKE_BLOCK_MS))
+                fx.append(self._block_fx(buf, tgt, ne, k))
             for k in range(nb):
                 tl.append((tgt, k, self.FAKE_BLOCK_MS))
+                fx.append(self._block_fx(buf, tgt, ne, ne + k))
             tl.append((main, 0, self.FAKE_MAIN_MS))     # 这一段做完，跳回主页再判下一条
+            fx.append("")
         if not tl:
             # 没有分派门（**不是**"主页分派"写法）⇒ 退回按状态表的物理顺序铺。
             # 这种任务本来就是"一个状态跑完接下一个"的顺序结构，所以这就是它的真实流。
@@ -705,8 +746,11 @@ class SimCar:
             for si, (ne, nb) in enumerate(shape):
                 for k in range(ne):
                     tl.append((si, k, self.FAKE_BLOCK_MS))
+                    fx.append(self._block_fx(buf, si, ne, k))
                 for k in range(nb):
                     tl.append((si, k, self.FAKE_BLOCK_MS))
+                    fx.append(self._block_fx(buf, si, ne, ne + k))
+        self.task_fx = fx
         return tl
 
     def _task_tick(self, now_ms: int):
@@ -727,16 +771,51 @@ class SimCar:
             total = sum(d for _, _, d in tl)
             if total:
                 t = st["elapsed_ms"] % total
-                for si, blk, dur in tl:
+                step = 0
+                for step, (si, blk, dur) in enumerate(tl):
                     if t < dur:
                         st["state"], st["block"] = si, blk
                         break
                     t -= dur
+                # ★2026-10-11：把那一步的效果真的应用上去（以前只改状态号、轮子恒 0
+                #   ⇒ 任务跑着车不动 ⇒ 路线图在模拟器里是死的）。只在**步骤变化时**应用。
+                if step != self.task_fx_step:
+                    self.task_fx_step = step
+                    if step < len(self.task_fx):
+                        self._apply_fx(self.task_fx[step])
         sig = (st["id"], st["state"], 1 if st["running"] else 0, st["block"])
         if sig != self.task_sig or now_ms - self.task_last_push >= 1000:
             self.task_sig = sig
             self.task_last_push = now_ms
             self.pending.append(pr.Frame(pr.T_TASK_STATUS, 0, self._task_status_payload()))
+
+    def _apply_fx(self, fx: str) -> None:
+        """把"这一步该做什么"落到轮速/舵机上（`_block_fx` 产出的字符串）。"""
+        if not fx:
+            return
+        kind, _, arg = fx.partition(":")
+        try:
+            if kind == "spd":
+                self.vl_t = self.vr_t = float(arg)
+            elif kind == "stop":
+                self.vl_t = self.vr_t = 0.0
+            elif kind == "mode":
+                v = 300.0
+                self.vl_t, self.vr_t = {
+                    0: (0.0, 0.0), 1: (v, v), 2: (-v, -v),
+                    3: (-v, v), 4: (v, -v),
+                }.get(int(arg), (0.0, 0.0))
+            elif kind == "act":
+                n = int(arg)
+                if 1 <= n <= len(self.actions):
+                    self._servo_apply(n)
+            elif kind == "servo":
+                ch, _, deg = arg.partition(":")
+                c = int(ch)
+                if 1 <= c <= 2:
+                    self.servo_deg[c - 1] = float(int(deg))
+        except (TypeError, ValueError):
+            pass
 
     def _servo_apply(self, n: int):
         self.action = n
