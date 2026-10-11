@@ -26,7 +26,12 @@ const MIN_SPAN_MM = 240
 const MARK: Record<RouteMark['k'], string> = { state: '#22d3ee', lost: '#fb7185' }
 
 export function RouteMap({ height = 240 }: { height?: number }) {
-  const { route } = useMeta()
+  const { route, link } = useMeta()
+  // ★2026-10-11：模拟器里这张图**跟真车无关**，必须在界面上说清楚，别再误导人：
+  //   ① 模拟器的任务**不跑块**，时间线是编的（每块固定 FAKE_BLOCK_MS）⇒ 你的 WAIT_MS 3000 只算 300ms；
+  //   ② 模拟器的 IMU 航向也是编的、还会漂（实测一次跑里从 -64.6° 漂到 -61.6°）⇒ 直行都画成弯的；
+  //   ③ 就算前两条都修好也对不上 —— **真车的路线是循迹走出来的**，任务块只是在关键点下命令，
+  //      而模拟器里根本没有那条线。
   const pts = route?.pts ?? []
   const yaw0 = route?.yaw0 ?? 0
 
@@ -167,6 +172,16 @@ export function RouteMap({ height = 240 }: { height?: number }) {
         </g>
       </svg>
 
+      {link?.mode === 'sim' && (
+        <div className="mt-1.5 rounded-md border border-neon-amber/30 bg-neon-amber/10 px-2 py-1.5 text-[11px] leading-relaxed text-neon-amber">
+          <b>⚠ 现在连的是模拟器，这条轨迹跟真车无关</b>，只能用来验证界面画得对不对：
+          模拟器的任务<b>不跑块</b>、时长是编的（每块固定几百 ms），IMU 航向也是编的还会漂
+          ⇒ 直行都能画成弯的。
+          <br />
+          更要紧的是：<b>真车的路线是"循迹"走出来的</b>（车跟着地上的线跑），任务块只在关键点下命令 ——
+          模拟器里没有那条线，所以它<b>永远不可能</b>画出真车的路线。要看真路线，只能上车跑。
+        </div>
+      )}
       <p className="mt-1.5 text-[11px] leading-relaxed text-slate-500">
         由<b>编码器轮速</b>（mm/s）和 <b>IMU 航向</b>积分出来的俯视轨迹：<b>起点在左边、起步朝向朝右</b>，
         所以车是"从左往右"跑的。青点 = 状态切换（数字是状态号），红点 = 丢线。
