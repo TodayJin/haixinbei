@@ -123,10 +123,38 @@ if (-not $Sim) {
 $bridgeArgs = @('-m', 'bridge.main', '--port', "$HttpPort", '--baud', "$Baud")
 if ($Sim) { $bridgeArgs += '--sim' } else { $bridgeArgs += @('--serial', $Port) }
 if ($NoBrowser) { $bridgeArgs += '--no-browser' }
+
+# ---- ★2026-10-11：管理员权限下**不要**让桥去开浏览器 ----
+#  提升权限的进程去开 Edge/Chrome 时，Windows 会弹这么一句：
+#    「Microsoft Edge 未响应，因为现有实例正在以提升的权限运行。是否要用普通权限重启现有实例？」
+#  弹窗本身无害（点「是」就行），但每次启动都吓人一次 —— 用户实测每次都弹。
+#  根因是「上位机管理员启、浏览器普通权限」，跨权限级别开浏览器必然如此，脚本里绕不过去
+#  （除非连浏览器一起提权，那更糟）。所以干脆不开，只把网址打出来让人自己点。
+#  正常双击「启动上位机.bat」是**不会**提权的；会提权一般是：右键「以管理员身份运行」、
+#  或者从一个「管理员：PowerShell / 终端」窗口里启动的。
+$isAdmin = $false
+try {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+} catch { $isAdmin = $false }
+$noOpen = $NoBrowser
+if ($isAdmin -and -not $NoBrowser) {
+    $bridgeArgs += '--no-browser'
+    $noOpen = $true
+    Write-Host ""
+    Write-Host "★ 这个窗口是【管理员权限】—— 已经不让桥自动开浏览器了。" -ForegroundColor Yellow
+    Write-Host "  原因是提升权限的进程去开 Edge 会弹「现有实例正在以提升的权限运行」那个框。" -ForegroundColor Yellow
+    Write-Host "  下面会把网址打出来，你自己点一下就行（功能完全不受影响）。" -ForegroundColor Yellow
+    Write-Host "  想恢复自动开浏览器：别用管理员，正常双击「启动上位机.bat」即可。" -ForegroundColor Yellow
+    Write-Host ""
+}
 if ($Extra.Count -gt 0) { $bridgeArgs += $Extra }
 
 Say "工作目录：$ConsoleDir"
-Say "界面：http://127.0.0.1:$HttpPort/　（桥自己会开浏览器；停：Ctrl+C 或关这个窗口）"
+if ($noOpen) {
+    Say "界面：http://127.0.0.1:$HttpPort/　（★没有自动开浏览器，请手动打开这个网址；停：Ctrl+C 或关这个窗口）"
+} else {
+    Say "界面：http://127.0.0.1:$HttpPort/　（桥自己会开浏览器；停：Ctrl+C 或关这个窗口）"
+}
 Say ""
 
 & $Py.e @($Py.a + $bridgeArgs)
