@@ -132,30 +132,17 @@ def main(argv=None) -> int:
     print("=" * 66)
 
     if not args.no_browser:
-        # ★2026-10-11：**管理员权限下不要直接 webbrowser.open()**。
-        #   提升权限的进程去开 Edge/Chrome 时，Windows 会弹
-        #   「Microsoft Edge 未响应，因为现有实例正在以提升的权限运行。是否要用普通权限重启现有实例？」
-        #   —— 用户实测每次启动都弹（他这台机器所有进程都是管理员，UAC 关着/内置 Administrator）。
-        #   绕过办法：**走 explorer.exe 转发** —— 已经在跑的 Explorer 是**普通权限**的，
-        #   由它去开浏览器就不会有跨权限级别的问题。explorer 转发失败再退回 webbrowser。
-        def _open():
-            time.sleep(0.7)
-            try:
-                if sys.platform == "win32" and _is_admin():
-                    # ★注意：explorer.exe **即使成功也返回 1**（已知怪癖）——
-                    #   千万别写成 `if Popen(...).wait() == 0: return`，那样永远等不到 0、
-                    #   每次都会退回 webbrowser.open()，弹窗照旧。发出去就算成功。
-                    subprocess.Popen(["explorer.exe", url],
-                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    return
-            except Exception:
-                pass
-            try:
-                webbrowser.open(url)
-            except Exception:
-                pass
-
-        threading.Thread(target=_open, daemon=True).start()
+        # ★2026-10-11：这里**故意保持最简单的 `webbrowser.open`**。
+        #   之前试过两条"绕过 Edge 权限框"的路，都白搭、而且会把问题弄反：
+        #     · 判断管理员就干脆不开 —— 用户要的就是自动开，不行；
+        #     · 改走 `explorer.exe <url>` 转发 —— Explorer 自己也是**普通权限**的，
+        #       而那个框恰恰是"普通权限进程去叫提权的 Edge"，等于火上浇油。
+        #   真正的根因是**Edge 那个实例的权限和调用方不一致**：
+        #   弹窗上点一次「是」（= 把 Edge 重启成普通权限）就一劳永逸；
+        #   或者把 Edge 完全关掉、让上位机自己打开它，两者权限自然一致。
+        #   这跟上位机无关，代码里也管不了，所以不在这里做任何"聪明事"。
+        threading.Thread(target=lambda: (time.sleep(0.7), webbrowser.open(url)),
+                         daemon=True).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

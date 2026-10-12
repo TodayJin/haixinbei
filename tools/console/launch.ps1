@@ -132,24 +132,21 @@ if ($NoBrowser) { $bridgeArgs += '--no-browser' }
 #  （除非连浏览器一起提权，那更糟）。所以干脆不开，只把网址打出来让人自己点。
 #  正常双击「启动上位机.bat」是**不会**提权的；会提权一般是：右键「以管理员身份运行」、
 #  或者从一个「管理员：PowerShell / 终端」窗口里启动的。
+# ---- 2026-10-11：这里**只提示，不改变行为** ----
+#  曾经写成"检测到管理员就禁掉自动开浏览器"，那是**诊断反了**：
+#  弹窗说的是「**现有实例**（Edge）正在以提升的权限运行」，根因是 Edge 那个实例的权限
+#  和调用方不一致，跟上位机提不提权没有必然关系。禁掉自动开只是把便利性砍了、框照弹。
+#  真正的一劳永逸：在弹窗上点一次「是」（= 把 Edge 重启成普通权限），或者把 Edge 完全
+#  关掉再让上位机自己开一次（两者权限就一致了）。
 $isAdmin = $false
 try {
     $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 } catch { $isAdmin = $false }
-$noOpen = $NoBrowser
-if ($isAdmin -and -not $NoBrowser) {
-    $bridgeArgs += '--no-browser'
-    $noOpen = $true
-    Write-Host ""
-    Write-Host "★ 这个窗口是【管理员权限】—— 已经不让桥自动开浏览器了。" -ForegroundColor Yellow
-    Write-Host "  原因是提升权限的进程去开 Edge 会弹「现有实例正在以提升的权限运行」那个框。" -ForegroundColor Yellow
-    Write-Host "  下面会把网址打出来，你自己点一下就行（功能完全不受影响）。" -ForegroundColor Yellow
-    Write-Host "  想恢复自动开浏览器：别用管理员，正常双击「启动上位机.bat」即可。" -ForegroundColor Yellow
-    Write-Host ""
+if ($isAdmin) {
+    Say "（提示）本窗口是管理员权限。如果 Edge 弹「现有实例正在以提升的权限运行」，"
+    Say "       点一次「是」就好 —— 那是 Edge 那个实例的权限和调用方不一致，不是上位机的问题。"
 }
-if ($Extra.Count -gt 0) { $bridgeArgs += $Extra }
-
-Say "工作目录：$ConsoleDir"
+$noOpen = $NoBrowser
 if ($noOpen) {
     Say "界面：http://127.0.0.1:$HttpPort/　（★没有自动开浏览器，请手动打开这个网址；停：Ctrl+C 或关这个窗口）"
 } else {
