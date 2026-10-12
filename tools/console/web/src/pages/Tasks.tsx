@@ -828,6 +828,16 @@ export function TasksPage() {
     void refreshRemote()
   }
 
+  /** ★2026-10-11（用户："我输 2，第一次判断就不按第一个了，直接从第二个开始"）：
+   *
+   *  **从第几次分派开始跑** —— 1 = 正常（第 1 条判断有资格）；2 = 略过第 1 条、第一圈直接判第 2 条。
+   *  只发给车一次（`T_TASK_RUN` 载荷的第三个字节），**不持久化**（刷新回 1），
+   *  也**只对"上位机按开始"这条路径生效** —— 车自己中键启动走老入口，永远第 1 次。
+   *
+   *  用途：调某一个障碍时，把车放到那儿、直接从第 k 条判断开始，不用每次从头跑。
+   */
+  const [fromDispatch, setFromDispatch] = React.useState(1)
+
   const doRun = async () => {
     /* 跑的是**车上那个槽**，不是编辑器里的编号：名字对不上就成了"按了开始却跑了别的任务"。
        车上没有这条就直说，别去跑一个碰巧同号的槽。 */
@@ -847,7 +857,7 @@ export function TasksPage() {
       }
       store.toast('info', `已先停掉正在跑的 #${status.id}`)
     }
-    const r = await taskApi.run(slot)
+    const r = await taskApi.run(slot, fromDispatch)
     setBusy('')
     if (r.ok) {
       store.toast('ok', `已启动车上 #${slot}`)
@@ -1163,11 +1173,20 @@ export function TasksPage() {
               >
                 <Save size={12} /> 烧写到车{plan.kind === 'full' ? '' : ` #${plan.slot}`}
               </button>
+                {/* ★「从第几次分派开始」：1 = 正常；2 = 略过第 1 条判断……
+                    临时值（不持久化、刷新回 1），而且只有「按这个开始」才用得上 ——
+                    车上的中键启动走的是老入口，永远从第 1 次。 */}
+                <label className="flex items-center gap-1 text-[11px] text-slate-400"
+                       title="从第几次分派开始跑。1 = 正常（第 1 条判断有资格）；2 = 略过第 1 条、第一圈就直接判第 2 条。被略过的那几条这一轮里不会再被分派到。只影响这一次运行；车上的中键启动永远从第 1 次。">
+                  第
+                  <NumberField value={fromDispatch} onChange={setFromDispatch} min={1} max={255} step={1} decimals={0} />
+                  次
+                </label>
               <button
                 className="btn !px-2 !py-0.5 text-[11px]"
                 onClick={() => void doRun()}
                 disabled={!!busy || !supported}
-                title={carSlot === null ? '车上还没有这条任务 —— 先烧写' : `跑车上的 #${carSlot}`}
+                title={carSlot === null ? '车上还没有这条任务 —— 先烧写' : `跑车上的 #${carSlot}（从第 ${fromDispatch} 次分派开始）`}
               >
                 <Play size={12} /> 开始
               </button>

@@ -169,7 +169,8 @@ describe('烧写流程', () => {
     await api.stop();
     await api.del(1);
     expect(calls.map((c) => c.url)).toEqual(['/api/tasks/run', '/api/tasks/stop', '/api/tasks/delete']);
-    expect(calls[0].body).toEqual({ id: 1 });
+    // ★2026-10-11：run 现在多带一个 from（从第几次分派开始，1 起算，1 = 正常）。
+    expect(calls[0].body).toEqual({ id: 1, from: 1 });
     expect(calls[2].body).toEqual({ id: 1 });
   });
 });

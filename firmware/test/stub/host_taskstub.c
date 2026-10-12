@@ -236,6 +236,15 @@ int TaskRun_Load(const uint8_t *prog, uint32_t len)
     return 0;
 }
 
+/* ★2026-10-11：多了"从第几次分派开始"的入口。替身只要把它记下来，让 t_hostlink 能验到
+ *   "第三字节真的被解出来、真的传下去了"即可（真解释器的行为由 t_task.c 验）。 */
+int stub_task_from = 1;
+int TaskRun_StartFrom(uint16_t task_id, uint8_t from_dispatch)
+{
+    stub_task_from = (from_dispatch > 1u) ? (int)from_dispatch : 1;
+    return TaskRun_Start(task_id);
+}
+
 int TaskRun_Start(uint16_t task_id)
 {
     if (stubt_run_loaded == 0u) return -1;      /* 真实现的语义：没载入过就拒绝 */

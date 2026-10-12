@@ -481,10 +481,13 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/tasks/run":
             try:
                 tid = int(body["id"])
+                # ★2026-10-11：可选的 `from` = 从第几次分派开始（1 起算，默认 1 = 正常）。
+                #   只影响这一次运行；界面上是临时的，车自己中键启动不走这里。
+                frm = int(body.get("from", 1) or 1)
             except (KeyError, TypeError, ValueError):
-                self._json({"ok": False, "error": "要给 id"}, 400)
+                self._json({"ok": False, "error": "要给 id（from 可选）"}, 400)
                 return
-            self._json(con.task_run(tid))
+            self._json(con.task_run(tid, frm))
         elif path == "/api/tasks/stop":
             self._json(con.task_stop())
         else:

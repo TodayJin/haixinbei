@@ -922,11 +922,26 @@ class Console:
         return self._task_reply(self.send_wait(pr.T_TASK_DEL, pr.pack_u16(tid), timeout=1.2,
                                                req="tasks.delete"), "删除任务")
 
-    def task_run(self, tid: int) -> dict:
+    def task_run(self, tid: int, from_dispatch: int = 1) -> dict:
+        """启动车上的任务。`from_dispatch` = **从第几次分派开始**（★2026-10-11 加）。
+
+        主页循环体里那串「如果…就跳」是按"第几次压线"轮着来的（固件 `s_dispatch_n`）：
+        第 k 条判断只有 `s_idx == s_dispatch_n` 时才有资格成立。调试时想"从第 k 个障碍开始测"，
+        就把这个计数直接摆到 k-1 —— 被略过的那几条这一轮里再也不会被分派到（这正是本意）。
+
+        · **1 起算**（1 = 正常）；0/负数一律夹成 1；
+        · 载荷多带一个字节：老固件只读前 2 字节（`rd_u16`）⇒ **向后兼容**；
+        · **只影响这一次运行**，不存栈也不存 NVRAM；车自己中键启动走 `TaskRun_Start()` ⇒ 永远第 1 次。
+        """
         g = self._cap_guard()
         if g:
             return g
-        r = self._task_reply(self.send_wait(pr.T_TASK_RUN, pr.pack_u16(tid), timeout=1.5,
+        f = int(from_dispatch)
+        if f < 1:
+            f = 1
+        if f > 255:
+            f = 255
+        r = self._task_reply(self.send_wait(pr.T_TASK_RUN, pr.pack_u16(tid) + bytes([f]), timeout=1.5,
                                              req="tasks.run"), "启动任务")
         # ★只有**车真的接受了**才算"在跑"（见 _route_run_cmd 的说明）：
         #   ① 不等 T_TASK_STATUS 回帧 —— 那个要有人查才来，等它轨迹永远不开始画；

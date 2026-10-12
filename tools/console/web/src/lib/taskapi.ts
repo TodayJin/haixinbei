@@ -168,7 +168,13 @@ export function createTaskApi(fetchImpl: Fetcher) {
 
     del,
 
-    run: (id: number) => call<unknown>('/api/tasks/run', { method: 'POST', body: { id } }),
+    /** 启动车上的任务。★`from` = **从第几次分派开始**（1 起算，1 = 正常）。
+     *
+     * 主页那串「如果…就跳」是按"第几次压线"轮着来的（固件 s_dispatch_n）：第 k 条判断只有
+     * `s_idx == s_dispatch_n` 时才有资格成立。填 2 ⇒ 第 1 条被略过、第一圈就直接判第 2 条；
+     * 被略过的那几条**这一轮里再也不会被分派到**（这正是本意）。
+     * 只影响这一次运行、不存任何地方；车自己中键启动永远从第 1 次。 */
+    run: (id: number, from = 1) => call<unknown>('/api/tasks/run', { method: 'POST', body: { id, from } }),
 
     stop,
 

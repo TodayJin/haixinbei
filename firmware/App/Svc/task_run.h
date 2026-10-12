@@ -30,6 +30,17 @@
 int      TaskRun_Load(const uint8_t *prog, uint32_t len);
 /* 启动（先清状态；没有载入过程序则返回 -1）。task_id 只是给遥测用的标签 */
 int      TaskRun_Start(uint16_t task_id);
+/*
+ * ★2026-10-11（用户）：**从第几次分派开始跑**。
+ *
+ * 主页循环体里那串「如果…就跳」是按"**第几次压线**"轮着来的（见 task_run.c 的 s_dispatch_n）：
+ * 第 k 条判断只有在 `s_idx == s_dispatch_n` 时才有资格成立。所以"从第 k 个障碍开始测"这件事，
+ * 就是把计数直接摆到 k-1 —— 被略过的那几条**这一轮里再也不会被分派到**（这正是本意）。
+ *
+ * · `from_dispatch` **1 起算**（1 = 正常，与老行为逐字节等价；0 也当 1，防老上位机不发这字节）；
+ * · **只影响这一次运行** —— 不存 Flash、不落全局；车上中键启动走 TaskRun_Start() ⇒ 永远第 1 次。
+ */
+int      TaskRun_StartFrom(uint16_t task_id, uint8_t from_dispatch);
 /* 停止并停车（幂等） */
 void     TaskRun_Stop(void);
 /* 5ms 一拍 */

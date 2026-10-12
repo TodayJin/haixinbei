@@ -560,6 +560,12 @@ int TaskRun_Load(const uint8_t *prog, uint32_t len)
 
 int TaskRun_Start(uint16_t id)
 {
+    /* 老入口：等价于"从第 1 次分派开始"。**车上中键、老上位机都走这里** ⇒ 必须是老行为。 */
+    return TaskRun_StartFrom(id, 1u);
+}
+
+int TaskRun_StartFrom(uint16_t id, uint8_t from_dispatch)
+{
     if (!s_loaded) {
         return -1;
     }
@@ -583,7 +589,12 @@ int TaskRun_Start(uint16_t id)
     s_if_from   = 0u;
     s_if_dn     = 0xFFu;
     s_stage     = 0u;                            /* ★段号清 0：主页从"第 0 段"开始分派 */
-    s_dispatch_n    = 0u;                        /* ★分派计数清 0：主页从第 1 条判断开始 */
+    /* ★2026-10-11（用户："我输 2，第一次判断就不按第一个了，直接从第二个开始"）：
+     *   主页那串「如果…就跳」是按"第几次压线"轮着来的（见 IF_STAGE 那段注释：第 k 条判断要
+     *   `s_idx == s_dispatch_n` 才有资格成立）。所以"从第 k 个障碍开始测"就是把计数摆到 k-1。
+     *   `from_dispatch` 1 起算：1（或 0，老上位机不发这字节）⇒ 与以前逐字节等价。
+     *   ★只影响这一次运行：不写 NVRAM、不落全局 —— 车上中键启动走 TaskRun_Start() ⇒ 永远第 1 次。*/
+    s_dispatch_n    = (from_dispatch > 1u) ? (uint8_t)(from_dispatch - 1u) : 0u;
     s_climb_on      = 0u;                        /* ★爬台阶会话：新任务从零开始 */
     s_climb_stage   = 0u;
     s_climb_left    = 0u;

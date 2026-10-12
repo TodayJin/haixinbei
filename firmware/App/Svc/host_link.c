@@ -1194,9 +1194,14 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
 
   case T_TASK_RUN: {
     uint16_t id;
+    uint8_t  from = 1u;          /* ★可选的第三字节：从第几次分派开始（1 起算） */
     int rc;
     if (len < 2u) { send_ack(seq, ST_BAD_PARAM); break; }
     id = rd_u16(p);
+    /* ★2026-10-11（用户）：老上位机只发 2 字节、老固件也只读 2 字节 ⇒ 两边都向后兼容。
+     *   1 = 正常（等价于没有这个字节）；2 = 略过第 1 条判断、从第 2 条开始，以此类推。
+     *   只在这一次 RUN 里生效，不写 NVRAM —— 车自己中键启动那条路永远从第 1 次。 */
+    if (len >= 3u) { from = p[2]; }
     if (id >= TASK_STORE_SLOTS) { send_ack(seq, ST_OUT_OF_RANGE); break; }
     if (TaskRun_IsRunning() != 0u) {
       send_ack(seq, ST_BUSY);                /* 已经有一个任务占着电机：先 0x68 STOP */
@@ -1213,7 +1218,7 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
                    : ((rc == TASK_STORE_E_BUSY) ? ST_BUSY : ST_BAD_PARAM));
       break;
     }
-    if (TaskRun_Start(id) != 0) { send_ack(seq, ST_BAD_PARAM); break; }
+    if (TaskRun_StartFrom(id, from) != 0) { send_ack(seq, ST_BAD_PARAM); break; }
     send_ack(seq, ST_OK);
     break;
   }
