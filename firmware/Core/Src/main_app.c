@@ -289,6 +289,11 @@ int main(void)
  */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
+  /* ★2026-10-13：蜂鸣器保险丝 —— **放在两个分支之外**，只要这个中断还在跑就一定被调到。
+   *  这是"一直响"的兜底：原来关蜂鸣只靠主循环里的 beep_poll()，主循环一卡就永远响。
+   *  它只做一件事：响了超过 BEEP_MAX_MS 就掐掉；正常 20/50ms 的响根本碰不到它。 */
+  board_buzzer_safety();
+
   if (htim->Instance == TIM6) {
     Motion_Task();
   } else if (htim->Instance == TIM7) {

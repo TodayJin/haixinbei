@@ -91,6 +91,13 @@ typedef struct {
 void     board_clock_init(clock_report_t *rep);
 void     board_gpio_keys_init(void);
 void     board_buzzer_init(void);
+/* ★2026-10-13 蜂鸣器保险丝（用户："现在会一直响"）：
+ *   开响时调 board_buzzer_mark_on() 记时刻；board_buzzer_safety() 由 **5ms 中断**调用，
+ *   响了超过 BEEP_MAX_MS(150ms) 就强制掐掉 —— 不依赖主循环，主循环卡死也不会一直响。
+ *   正常关（到点/按键结束）调 board_buzzer_off()，它顺手清状态免得保险丝误判。 */
+void     board_buzzer_mark_on(void);
+void     board_buzzer_safety(void);
+void     board_buzzer_off(void);
 HAL_StatusTypeDef board_i2c_init(void);          /* 100kHz（自检用，最保守） */
 HAL_StatusTypeDef board_i2c_init_hz(uint32_t scl_hz);  /* 指定 SCL 频率 */
 HAL_StatusTypeDef board_uart_jy61_init(void);

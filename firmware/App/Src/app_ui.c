@@ -718,8 +718,13 @@ static void gyro_angles(int32_t *roll, int32_t *pitch, int32_t *yaw)
 /* 蜂鸣器：响一下就好（不要常响）。**非阻塞**——只开响并记下截止时刻。 */
 static void beep_ms(uint16_t ms)
 {
-    board_buzzer_init();
+    /* ★2026-10-13：这里原来有一句 `board_buzzer_init()` —— 两个毛病：
+     *   ① 它内部先写 RESET（低）再配置，等于每响一次都先"瞬间关一下"；
+     *      切状态密集时（PC 仿真里每 5ms 触发一次）引脚会在**同一毫秒内**高-低-高反复翻；
+     *   ② GPIO 初始化属于启动期的事，放在热路径上每响一次重配一遍没意义。
+     *   初始化已在 main_app.c:79 / app_ui 启动时做过一次，这里只要开响 + 记时刻。 */
     HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_SET);
+    board_buzzer_mark_on();               /* 给 5ms 中断里的保险丝记时刻 */
     s_beep_until = HAL_GetTick() + (uint32_t)ms;
 }
 
@@ -734,7 +739,7 @@ static void beep_poll(void)
 {
     if (s_beep_until != 0U && (int32_t)(HAL_GetTick() - s_beep_until) >= 0) {
         s_beep_until = 0U;
-        HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
+        board_buzzer_off();               /* 关 + 清状态（否则 5ms 保险丝会误判）*/
     }
 }
 

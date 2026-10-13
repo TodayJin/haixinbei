@@ -115,6 +115,11 @@ void board_gpio_keys_init(void)
   HAL_GPIO_Init(GPIOC, &io);
 }
 
+/* ★蜂鸣器保险丝的状态（定义放在函数之前 —— 初始化里要把它清 0）*/
+#define BEEP_MAX_MS   150U   /* 硬上限：任何情况下都不许响超过这么久 */
+static uint32_t s_buzzer_on_ms;     /* 这一声是什么时候开的 */
+static uint8_t  s_buzzer_on;        /* 1 = 现在处于"已开响"状态 */
+
 void board_buzzer_init(void)
 {
   GPIO_InitTypeDef io = {0};
@@ -126,6 +131,46 @@ void board_buzzer_init(void)
   io.Pull  = GPIO_NOPULL;
   io.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(BUZZER_PORT, &io);
+  s_buzzer_on = 0U;                 /* 初始化 = 关，安全阀状态跟着归零 */
+}
+
+/* =====================================================================
+ * ★2026-10-13（用户："转换状态时响一声（50ms）就可以，但是现在会一直响"）：
+ *
+ * 蜂鸣器的"关"原来**只**发生在 app_ui_tick() 里的 beep_poll()，也就是**主循环**里。
+ * PC 侧把那段逻辑照抄出来跑过（走时/开响/到点关）——逻辑本身是对的：
+ *     单次触发 20ms ⇒ 高 20ms 然后低；
+ *     但**只要 beep_poll() 有一轮没被调到**（主循环卡住、UI 卡在阻塞里、
+ *     或正在烧录/复位的空档），那一次"开响"就再也没人关 ⇒ **一直响**。
+ *     （仿真里这一条复现得很干净：beep_poll 从不调用 ⇒ 200ms 后引脚还是高。）
+ *
+ * 所以这里加一个**不依赖主循环**的硬上限：开响时记下时刻，由**5ms 定时器中断**
+ * （main_app.c 的 HAL_TIM_PeriodElapsedCallback）来兜底。中断只要还在跑，
+ * 蜂鸣器就不可能响超过 BEEP_MAX_MS —— 从根本上消灭"一直响"。
+ *
+ * 正常路径不受影响：beep_poll() 仍按调用者给的 ms 提前关掉；这里只是保险丝。
+ * ===================================================================== */
+/* 记下"此刻开响"。调用者负责按自己的 ms 关（app_ui.c 的 beep_poll）。 */
+void board_buzzer_mark_on(void)
+{
+  s_buzzer_on_ms = HAL_GetTick();
+  s_buzzer_on    = 1U;
+}
+
+/* ★保险丝：由 5ms 中断调用。响了超过 BEEP_MAX_MS 就直接掐掉。 */
+void board_buzzer_safety(void)
+{
+  if (s_buzzer_on != 0U && (uint32_t)(HAL_GetTick() - s_buzzer_on_ms) >= BEEP_MAX_MS) {
+    HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
+    s_buzzer_on = 0U;
+  }
+}
+
+/* 正常路径主动关掉时也要清状态，否则保险丝以后会误判 */
+void board_buzzer_off(void)
+{
+  HAL_GPIO_WritePin(BUZZER_PORT, BUZZER_PIN, GPIO_PIN_RESET);
+  s_buzzer_on = 0U;
 }
 
 uint8_t keys_raw(void)
