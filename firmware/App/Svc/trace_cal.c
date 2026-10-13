@@ -36,7 +36,19 @@
 
 #include <string.h>
 
-#define TRACE_READ_PERIOD_MS   20U    /* 采集周期：16 字节 @400kHz ≈ 0.45ms */
+/* ★2026-10-13：采集周期**按当前用的是哪条**分别定。
+ *
+ *  I2C 那条：一次读 16 字节 @400kHz ≈ 0.45ms ⇒ 5ms 一个周期只占约 9% 总线；
+ *            主循环实测中位耗时 8us/5ms ⇒ 余量很大，故提到 **5ms（200Hz）**。
+ *  串口那条：一次是"发 2 字节请求 + 逐字节等回复"的**往返**（uart_read_analog），
+ *            缺一个字节就要等一个 TRACE_UART_BYTE_MS ⇒ 几毫秒到几十毫秒（见 poll 里那句
+ *            "UART 那条每次要干等数十毫秒，把主循环拖慢"）。
+ *            ⇒ **绝不能**跟着 I2C 一起提到 5ms，否则主循环被阻塞读拖垮，控制环跟着抖。
+ *            所以串口保持原来的 20ms。
+ *  源还没定下来（TRACE_SRC_NONE）时用保守的那个（20ms）。
+ */
+#define TRACE_READ_PERIOD_MS       20U   /* 串口 / 源未定：原值不动 */
+#define TRACE_READ_PERIOD_I2C_MS    5U   /* I2C：0.45ms/次，5ms 很安全 */
 #define TRACE_FAIL_LIMIT        5U    /* 连续失败这么多帧：按下面的"粘性"规则处理 */
 #define TRACE_SRC_STICK_MS    800U    /* 这个源 800ms 内还读到过帧 ⇒ 只重试，不换源/不判死（m31580） */
 #define TRACE_OFF_RETRY_MS    300U    /* 两条都不通：多久后再从头试一遍（原 2000 ⇒ 黑屏 2~3s，用户 m31580） */
@@ -80,6 +92,9 @@ static uint8_t s_set;                     /* 当前用第几套：0=普通 1=亚
  * （和 trace_cal_raw[] 同时刻）。 */
 static uint8_t s_fl_lvl[TRACE_CAL_CH];
 static uint8_t s_fl_state;
+/* ★2026-10-13：5 次多数表决 —— 每路一个位历史（bit0 = 最近一帧，越往高位越早）+ 表决结果 */
+static uint8_t s_vote_hist[TRACE_CAL_CH];
+static uint8_t s_vote_lvl[TRACE_CAL_CH];
 
 /* 最后一帧"好帧"（TRACE_FRAME_OK）的柱高快照 + 当时时刻（用户 m26712 第 3 条：
  * 丢线之后界面要还能保持住之前的状态，见 trace_cal.h 的「丢线时按住上一帧」）。 */
@@ -452,7 +467,12 @@ void trace_cal_poll(void)
         return;
     }
 
-    if ((now - s_last_ms) < TRACE_READ_PERIOD_MS) return;
+    {
+        /* ★按当前源选周期（见上面两个常量的说明）：I2C 提到 5ms，串口保持 20ms。 */
+        uint32_t period = (trace_cal_src == TRACE_SRC_I2C) ? TRACE_READ_PERIOD_I2C_MS
+                                                          : TRACE_READ_PERIOD_MS;
+        if ((now - s_last_ms) < period) return;
+    }
     s_last_ms = now;
 
     /* I2C 总线看门狗：OLED 空闲时才有机会真正执行恢复（恢复要手动打时钟，
@@ -530,6 +550,20 @@ void trace_cal_poll(void)
 /* 每 20ms 跟着一帧模拟量算一次，结果放 s_fl_lvl[]/s_fl_state 给取值口读
  * （算法说明见 trace_cal.h「判线口径」）。 */
 /* ------------------------------------------------- 标定 -> 几何缓存 / 计时壳 */
+
+/* ★2026-10-13（用户："采集 5 次数据之后，把占比多的那个当成新的数据"）：
+ *  **每路的 0/1 判定走一道 5 深度滑窗多数表决**（≥3/5 才算压黑）。
+ *
+ *  为什么加在"0/1"这一层，而不是原始值/柱高上：
+ *    · 原始 16 位值几乎不重复、"柱高"是连续量 —— 连续量取"众数"没有意义；
+ *    · 而"压黑 / 没压黑"是**量化量**，5 个里出现最多的那个就是它的众数，
+ *      等价于"连续两帧以上的干扰直接不认"，单帧毛刺天然被 3/5 盖掉。
+ *  为什么用**滑窗**而不是"攒够 5 帧再更新"：攒够会多出 5×采集周期 的延迟
+ *      （I2C 5ms ⇒ 25ms），滑窗每来一帧就更新，延迟只有约 2 个周期。
+ *  只在**好帧**（TRACE_FRAME_OK）入窗：弱帧/丢线帧本身没信息，入了会把窗口带歪；
+ *      那两种情况的语义仍由原来的 s_fl_state / 按住值 决定，一行没动。
+ *  想关掉：把 TRACE_VOTE_N 改成 1 即可（1 深度 = 直接透传本帧，逐位退回旧行为）。 */
+#define TRACE_VOTE_N   5U     /* 表决窗深度：奇数，取"过半"即多数 */
 
 /* 就地插入排序 + 取上中位数（n ≤ 8，比调 qsort 便宜得多；调用者给的是可改的副本） */
 static int32_t s_median(int32_t *v, uint8_t n)
@@ -620,6 +654,39 @@ static void frame_compute(void)
  * 没有模拟量（数字口 / 读不通）或者没标定：保持 TRACE_FRAME_FALLBACK —— 界面按住上一帧，
  * 循迹口按丢线走（数字口模式另有回落，见 trace_cal_channel）。
  */
+/**
+ * @brief 把本帧每路的 0/1 推进滑窗，重新表决出 s_vote_lvl[]
+ *
+ * 只由 frame_compute_body() 在**好帧**分支里调用（见 TRACE_VOTE_N 的说明）。
+ * 窗口是 5 位左移：新的一帧进 bit0，最老的从 bit5 溢出丢掉。
+ */
+static void vote_push(void)
+{
+  uint8_t i;
+
+#if (TRACE_VOTE_N <= 1U)
+  /* 关掉表决：直接透传本帧（逐位等于旧行为） */
+  for (i = 0U; i < TRACE_CAL_CH; i++) {
+    s_vote_lvl[i] = (uint8_t)((s_fl_lvl[i] >= 128U) ? 1U : 0U);
+  }
+#else
+  for (i = 0U; i < TRACE_CAL_CH; i++) {
+    uint8_t k;
+    uint8_t bit = (uint8_t)((s_fl_lvl[i] >= 128U) ? 1U : 0U);
+    uint8_t h   = (uint8_t)(((uint8_t)(s_vote_hist[i] << 1) | bit) & 0x1FU);
+    uint8_t cnt = 0U;
+
+    s_vote_hist[i] = h;
+    for (k = 0U; k < TRACE_VOTE_N; k++) {
+      if ((h & (uint8_t)(1U << k)) != 0U) cnt++;
+    }
+    /* 过半即多数。注意初始窗口是全 0：刚上电若本帧压黑，要连续 3 帧黑才成立 ——
+     * 这正是"表决"该有的行为（宁可晚 1~2 帧，也不要被单帧骗）。 */
+    s_vote_lvl[i] = (uint8_t)(((uint16_t)cnt * 2U > (uint16_t)TRACE_VOTE_N) ? 1U : 0U);
+  }
+#endif
+}
+
 static void frame_compute_body(void)
 {
     uint8_t i;
@@ -688,6 +755,7 @@ static void frame_compute_body(void)
         s_fl_state = TRACE_FRAME_WEAK;
     } else {
         s_fl_state = TRACE_FRAME_OK;
+        vote_push();                    /* ★好帧才入表决窗（见 TRACE_VOTE_N 的说明）*/
         /* 好帧留一份快照，给「丢线时按住上一帧」用（trace_cal.h 那条规矩）。
          * 只存柱高：界面那个 0/1 位本来就是"柱高 >= 半高 128"，不另存一份、免得两处口径。 */
         for (i = 0; i < TRACE_CAL_CH; i++) s_hold_lvl[i] = s_fl_lvl[i];
@@ -743,7 +811,9 @@ int trace_cal_channel(uint8_t idx)
     if (!trace_cal_valid || s_bad[idx]) return -1;    /* 没标定 / 这一路标定无效 */
 
     /* 这一帧算过了：0/1 就是"本帧黑度过不过半高（= 标定阈值）"，和重心用的是同一份权重 */
-    if (s_fl_state == TRACE_FRAME_OK)   return (s_fl_lvl[idx] >= 128U) ? 1 : 0;
+    /* ★2026-10-13：好帧的 0/1 走 5 次多数表决的结果（s_vote_lvl），不再直接看本帧柱高。
+     * 弱帧/丢线帧的语义一字未动（下面两行）。 */
+    if (s_fl_state == TRACE_FRAME_OK)   return (s_vote_lvl[idx] != 0U) ? 1 : 0;
     if (s_fl_state == TRACE_FRAME_WEAK) return 0;     /* 这帧没信息：一路都不算压线 */
 
     if (s_pol[idx]) {
@@ -960,6 +1030,12 @@ void trace_cal_set_data(const trace_cal_data_t *in)
 {
     if (in == NULL) return;
     trace_cal_valid = (uint8_t)((in->valid != 0U) ? 1U : 0U);
+    /* ★标定换了（切套/重标/开机从 Flash 恢复）：清空 5 次表决窗 ——
+     *  旧的 0/1 是按旧阈值判的，留着会拿旧结论顶新标定的前两帧。 */
+    {
+        uint8_t vk;
+        for (vk = 0U; vk < TRACE_CAL_CH; vk++) { s_vote_hist[vk] = 0U; s_vote_lvl[vk] = 0U; }
+    }
     memcpy(s_pol, in->pol, sizeof(s_pol));
     memcpy(s_bad, in->bad, sizeof(s_bad));
     memcpy(s_blk, in->blk, sizeof(s_blk));
