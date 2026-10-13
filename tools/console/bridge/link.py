@@ -36,6 +36,28 @@ RX_BUFFER = 262144
 READ_BUDGET = 262144
 
 
+def _port_rank(desc: str, hwid: str) -> int:
+    """一个串口"像不像车上的"的优先级：**越小越优先**。
+
+    ★2026-10-13（用户报"连不上车 / 连上了却下发不了命令"）：以前只有一个 `likely` 布尔，
+    判据是 JLink / "CDC" / hwid 里有 "USB" ⇒ **ESP32 那种普通 USB 串口也算 likely**，
+    于是它和车的 DAPLink **同分**，最后按 COM 号排序 ⇒ **COM3 的 ESP32 赢了 COM4 的车**：
+    口能打开（所以界面显示"已连接"）、但车根本不回话 ⇒ 看起来就是"连上了却发不了命令"。
+    现在按设备特征分级：**车的 DAPLink(FAED:4870 / CMSIS-DAP) > J-Link > 其它 USB 串口 > 蓝牙**。
+    """
+    d = desc.replace(" ", "").upper()
+    h = hwid.upper()
+    if "FAED" in h or "4870" in h or "CMSIS-DAP" in d or "HORCO" in d:
+        return 0                      # 车上的 DAPLink（现役链路：SWD + CDC 串口同一个芯片）
+    if "JLINK" in d or "J-LINK" in desc.upper():
+        return 1                      # J-Link（老链路）
+    if "CDC" in desc or "USB" in h:
+        return 2                      # 其它 USB 串口（ESP32、各种模块……）
+    if "BTHENUM" in h or "BLUETOOTH" in d:
+        return 4                      # 蓝牙虚拟串口：最后考虑
+    return 3
+
+
 def available_ports() -> list[dict]:
     """给 /api/ports 用：机器上能被 pyserial 看见的串口 + 是否像 J-Link/无线下载器。"""
     out = []
@@ -43,14 +65,17 @@ def available_ports() -> list[dict]:
         return out
     for p in list_ports.comports():
         desc = (p.description or "")
+        rank = _port_rank(desc, p.hwid or "")
         out.append({
             "device": p.device,
             "description": desc,
             "hwid": p.hwid or "",
-            "likely": ("JLink" in desc.replace(" ", "")) or ("J-Link" in desc)
-                      or ("CDC" in desc) or ("USB" in (p.hwid or "").upper()),
+            # `likely` 现在只表示"**就是车上那个 DAPLink**"（rank 0）—— 以前只要是个 USB 串口
+            # 就亮，连 ESP32 都算"像是车上的"，那正是选错口的根源。
+            "likely": rank == 0,
+            "rank": rank,
         })
-    out.sort(key=lambda d: (not d["likely"], d["device"]))
+    out.sort(key=lambda d: (d["rank"], d["device"]))
     return out
 
 
@@ -280,7 +305,10 @@ class LinkRunner:
 
 
 def find_default_port() -> str:
-    """挑一个最像车上的串口：优先名字里带 JLink/CDC 的，其次第一个非蓝牙口。"""
+    """挑一个最像车上的串口：**优先车上的 DAPLink（FAED:4870 / CMSIS-DAP）**，
+    其次 J-Link，再其次其它非蓝牙口。判据见 _port_rank —— 千万别退回"只要是 USB 串口就算"，
+    那样 ESP32 之类的模块会和车同分、按 COM 号一比就把车挤掉（2026-10-13 的实况）。
+    """
     ports = available_ports()
     for p in ports:
         if p["likely"] and "BLUETOOTH" not in p["hwid"].upper():
