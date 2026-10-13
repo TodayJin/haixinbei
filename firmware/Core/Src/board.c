@@ -22,6 +22,27 @@ void board_clock_init(clock_report_t *rep)
   memset(rep, 0, sizeof(*rep));
 
   __HAL_RCC_PWR_CLK_ENABLE();
+
+  /* ★2026-10-12：**关掉 UCPD 的 Type-C dead-battery 行为**（用户查数据手册发现的坑）。
+   *
+   * 复位后 `PWR_CR3.UCPD_DBDIS = 0` ⇒ PB6/PB4（UCPD1_CC1/CC2）上会挂一个 **5.1kΩ 下拉**，
+   * 且 **PB6 上的由 PA9 高电平触发、PB4 上的由 PA10 高电平触发**（数据手册引脚表脚注）。
+   * HAL 自己也写着（`stm32g4xx_hal_pwr_ex.c:1150`）：
+   *   "After exiting reset, the USB Type-C dead battery behavior will be enabled, which may
+   *    have a pull-down effect on CC1 and CC2 pins. It is recommended to disable it in all cases."
+   *
+   * 为什么这块板上非关不可：
+   *   · **PB4 = ENC1_A（电机 A 编码器 A 相）、PB6 = ENC2_A（电机 B 编码器 A 相）**
+   *     —— 见 `board.h` 的 `ENC1_A_PIN` / `ENC2_A_PIN` 与 `bsp_board.c` 的 TIM3/TIM4 编码器初始化；
+   *   · **PA9/PA10 = TIM1_CH2/CH3 = 舵机 2/3** —— 见 `bsp_board.c:105` 的 `tim1_servo_init`
+   *     （`io.Pin = PA8|PA9|PA10|PA11`, `AF6_TIM1`）；
+   *   ⇒ **舵机每 20ms 就把编码器 A 相往下拉一次**。编码器输出是 10k 上拉到 5V：
+   *     10k/5.1k 分压约 1.69V，正好卡在 STM32 的 VIL(0.99V) 与 VIH(2.31V) 之间的**未定义区**
+   *     ⇒ 计数可能被吞或被多计（尤其"舵机一摆、编码器同时在跳"的时候）。
+   *
+   * 零成本：本板根本不用 USB-C PD（USB 口只做调试/供电），PWR 时钟上面刚开过。
+   * 幂等：只是置 CR3 的一位，重复调用无副作用。 */
+  HAL_PWREx_DisableUCPDDeadBattery();
   (void)HAL_PWREx_ControlVoltageScaling(PWR_REGULATOR_VOLTAGE_SCALE1_BOOST);
 
   /* --- 先试 HSE 25MHz + PLL /5 ×68 /2 = 170MHz --- */
