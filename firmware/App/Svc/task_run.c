@@ -289,7 +289,28 @@ static int block_step(const task_block_t *b)
 
     case TASK_OP_SET_MODE:
         if ((b->flags & 0x01u) || b->p0 == (uint16_t)TASK_MODE_WHEELS) {
-            /* 两轮速度直给：走速度环，关掉循迹/角度环接管 */
+            /* 两轮速度直给：走速度环，关掉循迹/角度环接管。
+             *
+             * ★2026-10-13（用户："两轮直给都填的负数（倒车），加了之后很容易不执行"）：
+             *   这句注释一直写着"关掉循迹/角度环接管"，但代码只调了 Motion_SetMode(IDLE) ——
+             *   那只管"运动模式"这一层。**后台的那两个环照样在 Motion_Task() 里每 5ms 跑**：
+             *
+             *     motion.c:190  if (GyroControl_IsEnabled()) GyroControl_Task();
+             *
+             *   而 GyroControl_Task() 最后会
+             *     gyro_control.c:1025  left = base - corr; right = base + corr;
+             *                          SpeedControl_SetTarget(left, right);
+             *   **直接把我们刚直给的轮速盖掉**。直给负速度时尤其致命：车往后走、线离开
+             *   传感器 ⇒ 8 路全丢 ⇒ PID_tracing 的丢线保护（PID_tracing.c:873）
+             *   `GyroControl_Stop(); SpeedControl_Stop();` ⇒ 连速度环一起关掉 ⇒ PWM=0 ⇒
+             *   **车一动不动**，可解释器还在正常往下跑（上位机显示"已启动"）。
+             *   只往前开不会犯：车一直压着线，丢线保护不开火。这就是"加了倒车才容易复发、
+             *   复位一次再下发就好"的由来（复位后这些环还没被打开）。
+             *
+             *   所以这里按注释的原意把两个后台环都停掉：直给是**开环手动**命令，
+             *   不允许任何后台环来抢速度环。切回循迹/角度环由后面的 SET_MODE 分支负责开。 */
+            GyroControl_Stop();          /* 停角度环：它每 5ms 会覆盖轮速目标 */
+            PID_Tracing_Timer_Stop();    /* 停后台循迹环（同一类劫持，幂等） */
             Motion_SetMode(MOTION_IDLE);
             /* ★p2 是 u16 ⇒ 按 i16 符号扩展：否则「两轮直给 −3600」编码成 61936，
              *   车上变成"左轮倒转 + 右轮顶到 +7200" = **原地打转，不是倒车**（已实锤）。
