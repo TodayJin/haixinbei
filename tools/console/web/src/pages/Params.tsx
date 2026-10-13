@@ -1,5 +1,5 @@
 import React from 'react'
-import { RotateCcw, Save, Search, Upload } from 'lucide-react'
+import { Save, Search, Upload } from 'lucide-react'
 import { Badge, Card, NumberField } from '../components/ui'
 import { store, useMeta } from '../lib/store'
 import { fmt } from '../lib/format'
@@ -125,9 +125,6 @@ export function ParamsPage() {
             </button>
             <button className="btn-ghost" onClick={() => void store.reloadParams()}>
               从车重读
-            </button>
-            <button className="btn-ghost" onClick={() => void store.paramsDefaults()}>
-              <RotateCcw size={13} /> 回默认
             </button>
           </div>
         </div>
