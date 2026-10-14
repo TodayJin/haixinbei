@@ -178,3 +178,58 @@ def test_sim_nvram_matches_firmware_states():
     vals = {int(v) for v in re.findall(r'self\.nvram\s*=\s*(\d)', sim)}
     assert vals <= {0, 1, 2}, f'sim.py 里出现了固件没有的 nvram 值：{sorted(vals - {0, 1, 2})}'
     assert vals == {0, 1, 2}, f'sim.py 没覆盖全部 3 态：{sorted(vals)}'
+
+
+# ---------------------------------------------------------------- 选口：不许静默兜底
+def test_find_default_port_refuses_non_car_ports(monkeypatch):
+    """★回归（2026-10-14 实测踩到）：DAPLink 卡住/没插时，find_default_port() 原来有一条
+    「任何非蓝牙口」的兜底 ⇒ 它会**默默挑中 ESP32 那种普通 USB 串口**：口能打开、
+    connected 也报 true，但车上一个字都不回 ⇒ 界面看着「已连接」，实际采不到遥测，
+    而且**一句错都不报**（当天就这么废掉了一整轮速度环标定，采到 0 帧）。
+
+    现在必须**失败得响亮**：只认 rank 0（车上的 DAPLink）/ rank 1（J-Link），都没有就返回空串。
+    """
+    from bridge import link as L
+
+    esp32 = [{"device": "COM3", "description": "USB 串行设备",
+              "hwid": "USB VID:PID=1A86:7523", "likely": False, "rank": 2}]
+    monkeypatch.setattr(L, "available_ports", lambda: esp32)
+    assert L.find_default_port() == "", "只有 ESP32 时不该自动挑它（原来就是这里静默兜底）"
+
+    bt = [{"device": "COM9", "description": "标准串行蓝牙链接",
+           "hwid": "BTHENUM", "likely": False, "rank": 4}]
+    monkeypatch.setattr(L, "available_ports", lambda: bt)
+    assert L.find_default_port() == ""
+
+    monkeypatch.setattr(L, "available_ports", lambda: [])
+    assert L.find_default_port() == ""
+
+
+def test_find_default_port_picks_the_car(monkeypatch):
+    """车在（rank 0）就必须挑车，哪怕它的 COM 号比 ESP32 大 —— 2026-10-13 的实况就是
+    「COM3 的 ESP32 赢了 COM4 的车」。"""
+    from bridge import link as L
+    ports = [
+        {"device": "COM3", "description": "USB 串行设备",
+         "hwid": "USB VID:PID=1A86:7523", "likely": False, "rank": 2},
+        {"device": "COM4", "description": "Horco CMSIS-DAP v2",
+         "hwid": "USB VID:PID=FAED:4870", "likely": True, "rank": 0},
+    ]
+    monkeypatch.setattr(L, "available_ports",
+                        lambda: sorted(ports, key=lambda d: (d["rank"], d["device"])))
+    assert L.find_default_port() == "COM4"
+
+
+def test_main_passes_the_validated_port_to_the_bridge():
+    """★回归：原来先用 `args.serial or find_default_port()` 做校验、却用 `args.serial or ""`
+    去构造 Bridge ⇒ 下层会**重新自动挑一次**，校验的和真正打开的可能不是同一个口。
+    现在必须复用同一个 port 变量。"""
+    from pathlib import Path as _P
+    src = (_P(__file__).resolve().parents[1] / "bridge" / "main.py").read_text(encoding="utf-8")
+    assert 'port = args.serial or ""' in src, "没找到 port 变量的解析"
+    assert "port = port or find_default_port()" in src, "没找到「解析一次然后复用」"
+    assert "check_baud(port, args.baud" in src, "校验用的不是解析出来的那个 port"
+    assert "Bridge(mode=mode, port=port," in src, "Bridge 拿到的不是同一个 port"
+    after = src.split("Bridge(mode=mode")[1][:80]
+    assert 'args.serial or ""' not in after, "Bridge 还在自己兜底挑口"
+    assert "没找到**车上的**串口" in src, "找不到车时没有明确报错"

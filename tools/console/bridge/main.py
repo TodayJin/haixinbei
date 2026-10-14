@@ -89,19 +89,44 @@ def main(argv=None) -> int:
             print("没找到任何串口（没装 pyserial？）")
             return 1
         for p in ports:
-            mark = " ← 像是车上的" if p["likely"] else ""
+            # ★2026-10-14：把 rank 也打出来（0 = 车上的 DAPLink / 1 = J-Link / 2 = 其它 USB /
+            #   3 = 未知 / 4 = 蓝牙）。只亮"像是车上的"会让人以为其它口也能用。
+            mark = " ← 像是车上的" if p["likely"] else f"   (rank {p.get('rank', '?')})"
             print(f"{p['device']:8s} {p['description']}{mark}")
-        print(f"\n建议：--serial {find_default_port()}")
+        pick = find_default_port()
+        if pick:
+            print(f"\n建议：--serial {pick}")
+        else:
+            # ★2026-10-14：以前这里会把上面任意一个口（比如 ESP32）当"建议"报出来，
+            #   用户照着连上 ⇒ 口能开、却不回话。现在**明确说找不到车**。
+            print("\n⚠ 上面这些口都**不是车上的**（车上的 DAPLink 是 VID_FAED:4870 / CMSIS-DAP，"
+                  "或 J-Link）。")
+            print("  请确认：① 车先上电 ② 再插 DAPLink 的 USB（这台机器 SWD 和 CDC 同一颗芯片，"
+                  "上位机连过之后经常要重插）③ 稍等 5 秒再试。")
+            print("  如果车确实接在别的口上，用 `-Port COMx` 明确指定。")
         return 0
 
     mode = "sim" if args.sim else "serial"
+    port = args.serial or ""
     if mode == "serial":
-        err = check_baud(args.serial or find_default_port(), args.baud, args.force_baud)
+        # ★2026-10-14：两处改动
+        #   ① 找不到车的口就**明确失败**（以前会传空串下去、由下层再"兜底"挑一个别的口，
+        #      于是校验的是一个口、真正打开的是另一个口）；
+        #   ② `port` 解析一次就**复用它**（原来是 `args.serial or find_default_port()` 校验，
+        #      却又 `args.serial or ""` 传下去 ⇒ 下面会重新自动挑一次，两次可能不同）。
+        port = port or find_default_port()
+        if not port:
+            print("启动失败：没找到**车上的**串口（DAPLink VID_FAED:4870 / CMSIS-DAP，或 J-Link）。")
+            print("  · 车先上电，再插 DAPLink 的 USB；这台机器 SWD 与 CDC 是同一颗芯片，")
+            print("    上位机用过之后经常要重插才能再被认出来。")
+            print("  · `-ListPorts` 看有哪些口；用 `-Port COMx` 明确指定。")
+            return 2
+        err = check_baud(port, args.baud, args.force_baud)
         if err:
             print(f"启动失败：{err}")
             return 2
     hi_res = False if args.low_res_timer else raise_timer_resolution()
-    b = Bridge(mode=mode, port=args.serial or "", baud=args.baud,
+    b = Bridge(mode=mode, port=port, baud=args.baud,
                web_root=args.web or "", console_dir=CONSOLE_DIR,
                sse_batch_ms=args.sse_batch_ms)
     try:

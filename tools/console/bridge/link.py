@@ -305,18 +305,21 @@ class LinkRunner:
 
 
 def find_default_port() -> str:
-    """挑一个最像车上的串口：**优先车上的 DAPLink（FAED:4870 / CMSIS-DAP）**，
-    其次 J-Link，再其次其它非蓝牙口。判据见 _port_rank —— 千万别退回"只要是 USB 串口就算"，
-    那样 ESP32 之类的模块会和车同分、按 COM 号一比就把车挤掉（2026-10-13 的实况）。
+    """挑车的串口：**只认 rank 0（车上的 DAPLink）和 rank 1（J-Link）**，
+    找不到就返回 `""`，由调用方**明确报错**。判据见 `_port_rank`。
+
+    ★2026-10-14（实测踩到）：这里原来在 rank 0 找不到时还有一条"任何非蓝牙口"的兜底
+    ⇒ DAPLink 卡住/没插时（这台机器 SWD 和 CDC 是同一颗芯片，上位机用过之后经常要重插），
+    它会**默默挑中 ESP32 那种普通 USB 串口**：口能打开、`connected` 也报 true，
+    但车上一个字都不回 ⇒ 界面看着"已连接"，实际**采不到任何遥测**，而且**一句错都不报**。
+    当天就这么废掉了一整轮速度环标定（采集到 0 帧，还以为是车/参数的问题）。
+    ⇒ 现在**宁可失败得响亮**：找不到车的口就返回 ""，让用户拿 `-Port COMx` 明确指定。
     """
     ports = available_ports()
     for p in ports:
-        if p["likely"] and "BLUETOOTH" not in p["hwid"].upper():
+        if p["rank"] <= 1:
             return p["device"]
-    for p in ports:
-        if "BTHENUM" not in p["hwid"].upper():
-            return p["device"]
-    return ports[0]["device"] if ports else ""
+    return ""
 
 
 def glob_ports() -> list[str]:                            # 兼容性小工具
