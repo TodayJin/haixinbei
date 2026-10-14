@@ -167,20 +167,19 @@ export function ServoPage() {
                   固件对 T_ACTION_SAVE **一律回 ACK OK**，真正写不写由 nvram_poll() 决定：
                     · 「车在动绝不擦写」—— 速度环使能 / 角度环开着 / 运动模式非 IDLE 就**拒**；
                     · 内容和 Flash 里那份已经一样时也什么都不做（照样回 OK）。
-                  ⇒ **光看 ACK 判断不了成没成**。取值来自遥测（TELEM2 第 56 字节）：
-                    0 空闲 / 1 待保存 / 2 保存中 / 3 已保存 / 4 失败。
-                  和「操控页」「总览页」用的是同一个 NVRAM_TEXT、同一个来源，口径一致。 */}
-              <Badge
-                tone={(telem?.nvram ?? 0) === 3 ? 'mint' : (telem?.nvram ?? 0) === 4 ? 'rose' : 'slate'}
-                title={
-                  (telem?.nvram ?? 0) === 1
-                    ? '已收到请求，**还没写进 Flash**（车在动时固件会一直拒；先停车/等电机停）'
-                    : (telem?.nvram ?? 0) === 3
-                      ? '已经写进车的 Flash 了（掉电不丢）'
-                      : (telem?.nvram ?? 0) === 4
-                        ? '写 Flash 失败了'
-                        : '车的 NVRAM 保存状态'
-                }
+                  ⇒ **光看 ACK 判断不了成没成**。取值来自遥测（TELEM2 第 56 字节），
+                  ★2026-10-14（审计 #11）**以固件为准的 3 态**（nvram.h:49-51）：
+                    0 空闲 / 1 正在写（BUSY）/ 2 已保存（DONE）。固件**没有失败态**
+                  （写失败只悄悄回 IDLE）⇒ 这里不再摆"失败"徽章。和「操控页」「总览页」同一个来源。 */}
+                <Badge
+                  tone={(telem?.nvram ?? 0) === 2 ? 'mint' : 'slate'}
+                  title={
+                    (telem?.nvram ?? 0) === 1
+                      ? '固件正在擦写 Flash（这一步很快就过）'
+                      : (telem?.nvram ?? 0) === 2
+                        ? '已经写进车的 Flash 了（掉电不丢）'
+                        : '车的 NVRAM 保存状态（空闲）。★点了保存却一直停在「空闲」⇒ 多半是内容与 Flash 里那份已经一样，固件就什么都不写'
+                  }
               >
                 NVRAM {NVRAM_TEXT[telem?.nvram ?? 0] ?? '--'}
               </Badge>

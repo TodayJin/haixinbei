@@ -319,15 +319,19 @@ def test_nvram_state_machine():
     car = SimCar()
     car.start(0)
     assert car.nvram == 0
+    # ★2026-10-14（审计 #11）：模拟器的 nvram 状态机已对齐**固件**的 3 态
+    #   （firmware/App/Svc/nvram.h:49-51：0 IDLE / 1 BUSY 正在写 / 2 DONE 写成功）。
+    #   原来是 5 态口径（1 待保存 / 2 保存中 / 3 已保存）⇒ 模拟器显示与真车不一致，
+    #   而前端已经按 3 态判绿（=== 2）⇒ 用 --sim 调前端会永远看不到"已保存"。
     req(car, pr.T_PARAM_SAVE, b"", seq=41, now=0)
-    assert car.nvram == 1                                   # 待保存
+    assert car.nvram == 1                                   # 正在写（BUSY）
     car.poll(1000)
     assert car.nvram == 1
     car.poll(1600)
-    assert car.nvram == 2                                   # 保存中
-    car.poll(1800)
-    assert car.nvram == 3                                   # 已保存
-    assert pr.decode_telemetry(car._telem_bytes())["nvram"] == 3
+    assert car.nvram == 2                                   # 写成功（DONE）
+    assert pr.decode_telemetry(car._telem_bytes())["nvram"] == 2
+    car.poll(3000)
+    assert car.nvram == 0                                   # 挂完 NVRAM_DONE_MS 回空闲
 
 
 def test_cal_report_and_unknown_frames():

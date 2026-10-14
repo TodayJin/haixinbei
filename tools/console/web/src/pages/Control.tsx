@@ -169,7 +169,9 @@ export function ControlPage() {
               动作 <span className="num text-slate-200">{telem?.action ?? '--'}</span>
             </div>
             <div className="col-span-2">
-              NVRAM <Badge tone={(telem?.nvram ?? 0) === 3 ? 'mint' : (telem?.nvram ?? 0) === 4 ? 'rose' : 'slate'}>{NVRAM_TEXT[telem?.nvram ?? 0] ?? '--'}</Badge>
+              {/* ★审计 #11：固件只有 3 态（0 空闲 / 1 正在写 / 2 已保存，以 nvram.h 为准）
+     ⇒ 判绿要判 **2**（原来判 3/4 是 5 态的旧口径，永远不可能变绿） */}
+              NVRAM <Badge tone={(telem?.nvram ?? 0) === 2 ? 'mint' : 'slate'}>{NVRAM_TEXT[telem?.nvram ?? 0] ?? '--'}</Badge>
             </div>
           </div>
         </Card>

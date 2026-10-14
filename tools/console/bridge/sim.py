@@ -6,7 +6,9 @@
   * 偶发丢线（`flags.lost`，灰度全白、重心冻结）；
   * 参数表 43 项可读可写（含范围校验，越界回 ST_OUT_OF_RANGE）；
   * 动作表 20 项、舵机两路、驾驶模式（wheels/base_turn/trace/off）+ 500ms 看门狗；
-  * nvram 保存会走 待保存 → 保存中 → 已保存 的状态变化。
+  * nvram 保存会走 正在写(1) → 已保存(2) → 空闲(0) 的状态变化 ——
+ * ★2026-10-14（审计 #11）：与固件 nvram.h:49-51 的 3 态逐值对齐（原来这里是 5 态的
+ *   1 待保存 / 2 保存中 / 3 已保存，而固件是 1 BUSY / 2 DONE）⇒ 模拟器和真车显示不一致。
 """
 from __future__ import annotations
 
@@ -196,7 +198,9 @@ class SimCar:
                       "rate_ref": 0.0, "corr": int(round(self.pwm_l - self.pwm_r)) // 2},
             "flags": {"gyro_ok": True, "lost": self.lost, "slope": abs(self.pitch) > 8.0,
                       "host_drive": self.drive_enabled, "motor": abs(self.pwm_l) > 50,
-                      "logging": False, "flash": self.nvram == 2,
+                      # ★审计 #11：固件是 `if (nvram_state() == NVRAM_STATE_BUSY) flags |= FL_FLASH;`
+            #   （host_link.c:582）⇒ BUSY = **1**，不是 2。
+            "logging": False, "flash": self.nvram == 1,
                       "fault": self.drive_trips > 3},
             "drive": {"mode": self.drive_mode, "enabled": self.drive_enabled},
             "watchdog_trips": min(255, self.drive_trips),
@@ -267,11 +271,14 @@ class SimCar:
         self.pitch = 5.8 + math.sin(now_ms / 700.0) * 1.2
         self.roll = 4.7 + math.cos(now_ms / 500.0) * 0.8
         self.loop_us = 400 + int(self.rng.gauss(0, 25))
+        # ★审计 #11：对齐固件的 3 态与两个时限
+        #   1(BUSY) --NVRAM_SAVE_DELAY_MS 1500--> 2(DONE) --NVRAM_DONE_MS 1200--> 0(IDLE)
+        #   （原来走 1→2→3 且只在中间停 120ms，与固件的 DONE 保持 1200ms 不符）
         if self.nvram == 1 and now_ms - self.nvram_ms > 1500:
             self.nvram = 2
             self.nvram_ms = now_ms
-        elif self.nvram == 2 and now_ms - self.nvram_ms > 120:
-            self.nvram = 3
+        elif self.nvram == 2 and now_ms - self.nvram_ms > 1200:
+            self.nvram = 0
             self.nvram_ms = now_ms
 
     def _ack(self, seq: int, st: int):

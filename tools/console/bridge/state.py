@@ -44,7 +44,9 @@ DRIVE_MODES = {"off": 0, "wheels": 1, "base_turn": 2, "trace": 3}
 DRIVE_KEEPALIVE_MS = 200      # 车上驾驶看门狗是 500ms，留 2 倍余量
 DRIVE_HOLD_MS = 3000          # 有 /api/stream 订阅者挂着就算"在场"，超时就不再喂
 MODE_NAMES = {0: "空闲", 1: "陀螺", 2: "循迹", 3: "串级"}
-NVRAM_NAMES = {0: "空闲", 1: "待保存", 2: "保存中", 3: "已保存", 4: "失败"}
+# ★2026-10-14（审计 #11）：以固件为准的 3 态，见 bridge/protocol.py 的 NVRAM_NAMES 注释
+#   （固件 nvram.h 只有 IDLE 0 / BUSY 1 / DONE 2，且没有失败态）。
+NVRAM_NAMES = {0: "空闲", 1: "正在写", 2: "已保存"}
 ST_NAMES = {0x00: "OK", 0x02: "未知类型", 0x03: "参数错", 0x04: "超范围",
             0x05: "未就绪", 0x06: "命令错", 0x07: "忙", 0x08: "不支持"}
 # 车上拒绝任务操作时，"下一步该干什么"（用户 m 2026-10-07 要求：红字要能指向动作，

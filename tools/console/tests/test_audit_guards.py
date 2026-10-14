@@ -133,3 +133,48 @@ def test_speed_full_counts_param_exists():
     assert sp.id == 0x0308
     assert sp.default == 25.0        # 与固件 SPECS 一致（test_params.py 也会逐项核对）
     assert sp.min == 1.0 and sp.max == 5000.0
+
+
+# ---------------------------------------------------------------- #11 nvram 3 态
+def test_nvram_state_matches_firmware():
+    """★回归：上位机原来按 5 态解释 nvram（1 待保存 / 2 保存中 / 3 已保存 / 4 失败），
+    而固件（nvram.h:49-51）只有 3 态（0 IDLE / 1 BUSY / 2 DONE）且**没有失败态**
+    ⇒ 固件报 2（写成功）时界面显示"保存中"、徽章永远不变绿，"已保存"从来不会出现。
+
+    这里像 test_params.py 那样**直接解析固件源码**，钉住"两边一致"，防止以后再漂。
+    """
+    import re
+    from pathlib import Path as _P
+    fw = _P(__file__).resolve().parents[3] / 'firmware' / 'App' / 'Svc' / 'nvram.h'
+    assert fw.is_file(), f'找不到固件头文件 {fw}'
+    src = fw.read_text(encoding='utf-8', errors='replace')
+
+    ids = set()
+    for m in re.finditer(r'#define\s+NVRAM_STATE_(\w+)\s+(\d+)U', src):
+        ids.add(int(m.group(2)))
+    assert ids == {0, 1, 2}, f'固件的 nvram 状态集合变了：{sorted(ids)}（本测试按 3 态钉住）'
+
+    # 上位机的两张表都必须是同一组 key
+    from bridge import protocol as pr
+    from bridge.state import NVRAM_NAMES
+    assert set(pr.NVRAM_NAMES) == ids, f'protocol.NVRAM_NAMES={sorted(pr.NVRAM_NAMES)} vs 固件 {sorted(ids)}'
+    assert set(NVRAM_NAMES) == ids, f'state.NVRAM_NAMES={sorted(NVRAM_NAMES)} vs 固件 {sorted(ids)}'
+    assert '失败' not in ''.join(NVRAM_NAMES.values()), '固件没有失败态，界面不该承诺它'
+
+    # 前端那张表也要对齐（直接读源文件，不需要跑 tsc）
+    ts = _P(__file__).resolve().parents[1] / 'web' / 'src' / 'lib' / 'types.ts'
+    tsrc = ts.read_text(encoding='utf-8', errors='replace')
+    blk = re.search(r'NVRAM_TEXT[^=]*=\s*\{(.*?)\}', tsrc, re.S)
+    assert blk, '没找到 NVRAM_TEXT'
+    keys = {int(x) for x in re.findall(r'^\s*(\d)\s*:', blk.group(1), re.M)}
+    assert keys == ids, f'types.ts 的 NVRAM_TEXT key={sorted(keys)} vs 固件 {sorted(ids)}'
+
+
+def test_sim_nvram_matches_firmware_states():
+    """模拟器的 nvram 状态机也必须走固件那 3 个值（否则 --sim 下前端看不到"已保存"）。"""
+    import re
+    from pathlib import Path as _P
+    sim = (_P(__file__).resolve().parents[1] / 'bridge' / 'sim.py').read_text(encoding='utf-8', errors='replace')
+    vals = {int(v) for v in re.findall(r'self\.nvram\s*=\s*(\d)', sim)}
+    assert vals <= {0, 1, 2}, f'sim.py 里出现了固件没有的 nvram 值：{sorted(vals - {0, 1, 2})}'
+    assert vals == {0, 1, 2}, f'sim.py 没覆盖全部 3 态：{sorted(vals)}'
