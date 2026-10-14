@@ -383,6 +383,9 @@ static uint8_t sample_point(void)
 }
 
 /* 采样完算平均并推进状态。进入时 s_state 还是 WAIT_BLACK / WAIT_WHITE。 */
+/* ★2026-10-13（审计 #13）：进标定前那份 trace_cal_valid。声明放这里 —— `sample_finish()`
+ *  （在下面）失败时就要用它还原，不能等向导那一段才声明。 */
+static uint8_t s_valid_before;   /* 进标定前的 trace_cal_valid：中途取消要还回去 */
 static void sample_finish(void)
 {
     uint8_t i;
@@ -440,7 +443,17 @@ static void sample_finish(void)
      * 只要还有一路能用就照常置 valid——少几路的场合用户自己看 8 路的 '!' 和质量分数。 */
     trace_cal_valid = (uint8_t)((ok > 0U) ? 1U : 0U);
     s_done_ms = HAL_GetTick();
-    s_state   = (trace_cal_valid != 0U) ? TRACE_CAL_DONE : TRACE_CAL_FAILED;
+    if (trace_cal_valid == 0U) {
+        /* ★2026-10-13（审计 #13）：这次采下来一路都不能用 ⇒ 应当**保留进标定之前那份旧标定**，
+         *  而不是把 valid 清成 0。清成 0 的后果不是"这一次会话里没标定"，而是**旧的整套标定
+         *  静默作废**（消费侧 `trace_cal_channel` 见到 valid=0 就直接回 -1 ⇒ 循迹永远判丢线），
+         *  而且 ~1.5s 后 nvram 会自动把 valid=0 写进 Flash ⇒ **掉电也回不来**，必须重做完整两点标定。
+         *  用户"退出了标定向导"≠"我要废掉旧标定"。 */
+        trace_cal_valid = s_valid_before;
+        s_state         = TRACE_CAL_FAILED;
+    } else {
+        s_state         = TRACE_CAL_DONE;
+    }
 
     /* 刚标完：几何缓存按新标定重算（用户 m07689：参数靠标定算）。
      * 自适应删掉后没有"白底基线要重新起头"这回事了：阈值/极性就在新标定里，下一帧直接生效。 */
@@ -479,12 +492,16 @@ void trace_cal_poll(void)
      * 会把正在 DMA 搬运的屏打断）。这里只是"报个空闲"，不满足条件时它自己什么都不做。 */
     (void)board_i2c_watchdog((uint8_t)(OLED_IsBusy() ? 0U : 1U));
 
-    /* 算这一帧的黑度/判定（读值口直接读这份缓存），算法见 trace_cal.h「判线口径」。
-     * 必须放在这个 20ms 闸门**之后**：poll 是主循环每圈都调的（~1ms 一圈），
-     * 放在前面会把"每 20ms 一帧"变成 1ms 一帧（判定跟着抖）。
-     * 放在这里，下面每条提前 return（退避/等 OLED/读失败）都不再算 —— 那几种情况
-     * 本来也没有新模拟量，用上一帧的缓存和 trace_cal_raw[] 同样是旧的，节奏一致。 */
-    frame_compute();
+    /* ★2026-10-13（审计 #14，用户："你先检查代码再改"）：`frame_compute()` **原来放在这里**
+     *  —— 也就是"过了周期闸门、但在取数之前"。问题是下面每一条提前 return（退避 / 等 OLED /
+     *  读失败）都**不产生新样本**，可 frame_compute() 已经跑过了：它会拿**没变过的**
+     *  `trace_cal_raw[]` 重算一遍，只要仍判成好帧就再 `vote_push()` 一次 ⇒
+     *  【5 深度多数表决是按"调用次数"计票，而不是按"样本数"】—— 单帧毛刺能被同一份陈旧数据
+     *  自己灌成"连续 5 次确认"，`s_hold_ms` 也被反复续期。这与 vote_push 自己的注释
+     *  （"连续两帧以上的干扰直接不认"）直接矛盾。
+     *
+     *  改法：挪到**真正取到新样本之后**（本函数末尾那段缓存更新之后）。周期闸门仍在原处
+     *  （所以"每 5ms/20ms 一帧"的节奏不变），只是不再用陈旧帧充数。 */
 
     /* 当前这条判死了（AUTO 两条都试过 / 固定通道失败）：退避 TRACE_OFF_RETRY_MS 再按用户
      * 设的方式重试，别一直拿超时堵着总线。 */
@@ -543,6 +560,11 @@ void trace_cal_poll(void)
         if (v < s_rmin[i]) s_rmin[i] = v;
         if (v > s_rmax[i]) s_rmax[i] = v;
     }
+
+    /* ★2026-10-13（审计 #14）：**到这里才算是"这一帧真的取到了新样本"**。
+     *  黑度/判定与 5 次多数表决都只在这里算一次 ⇒ 表决窗按**样本数**计票（不是调用次数），
+     *  `s_hold_ms` 也只在真实新帧刷新。上面任何一条提前 return 都不会再动它们。 */
+    frame_compute();
 }
 
 /* ------------------------------------------------- 取值 */
@@ -960,7 +982,6 @@ uint8_t trace_cal_retry_hint(void)
 
 /* ---------------------------------------------------------------- 标定向导 */
 
-static uint8_t s_valid_before;   /* 进标定前的 trace_cal_valid：中途取消要还回去 */
 
 void trace_cal_wizard_start(void)
 {
@@ -993,6 +1014,10 @@ void trace_cal_wizard_press(void)
 
     if (!trace_cal_analog_ok) {
         /* 读不到模拟量就标不出来，别让用户对着"没反应"发呆 */
+        /* ★2026-10-13（审计 #13）：这两条都属于"**采样根本没做成**"（读不到模拟量 / 连 8 帧
+         *  都没采到）—— 一个采样点都没写进 s_blk/s_wht。旧标定必须原样保留，否则用户只是
+         *  "进了标定页又退出来"，整套旧标定就被清掉、并在 ~1.5s 后被 nvram 固化进 Flash（掉电也丢）。 */
+        trace_cal_valid = s_valid_before;
         s_state = TRACE_CAL_FAILED;
         return;
     }
@@ -1001,6 +1026,10 @@ void trace_cal_wizard_press(void)
      * 这么短就不需要"0/32"的采样进度画面了（用户 m03536：几十毫秒就够）。 */
     s_n = 0U;
     if (!sample_point()) {
+        /* ★2026-10-13（审计 #13）：这两条都属于"**采样根本没做成**"（读不到模拟量 / 连 8 帧
+         *  都没采到）—— 一个采样点都没写进 s_blk/s_wht。旧标定必须原样保留，否则用户只是
+         *  "进了标定页又退出来"，整套旧标定就被清掉、并在 ~1.5s 后被 nvram 固化进 Flash（掉电也丢）。 */
+        trace_cal_valid = s_valid_before;
         s_state = TRACE_CAL_FAILED;
         return;
     }
