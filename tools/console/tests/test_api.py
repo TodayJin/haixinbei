@@ -327,9 +327,15 @@ def test_cal_endpoint(live):
     for ch in j["ch"]:
         assert {"i", "blk", "wht", "thr", "jitter", "pol", "ok", "reason",
                 "level", "thr_level"} <= set(ch)
-    # ★2026-10-11：active_set 现在**故意返回 None**（固件不上报当前套号）——原来这里钉的是
-    # 写死的 0，等于把一个谎话钉成契约。见 bridge/protocol.py 的 decode_cal。
-    assert j["active_set"] is None and 0 <= j["quality"] <= 8
+    # ★2026-10-11：`decode_cal` 只解 T_CAL_REPORT 那一帧（单帧**不带**当前套号）⇒ 她返回 None，
+    #   而不是写死 0（写死 0 = 把谎话钉成契约）。
+    # ★2026-10-14（审计 #27）：套号的真值来自**第二帧** `T_CAL_REPORT_B`（`[当前套号 u8][另一套]`）。
+    #   模拟器原来只发前一帧 ⇒ 这里永远是 None、传感器页"两套对比"永远只有一半；
+    #   现在模拟器补发了 B 帧 ⇒ 这一条要**同时接受两种**：
+    #     · None ⇒ 只收到 A 帧（老固件 / 那一帧丢了）—— 保持原来的诚实语义；
+    #     · 0/1  ⇒ 收到 B 帧、车真的报了"当前用第几套"。
+    #   不许再钉死成某一个值，否则要么骗人、要么把修复判成回归。
+    assert j["active_set"] in (None, 0, 1) and 0 <= j["quality"] <= 8, j
 
 
 def test_state_and_log_endpoints(live):

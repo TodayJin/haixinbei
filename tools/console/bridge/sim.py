@@ -293,17 +293,30 @@ class SimCar:
             + bytes([int(self.servo_deg[0]) & 0xFF, int(self.servo_deg[1]) & 0xFF])
         self.pending.append(pr.Frame(pr.T_DRIVE_REPORT, seq, p))
 
-    def _cal_frame(self, seq: int):
+    def _cal_bytes(self, ch) -> bytes:
+        """把 8 路标定打成固件的 `trace_cal_data_t`（82 字节，布局与 host_link.c 一致）。"""
         p = bytearray(82)
         p[0] = 1                 # valid = 整套 0/1 标志（与固件一致，不是位掩码）
-        for i, c in enumerate(self.cal["ch"]):
+        for i, c in enumerate(ch):
             p[1 + i] = c["pol"]
             p[9 + i] = c["bad"]
             p[18 + i * 2:20 + i * 2] = pr.pack_u16(c["blk"])
             p[34 + i * 2:36 + i * 2] = pr.pack_u16(c["wht"])
             p[50 + i * 2:52 + i * 2] = pr.pack_u16(c["thr"])
             p[66 + i * 2:68 + i * 2] = pr.pack_u16(c["jitter"])
-        self.pending.append(pr.Frame(pr.T_CAL_REPORT, seq, bytes(p)))
+        return bytes(p)
+
+    def _cal_frame(self, seq: int):
+        self.pending.append(pr.Frame(pr.T_CAL_REPORT, seq, self._cal_bytes(self.cal["ch"])))
+        # ★审计 #27：固件会**连发两帧**（host_link.c 的 send_cal_report）：
+        #   T_CAL_REPORT = 当前这套；T_CAL_REPORT_B = [当前套号 u8][**另一套** 82B]。
+        #   模拟器原来只发前一帧，而桥把"另一套 + 当前套号"完全依赖后一帧 ⇒
+        #   `--sim` 下传感器页的两套对比图永远只有一半、当前套号也不显示，
+        #   且每次标定刷新固定多耗 0.8s（cal_refresh 等不到 B 帧，走 partial 兜底）。
+        other = self.cal.get("other") or self.cal["ch"]
+        active = int(self.cal.get("active_set", 0))
+        self.pending.append(pr.Frame(pr.T_CAL_REPORT_B, seq,
+                                     bytes([active]) + self._cal_bytes(other)))
 
     def _hello(self, seq: int):
         p = bytearray(24)

@@ -816,6 +816,25 @@ class Console:
     def _cap_guard(self) -> dict | None:
         return None if self.cap_task() else self.unsupported()
 
+    def _wait_any_flag(self, attrs, timeout: float) -> bool:
+        """等**任意一个**标记先成立就返回（"数据收齐"或"车明确拒绝"，谁先到算谁）。
+
+        ★审计 #25：`task_get` 原来只等 `_task_data_done`（数据收尾帧），而车对**空槽**
+        是**立刻**回 ACK(ST_NOT_READY) 的（`host_link.c:1173`）⇒ 那个"明确拒绝"被当成
+        "还没收齐" ⇒ 白等满 timeout，还重发 3 次 ⇒ 用户点一下要等约 6 秒才看到
+        "车上没有任务 X"（体感是"点了没反应"）。`send_wait` 自己早就写了这条规矩：
+        "收到明确拒绝绝不重发"。
+        `_task_get_status` 只在**失败**时才被赋值（见 on_frame 的 `T_ACK` 分支注释：
+        "读回失败才有 ACK（成功走 DATA）"）⇒ 等它是安全的，不会误判成功。
+        """
+        deadline = time.time() + max(0.05, timeout)
+        with self.cv:
+            while time.time() < deadline:
+                if any(getattr(self, a) for a in attrs):
+                    return True
+                self.cv.wait(max(0.01, deadline - time.time()))
+            return any(bool(getattr(self, a)) for a in attrs)
+
     def _wait_flag(self, attr: str, timeout: float) -> bool:
         """等 on_frame 里的某个"收齐"标记（多帧回包用，不能只等一帧）。"""
         deadline = time.time() + max(0.05, timeout)
@@ -874,8 +893,11 @@ class Console:
                 self._task_data_id = 0xFFFF
                 self._task_get_status = None
             self.send(pr.T_TASK_GET, pr.pack_u16(tid), req="tasks.get")
-            if self._wait_flag("_task_data_done", timeout):
-                done = True
+            # ★审计 #25：车对空槽会**立刻**回 ACK（不等数据帧）⇒ 两个条件一起等，谁先到算谁，
+            #   空槽就不用白等满 timeout、也不用重发 3 次了。详见 _wait_any_flag 的注释。
+            if self._wait_any_flag(("_task_data_done", "_task_get_status"), timeout):
+                with self.cv:
+                    done = bool(self._task_data_done)
                 break
         with self.cv:
             chunks = list(self._task_data_chunks)
@@ -1116,6 +1138,13 @@ class Console:
 
     def preset_save(self, name: str, kind: str, keys=None, note: str = "",
                     values: dict | None = None) -> dict:
+        # ★审计 #23：`preset_name_ok` / `RE_PRESET_NAME` 早就写好了，但**全工程从没调用过**
+        #   （死代码）⇒ 用户可控的 name 被直接拼进 `os.path.join(preset_dir, name + ".json")`
+        #   ⇒ `name = "../../../../tmp/pwn"` 可越出 preset_dir 在任意可写目录创建/覆盖 *.json。
+        #   写、删、读三处都要拦（读那处配合 preset_apply 读任意文件）。
+        if not preset_name_ok(name):
+            return {"ok": False,
+                    "error": f"预设名不合法：{name!r}（只允许中英文/数字/空格/._-()，最长 64 字符）"}
         os.makedirs(self.preset_dir, exist_ok=True)
         o = {"name": name, "kind": kind, "updated_ms": int(time.time() * 1000),
              "keys": list(keys or []), "note": note, "values": values or {}}
@@ -1127,6 +1156,10 @@ class Console:
         return o
 
     def preset_delete(self, name: str) -> dict:
+        # ★审计 #23：同 preset_save —— 不校验就能删掉任意可写目录下的 *.json
+        if not preset_name_ok(name):
+            return {"ok": False,
+                    "error": f"预设名不合法：{name!r}（只允许中英文/数字/空格/._-()，最长 64 字符）"}
         path = os.path.join(self.preset_dir, name + ".json")
         if not os.path.isfile(path):
             return {"ok": False, "error": f"没有预设 {name}"}
@@ -1140,6 +1173,10 @@ class Console:
 
     def preset_apply(self, name: str, targets=None) -> dict:
         """应用预设；`targets` 给了就只下发这几个目标（actions/params/servo）。"""
+        # ★审计 #23：同 preset_save —— 不校验就能把任意 *.json 当预设读进来并推给车
+        if not preset_name_ok(name):
+            return {"ok": False,
+                    "error": f"预设名不合法：{name!r}（只允许中英文/数字/空格/._-()，最长 64 字符）"}
         path = os.path.join(self.preset_dir, name + ".json")
         if not os.path.isfile(path):
             return {"ok": False, "error": f"没有预设 {name}"}
@@ -1213,11 +1250,22 @@ class Console:
         return out
 
     def param_set(self, id_or_key, value) -> dict:
-        """只改桥这边缓存（契约 §2：不自动下发），`push` 才到车。"""
+        """只改桥这边缓存（契约 §2：不自动下发），`push` 才到车。
+
+        ★审计 #24：`P.clamp()` 用**抛 ValueError** 表达"超范围/NaN"，而这里原来没接住 ⇒
+        异常穿过这些调用方一直冒到 HTTP 层，被兜成 **500 带 Python 异常名**
+        （契约 docs/API.md:146 明确要求：语义性失败 200+ok:false，参数不合法回 **400**,
+         且 error 必须是**人话**）。
+        它还连带修了 preset_apply：套用一个含越界值的预设时，异常会在循环中途炸出去
+        ⇒ 只应用了一半（现在变成该项 ok:false，其余照常应用，并在结果里如实报）。
+        `float(value)` 也可能抛（value 缺失/None ⇒ TypeError），一并收进来。 """
         sp = P.by_id_or_key(id_or_key)
         if sp is None:
             return {"ok": False, "error": f"没有这个参数：{id_or_key}"}
-        v = P.clamp(sp, float(value))
+        try:
+            v = P.clamp(sp, float(value))
+        except (TypeError, ValueError) as e:
+            return {"ok": False, "error": f"{sp.label}：{e}"}
         with self.lock:
             it = next((i for i in self.params if i["id"] == sp.id), None)
             if it is None:

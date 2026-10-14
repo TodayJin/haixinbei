@@ -18,6 +18,9 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from .link import SerialLink, SimLink, LinkRunner, available_ports, find_default_port
+# ★审计 #23：预设名的白名单校验（定义在 state.py）。state 不反向 import server，
+#   所以这里顶层 import 不会有循环依赖。
+from .state import preset_name_ok   # noqa: E402  (紧跟 .link 之后，保持分组)
 
 VERSION = "1.0"
 WEB_ROOT_DEFAULT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "web", "dist")
@@ -272,6 +275,10 @@ class Handler(BaseHTTPRequestHandler):
                 if not name:
                     self._json({"ok": False, "error": "要删哪个预设？给 ?name="}, 400)
                     return
+                # ★审计 #23：非法名字按契约回 400（语义性失败才 200+ok:false）
+                if not preset_name_ok(name):
+                    self._json({"ok": False, "error": f"预设名不合法：{name!r}"}, 400)
+                    return
                 self._json(self.con.preset_delete(name))
             else:
                 self._json({"ok": False, "error": f"没有这个端点：{path}"}, 404)
@@ -435,6 +442,10 @@ class Handler(BaseHTTPRequestHandler):
             if not name:
                 self._json({"ok": False, "error": "预设要有名字"}, 400)
                 return
+            # ★审计 #23：非法名字（含路径分隔符/..）按契约回 400
+            if not preset_name_ok(name):
+                self._json({"ok": False, "error": f"预设名不合法：{name!r}"}, 400)
+                return
             targets = body.get("targets")
             if targets:
                 targets = [str(t) for t in targets]
@@ -449,6 +460,10 @@ class Handler(BaseHTTPRequestHandler):
                                                               body.get("note", ""), values)})
         elif path == "/api/presets/apply":
             name = str(body.get("name", "")).strip()
+            # ★审计 #23：非法名字按契约回 400
+            if not preset_name_ok(name):
+                self._json({"ok": False, "error": f"预设名不合法：{name!r}"}, 400)
+                return
             self._json(con.preset_apply(name, body.get("targets")))
         elif path == "/api/log/clear":
             with con.lock:
