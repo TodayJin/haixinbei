@@ -145,6 +145,10 @@ static void tim1_servo_init(void)
     oc.OCNIdleState = TIM_OCNIDLESTATE_RESET;
     (void)HAL_TIM_PWM_ConfigChannel(&htim1, &oc, TIM_CHANNEL_1);
     (void)HAL_TIM_PWM_ConfigChannel(&htim1, &oc, TIM_CHANNEL_2);
+    /* ★2026-10-13（审计 #9）：CH3/CH4（PA10/PA11 = 3/4 号舵机座）只在这里配通道，
+     *   **绝不启动**（见 bsp_servo_init()）：一旦启动，它们就会拿上面那个 500us 的初始
+     *   脉宽一直输出，而 Servo_SetPulse() 只认 1/2 号（servo.c:38-42）没人能改它 ⇒
+     *   插在这两个座上的舵机被永久钉在 0°、连"松掉"都做不到。 */
     (void)HAL_TIM_PWM_ConfigChannel(&htim1, &oc, TIM_CHANNEL_3);
     (void)HAL_TIM_PWM_ConfigChannel(&htim1, &oc, TIM_CHANNEL_4);
 }
@@ -227,10 +231,17 @@ void bsp_motor_init(void)
 void bsp_servo_init(void)
 {
     tim1_servo_init();
+    /* ★2026-10-13（审计 #9：CH3/CH4 上电即被固定 500us 驱动 low）：
+     * 这里原来把四路全 Start 掉，但上层只有 1/2 号舵机（Servo_SetPulse() 的
+     * case 1/2，servo.c:38-42），CH3/CH4 的 CCR 从初始化那一刻起的 500us（oc.Pulse=500）
+     * 就再没人动过 ⇒ 3/4 号座上的舵机被一条永不停止的 500us 脉冲永久钉在 0°，
+     * 既改不了角度也松不掉（退不出力）；没插舵机时这两路也只是白跑。
+     * 现在只启动真正在用的 CH1/CH2：CH3/CH4 的 CCxE 保持 0，引脚不再输出脉冲，
+     * 插上去的舵机是"收不到信号"的松状态（要"钉住"必须由软件主动给脉宽，而不是上电默认）。
+     * 以后真要用 3/4 号座：① 在 servo.c 的 Servo_SetPulse() 里补 case 3/4，
+     * ② 在这里补回对应的 HAL_TIM_PWM_Start()（通道配置 tim1_servo_init() 已经做好了）。 */
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
-    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_3);
-    HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
 }
 
 void bsp_periodic_start(void)

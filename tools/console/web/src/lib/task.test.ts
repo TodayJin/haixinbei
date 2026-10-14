@@ -225,6 +225,64 @@ describe('validateTask', () => {
   });
 });
 
+/* ★审计 #37：两轮直给（SET_MODE 的 p2）的符号口径
+   —— 固件按 `(int)(int16_t)b->p2` 解释（task_run.c:318），上位机回读/校验必须同口径。 */
+describe('SET_MODE 右轮（p2）按有符号解释', () => {
+  const wheels = (p1: number, p2: number): TaskProgram => ({
+    main: 0,
+    states: [{ name: 'x', enter: [], body: [blk(OP.SET_MODE, MODE.WHEELS, p1, p2, NO_STATE, 0x01), blk(OP.END)] }],
+  });
+
+  it('回读：右轮 −3888 不会再变成 61936，也不会被误判"超出 ±7200"', () => {
+    const { bytes, errors } = encodeTask(wheels(-3888, -3888));
+    expect(errors).toEqual([]);
+    const { program, error } = decodeTask(bytes);
+    expect(error).toBe('');
+    // 改之前：p2 读成 61936 ⇒ 界面上显示 61936、validateTask 报错 ⇒ 烧写按钮被禁用
+    expect(program?.states[0].body[0].p1).toBe(-3888);
+    expect(program?.states[0].body[0].p2).toBe(-3888);
+    expect(validateTask(program as TaskProgram).errors).toEqual([]);
+  });
+
+  it('两轮速度上下界都要判：±7201 是错误，±7200 不是', () => {
+    expect(validateTask(wheels(0, -7201)).errors.join()).toContain('两轮速度超出');
+    expect(validateTask(wheels(0, 7201)).errors.join()).toContain('两轮速度超出');
+    expect(validateTask(wheels(-7200, 7200)).errors).toEqual([]);
+  });
+
+  it('其余块的 p2 仍是无符号：「舵机动作」之后等 60000ms 不会被读成 −5536', () => {
+    const p: TaskProgram = {
+      main: 0,
+      states: [{ name: 'x', enter: [], body: [blk(OP.ACTION, 3, 0, 60000), blk(OP.END)] }],
+    };
+    expect(decodeTask(encodeTask(p).bytes).program?.states[0].body[0].p2).toBe(60000);
+  });
+});
+
+/* ★审计 #38/#39：条件 9「马上通过」+ 超时 = 假延时
+   —— 固件当拍就完成（task_run.c:232,395,411），超时那栏永远走不到。 */
+describe('「马上通过」配超时 = 假延时', () => {
+  const waitCond9 = (p2: number): TaskProgram => ({
+    main: 0,
+    states: [{ name: 'x', enter: [], body: [blk(OP.WAIT_COND, COND.ALWAYS, 0, p2, NO_STATE), blk(OP.END)] }],
+  });
+
+  it('恒真 + 填了超时 ⇒ 警告（固件照跑不拒收，所以不是错误），提示改用「等待」', () => {
+    const r = validateTask(waitCond9(450));
+    expect(r.errors).toEqual([]);
+    expect(r.warnings.some((w) => w.includes('马上通过') && w.includes('450'))).toBe(true);
+  });
+
+  it('换成「等待」块（duan-test-2seg.json 的修法）既不报错也不告警', () => {
+    const p: TaskProgram = { main: 0, states: [{ name: 'x', enter: [], body: [blk(OP.WAIT_MS, 450), blk(OP.END)] }] };
+    expect(validateTask(p)).toEqual({ errors: [], warnings: [] });
+  });
+
+  it('p2 = 0（不限时）的「马上通过」不告警 —— 它本来就该当拍通过', () => {
+    expect(validateTask(waitCond9(0)).warnings).toEqual([]);
+  });
+});
+
 function blkState(op: number, p0 = 0, p1 = 0, p2 = 0, p3: number = NO_STATE): { name: string; enter: never[]; body: ReturnType<typeof blk>[] } {
   return { name: 's', enter: [], body: [blk(op, p0, p1, p2, p3)] };
 }

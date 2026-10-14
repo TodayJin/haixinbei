@@ -116,7 +116,14 @@ describe('task.ts 与真固件格式层逐字节对齐', () => {
   });
 
   it('金样本场景在编辑器侧的校验里没有错误（它本来就该是能烧的）', () => {
-    expect(validateTask(goldenProgram())).toEqual({ errors: [], warnings: [] });
+    /* ★2026-10-13（审计 #38）：金样本自己就带一块 `WAIT_COND p0=9(恒真) + p2=500`
+       —— 条件 9 当拍就成立，固件走不到超时分支 ⇒ 那 500ms 在真机上是**假延时**。
+       它的字节是**与 C 侧对齐的硬编码金标准**（GOLDEN_HEX/GOLDEN_CRC16），单方面改块就
+       得重生成 C 侧样本，而金样本的价值正在于"对齐"，故这里**保留原块**，只让校验如实报出
+       这条警告（errors 必须为空 —— 固件不会拒收，只是不延时）。 */
+    const v = validateTask(goldenProgram());
+    expect(v.errors).toEqual([]);
+    expect(v.warnings.filter((w) => w.includes('马上通过'))).toHaveLength(1);
   });
 
   it('编出来的字节流以“能改变执行流”的块收尾（固件 TASK_E_TAIL 那条规则）', () => {

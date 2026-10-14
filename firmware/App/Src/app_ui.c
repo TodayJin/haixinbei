@@ -15,6 +15,11 @@
 #include "host_link.h"
 #include "tracing.h"      /* trace_invert：界面「循迹反转」同步给循迹底层 */
 #include "task_run.h"     /* 任务页：读解释器真状态（在跑哪个任务的第几块）+ 中键停机 */
+/* ★2026-10-13（审计 #6）：电机测试页要显式把后台那两个环停掉（它们不看运动模式，
+ * 只要软件开关是开的就每 5ms 覆盖轮速目标），所以这里要这三个头。 */
+#include "motion.h"       /* Motion_SetMode(MOTION_IDLE) */
+#include "gyro_control.h" /* GyroControl_Stop()：角度环（gyro_control.c:1039 盖轮速目标） */
+#include "PID_tracing.h"  /* PID_Tracing_Timer_Stop()：后台循迹环（motion.c:193 那一支） */
 #include "task_store.h"   /* 任务页：数一数车上 Flash 里存了几个任务 */
 #include "trace_cal.h"    /* 循迹标定向导 + 模拟量柱高/阈值线 */
 #include "nvram.h"        /* 设置存 Flash：锁按键 + "正在保存/保存成功"提示 */

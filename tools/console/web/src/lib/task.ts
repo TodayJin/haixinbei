@@ -57,6 +57,19 @@ export const MODE = {
   WHEELS: 4, // 两轮速度直给
 } as const;
 
+/** ★审计 #37：「两轮直给」的**右轮**（`p2`）在固件里是当**有符号**数用的 —— `task_run.c:291`
+ *  那条分支（`flags.bit0` 置位 **或** `p0 == 两轮直给`）里执行
+ *  `SpeedControl_SetTarget((int)b->p1, (int)(int16_t)b->p2)`（`task_run.c:318`）
+ *  ⇒ 线上的 61936 其实是 −3600（倒车），不是"右轮顶到 +7200"。
+ *  判据与固件那条分支一字不差，**编解码 / 校验 / sanitize 三处共用它**，免得各写一遍又漂开。
+ *
+ *  ⚠ 只有这一种块的 `p2` 是有符号的：其余块的 `p2` 固件一律按 `uint16_t` 读
+ *  （「舵机动作」的"之后等待"、「等条件」的"超时"最长可填 60000 > 32767），
+ *  所以**不能**把 `p2` 一律按有符号数读 —— 那会把 60000ms 读成 −5536ms。 */
+export function p2IsSigned(op: number, flags: number, p0: number): boolean {
+  return op === OP.SET_MODE && ((flags & 0x01) !== 0 || p0 === MODE.WHEELS);
+}
+
 export const COND = {
   LINE_CENTER: 1, // |重心-4.5| ≤ p1/10（0 → 0.5）
   LINE_LOST: 2, // 8 路灰度全部 < p1（0 → 60）
@@ -214,8 +227,20 @@ export function validateTask(p: TaskProgram): ValidateResult {
           warnings.push(`${tag}：最后一块「等条件」写的是「满足后跳走」，而超时那栏是「继续往下跑」—— 万一条件一直不满足，这个状态就没有出路（固件也会因为末尾块不能改变执行流而拒收这个程序）。给它配一个超时后跳的状态，或在后面再放一块。`);
         }
       }
-      if (b.op === OP.SET_MODE && b.p0 === MODE.WHEELS && (b.p1 > 7200 || b.p2 > 7200)) {
+      /* ★审计 #37：这里必须**同时判下界**，而且判据要与固件那条"两轮直给"分支一致
+         （flags.bit0 或 p0 = 两轮直给）。改之前只判 p1/p2 > 7200：两轮直给填了负的右轮
+         （倒车）在线上是 61936，回读后被判成"超出正负 7200" ⇒ 明明车能跑，烧写按钮却被禁用。 */
+      if (p2IsSigned(b.op, b.flags, b.p0) && (b.p1 > 7200 || b.p1 < -7200 || b.p2 > 7200 || b.p2 < -7200)) {
         errors.push(`${tag}：两轮速度超出 ±7200`);
+      }
+      /* ★审计 #38/#39（条件 9「马上通过」+ 超时 = 假延时）：固件里条件 9 恒真
+         （task_run.c:232 `return 1`）、`need` 又 = 0 ⇒ 同一拍就 return 1（task_run.c:395,411），
+         所以 `p2`（超时）与 `p3`（超时后）**永远走不到**。旧全程文件（quancheng-v3.json 里 40 块、
+         duan-test-2seg.json 里 2 块）把"等 450/1000 毫秒"写成了这一组合 ⇒ 真机上是 0ms。
+         固件**不会拒收**（程序照跑，只是不延时），所以这里按本文件的口径给**警告**
+         （errors = 固件一定拒，warnings = 能跑但多半不是本意），提示改用「等待」块。 */
+      if (b.op === OP.WAIT_COND && b.p0 === COND.ALWAYS && b.p2 !== 0) {
+        warnings.push(`${tag}：「马上通过」是恒真的，这一块永远不会等超时 ⇒ 填的超时 ${b.p2}ms 和「超时后」都不生效（真机上不会停这么久，最多只按「需持续」等）。要纯延时请改用「等待」块。`);
       }
     });
   });
@@ -315,14 +340,25 @@ export function decodeTask(bytes: Uint8Array): DecodedTask {
     return { program: null, error: 'CRC 不对' };
   }
 
-  const readBlock = (at: number): TaskBlock => ({
-    op: bytes[at],
-    flags: bytes[at + 1],
-    p0: dv.getUint16(at + 2, true),
-    p1: dv.getInt16(at + 4, true),
-    p2: dv.getUint16(at + 6, true),
-    p3: dv.getUint16(at + 8, true),
-  });
+  const readBlock = (at: number): TaskBlock => {
+    const op = bytes[at];
+    const flags = bytes[at + 1];
+    const p0 = dv.getUint16(at + 2, true);
+    /* ★审计 #37：`p2` 只有「两轮直给」的右轮是**有符号**的 —— 固件那边是
+       `(int)(int16_t)b->p2`（task_run.c:318），所以车上 −3600 会以 61936 的线上口径出现。
+       改之前这里一律 `getUint16` ⇒ 回读出来是 61936 ⇒ `validateTask` 报"两轮速度超出正负 7200"
+       ⇒ 好好的任务（能跑的车）却烧不了。
+       ⚠ 不能一律改 `getInt16`：「舵机动作」的"之后等待"、「等条件」的"超时"固件按 u16 读
+       （最长 60000 > 32767），一律按有符号读会把 60s 读成 −5536ms。 */
+    return {
+      op,
+      flags,
+      p0,
+      p1: dv.getInt16(at + 4, true),
+      p2: p2IsSigned(op, flags, p0) ? dv.getInt16(at + 6, true) : dv.getUint16(at + 6, true),
+      p3: dv.getUint16(at + 8, true),
+    };
+  };
 
   const states: TaskState[] = [];
   const raw: Array<{ nameOff: number; enter: TaskBlock[]; body: TaskBlock[] }> = [];

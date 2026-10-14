@@ -14,7 +14,32 @@ $ErrorActionPreference = 'Stop'
 $testDir = $PSScriptRoot
 $fw      = Split-Path -Parent $testDir
 $stub    = Join-Path $testDir 'stub'
-$cc      = 'C:\mingw64\bin\gcc.exe'
+# #29 修复：原来 $cc 写死 'C:\mingw64\bin\gcc.exe'（那是另一台机器的路径），本机不存在
+#   又没有回落 ⇒ 每个测试都编不过、全部计入"编译失败"，主机测试等于全灭。
+#   这里做三级回落：$env:CC → PATH 里的 gcc → 老硬编码路径（存在才用）；
+#   三级都没有就给出可行动的提示并退出（别再报一堆看不懂的"编译失败"）。
+$cc = $null
+if ($env:CC) {
+  if (Test-Path -LiteralPath $env:CC) { $cc = (Resolve-Path -LiteralPath $env:CC).Path }
+  else {
+    $c = Get-Command $env:CC -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($c) { $cc = $c.Source }
+  }
+}
+if (-not $cc) {
+  $c = Get-Command gcc -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($c) { $cc = $c.Source }
+}
+if (-not $cc -and (Test-Path -LiteralPath 'C:\mingw64\bin\gcc.exe')) { $cc = 'C:\mingw64\bin\gcc.exe' }
+if (-not $cc) {
+  Write-Host '找不到主机测试用的 C 编译器 gcc。' -ForegroundColor Red
+  Write-Host '  任选一种解决后重跑：' -ForegroundColor Yellow
+  Write-Host '   1) 安装 MinGW-w64，把它的 bin 目录加进 PATH（命令行里能直接跑 gcc --version）'
+  Write-Host '   2) 显式指定：$env:CC = "C:\path\to\gcc.exe"（或 gcc），再跑本脚本'
+  Write-Host '  （本脚本原来假设 C:\mingw64\bin\gcc.exe，这台机器上没有该路径。）' -ForegroundColor Yellow
+  exit 1
+}
+Write-Host "[cc] $cc" -ForegroundColor DarkGray
 $outDir  = Join-Path $testDir 'build'
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 
@@ -99,7 +124,10 @@ foreach ($t in $tests) {
   # 退出码为 0 还不够：测试若忘了 `return T_SUMMARY();`，失败数就丢在输出里、
   # main 仍返回 0（2026-10-02 真踩过：t_gyrotest 报了 3 处失败却判"通过"）。
   # 所以再核一遍输出里必须是"0 处失败"。
-  $zeroFail = [bool]($run | Select-String -SimpleMatch '0 处失败' -Quiet)
+  # #33 修复：原来用 -SimpleMatch '0 处失败'（纯子串匹配），"10 处失败" 里也含
+  #   "0 处失败" ⇒ 一个 10 项失败的测试会被判"通过"（假通过）。
+  #   T_SUMMARY 打的是 ", 10 处失败"，所以用"前面不允许再跟数字"的负向断言。
+  $zeroFail = [bool]($run | Select-String -Pattern '(?<!\d)0 处失败' -Quiet)
   if ($code -eq 0 -and -not $zeroFail) {
     $fail++
     Write-Host "   失败（退出码 0 但输出里不是 0 处失败 —— 检查该测试是否漏了 return T_SUMMARY()）" -ForegroundColor Red

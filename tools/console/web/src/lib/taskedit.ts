@@ -21,6 +21,7 @@ import {
   blk,
   crc16Ccitt,
   encodeTask,
+  p2IsSigned,
   validateTask,
   waitCondJumpTarget,
   type TaskBlock,
@@ -976,12 +977,23 @@ export function sanitizeBlock(raw: unknown): TaskBlock {
   const o = (raw ?? {}) as Partial<TaskBlock>
   const op = num(o.op, 0, 0, 0xff)
   if (!OP_BY_CODE.has(op)) return defaultsFor(OP.WAIT_MS)
+  const flags = num(o.flags, 0, 0, 0xffff)
+  const p0 = num(o.p0, 0, -0x8000, 0xffff)
+  /* ★审计 #37：「两轮直给」的右轮（`p2`）在固件里按 int16 解释（见 task.ts 的 p2IsSigned /
+     task_run.c:318），**上位机侧这个字段就是有符号的**：老文件若按线上的无符号口径存了
+     61936（其实就是 −3600 倒车），这里折算回有符号 —— 否则界面上显示 61936、validateTask
+     还报"超出 ±7200"，把回读/导入过的任务拦在烧写按钮外面。
+     ⚠ 上界**不能**一律从 0xffff 夹到 0x7fff：其余 op 的 `p2` 固件按 u16 读
+     （「舵机动作」的"之后等待"、「等条件」的"超时"最长 60000 > 32767），
+     一律夹下去会把用户填的 60s 悄悄改成 32.7s。 */
+  const p2raw = num(o.p2, 0, -0x8000, 0xffff)
+  const p2 = p2IsSigned(op, flags, p0) && p2raw > 0x7fff ? p2raw - 0x10000 : p2raw
   return {
     op,
-    flags: num(o.flags, 0, 0, 0xffff),
-    p0: num(o.p0, 0, -0x8000, 0xffff),
+    flags,
+    p0,
     p1: num(o.p1, 0, -0x8000, 0x7fff),
-    p2: num(o.p2, 0, -0x8000, 0xffff),
+    p2,
     p3: num(o.p3, NO_STATE, -0x8000, 0xffff),
   }
 }

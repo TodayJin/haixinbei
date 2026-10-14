@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import threading
 import time
 from collections import deque
@@ -18,6 +19,17 @@ from . import protocol as pr
 
 LOG_MAX = 800
 EVENT_MAX = 4000          # 每路订阅者最多积压多少事件（防前端卡住把内存吃光）
+
+# 预设名白名单（审计 #23）：`preset_save/delete/apply` 把用户输入直接拼进文件路径，
+# 于是 `../x`、`..\x`、`C:x` 这类名字能写到 `preset_dir` **外面**去（HTTP 层只校验了"非空"）。
+# 允许：字母/数字/下划线（`\w`，含中日韩字）+ 空格 + `. + - ( )`；
+# 路径分隔符 `/` `\`、Windows 的 `:`（盘符 / 数据流）、以及 `..` 开头的名字全在集外。
+RE_PRESET_NAME = re.compile(r"^[\w\u4e00-\u9fff][\w\u4e00-\u9fff .+\-()]{0,63}$")
+
+
+def preset_name_ok(name) -> bool:
+    """这个名字能不能当预设名（白名单，见 `RE_PRESET_NAME`）。HTTP 层也用它回 400。"""
+    return bool(RE_PRESET_NAME.match(str(name or "").strip()))
 
 CMD_NAMES = {
     # start_a/start_b/start_c 的字节定义保留（协议不删），但固件里的内置任务流程已删除，
@@ -260,6 +272,10 @@ class Console:
                       "dev1_us": 0, "dev2_us": 0}
         self.params: list[dict] = []
         self.car_values: dict[int, float] = {}
+        # ★审计 #22：本次 `param_reload()` 到底收到几条参数回报（按帧数，不是"累计条数"）。
+        #   `car_values` 是**历史累计**且从不清空，拿它当判据 ⇒ 以前读过一次之后，
+        #   车一声不吭也会报"读回 43/43 成功"。
+        self._param_reports = 0
         self.actions: list[dict] = []
         self.action_vals = [list(v) for v in P.ACTION_FACTORY]
         self.action_preset = self._load_action_preset()
@@ -431,7 +447,16 @@ class Console:
 
     def _send_wait_once(self, type_: int, payload: bytes = b"", want=(pr.T_ACK,),
                         timeout: float = 0.6, req: str | None = None) -> dict:
-        """发一帧并等应答。返回 {'ok','status','status_name','frames',...}。"""
+        """发一帧并等应答。返回 {'ok','status','status_name','frames',...}。
+
+        ★审计 #26：`want` 以前**从头到尾没参与判定**（判定只看 T_ACK 里的状态码）⇒
+        「问答式」的请求 —— HELLO 等 T_HELLO、读全表等 T_PARAM_REPORT、action_set 等
+        T_ACTIONS —— 明明收到了期望的那一帧，还是被判 ok:false 并打一条 warn
+        （表现就是**每次握手都留一条"车上没回确认帧"的假失败**）。现在：
+          · ACK 里的 ST_OK 仍然优先算成功；
+          · 没有 ACK、但收到了 `want` 里的**非 ACK** 帧 = 成功（那本来就是这次要的结果）；
+          · 收到了 ACK 但是拒绝（status != ST_OK）⇒ 依旧是失败（绝不因为顺带收到别的帧而翻案）。
+        """
         seq = self.next_seq()
         with self.cv:
             self.replies.pop(seq, None)
@@ -445,6 +470,7 @@ class Console:
                     got = self.replies.pop(seq)
                     break
                 self.cv.wait(max(0.01, deadline - time.time()))
+        want_types = tuple(want or (pr.T_ACK,))
         st = None
         for f in got:
             if f.type == pr.T_ACK and len(f.payload) >= 2:
@@ -453,7 +479,12 @@ class Console:
             with self.lock:
                 self.rtt_ms = round((time.time() - t_sent) * 1000.0, 1)
         ok = (st == pr.ST_OK) if st is not None else False
+        hit_want = [f for f in got if f.type in want_types and f.type != pr.T_ACK]
+        if st is None and hit_want:
+            ok = True                      # 收到的就是这次要的结果帧（老固件不补 ACK 也认）
         name = ST_NAMES.get(st, "无应答" if st is None else f"未知({st:#04x})")
+        if ok and st is None:
+            name = "已应答（%s）" % pr.TYPE_NAMES.get(hit_want[0].type, "帧")
         out = {
             "seq": seq, "sent": True,
             "status": st if st is not None else None,
@@ -474,7 +505,9 @@ class Console:
                 # 缓冲也还有个 4096B 的老默认（见 link.py 的 RX_BUFFER）。
                 err = (f"车上没应答（等 {timeout:.1f}s 超时；多半只是这一帧丢了，"
                        f"车可能已经执行）" if not got
-                       else f"车上没回确认帧（收到 {len(got)} 帧，都不是 ACK）")
+                       else f"车上没回这次要的应答（收到 {len(got)} 帧，都不是 ACK / "
+                            + "、".join(pr.TYPE_NAMES.get(t, f"0x{t:02X}") for t in want_types)
+                            + "）")
             else:
                 err = f"车上拒绝了：{name}"
             out["error"] = err
@@ -541,6 +574,14 @@ class Console:
                 self.servo["s2_us"] = t["servo2_us"]
                 self.servo["s1_deg"] = t["servo1_deg"]
                 self.servo["s2_deg"] = t["servo2_deg"]
+                # ★审计 #21：两路中位偏差（±100µs）就在遥测里（protocol.decode_telemetry 的
+                #   `servo_dev`，TELEM2 的 p[60]/p[62]），这里原来**解出来却没写回** self.servo
+                #   ⇒ 桥一重启，/api/servo 的 dev1_us/dev2_us 永远是 0（界面显示"没有偏差"），
+                #   要等用户在舵机页手动改一次才看得见车上的真实值。
+                dev = t.get("servo_dev") or {}
+                for _ch in ("1", "2"):
+                    if dev.get(_ch) is not None:
+                        self.servo[f"dev{_ch}_us"] = int(dev[_ch])
                 self.drive_report = dict(t.get("drive", {}), pwm_l=t.get("pwm_l"),
                                          pwm_r=t.get("pwm_r"), vl=t.get("vl"),
                                          vr=t.get("vr"))
@@ -579,6 +620,9 @@ class Console:
             pid, v = pr.decode_param_report(f.payload)
             with self.lock:
                 self._set_car_value(pid, v)
+                # ★审计 #22：`param_reload()` 的成败判据 = 这一轮到底收到了几条回报帧
+                #   （不能用 `len(car_values)`：那是历史累计，从不清空）。
+                self._param_reports += 1
                 item = next((i for i in self.params if i["id"] == pid), None)
             if item:
                 self.emit({"n": "params", "src": self.params_payload()})
@@ -1208,22 +1252,41 @@ class Console:
                 "dirty_left": left, "results": results}
 
     def param_reload(self) -> dict:
-        """从车读回全表（0xFFFF dump：车每拍发 4 帧，所以要等一会儿）。"""
+        """从车读回全表（0xFFFF dump：车每拍发 4 帧，所以要等一会儿）。
+
+        ★审计 #22：原来**无条件** `ok: True`，`read` 取的是 `len(self.car_values)` ——
+        那是**历史累计**（`car_values` 从不清空），所以只要以前读回过一次，
+        之后哪怕车一声不吭（没连上/固件老/掉线），这里也报"读回 43/43 成功"，
+        前端就以为读回成功了。现在按**这一轮收到的参数回报帧数**判成败：
+           · 一条都没收到 ⇒ ok:false + 一句人话（"车上没应答"）；
+           · 车根本没在发帧时提前收工（`_link_alive()`），不再干等满 1.2s。
+        """
         n0 = len(self.car_values)
+        r0 = self._param_reports
         seq = self.send(pr.T_PARAM_GET, pr.pack_u16(0xFFFF))
         deadline = time.time() + 1.2
         got = 0
         while time.time() < deadline:
             time.sleep(0.05)
             with self.lock:
-                got = len(self.car_values)
+                got = self._param_reports - r0
             if got >= len(P.PARAMS):
+                break
+            if not self._link_alive():          # 车没在发帧：再等也只是白等
                 break
         with self.lock:
             items = [dict(it) for it in self.params]
+            total = len(self.car_values)
         self.emit({"n": "params", "src": self.params_payload()})
-        self.log("info", f"从车读回参数：{got}/{len(P.PARAMS)}（读回前有 {n0} 条）")
-        return {"ok": True, "seq": seq, "read": got, "of": len(P.PARAMS), "params": items}
+        self.log("info", f"从车读回参数：本轮收到 {got}/{len(P.PARAMS)} 条"
+                         f"（累计 {total} 条，读回前有 {n0} 条）")
+        if got <= 0:
+            return {"ok": False, "seq": seq, "read": 0, "of": len(P.PARAMS),
+                    "params": items, "total": total,
+                    "error": "车上没应答（一条参数都没读回来）—— 看「概览」页链路是不是开着、"
+                             "车在不在发帧，再试一次"}
+        return {"ok": True, "seq": seq, "read": int(got), "of": len(P.PARAMS),
+                "params": items, "total": total}
 
     def param_defaults(self, ids=None, keys=None) -> dict:
         """恢复出厂默认：只改本机表 + 标脏，等 `push` 下发（契约 §2）。"""

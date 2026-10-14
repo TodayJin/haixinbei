@@ -182,8 +182,12 @@ int main(void)
         CHECK(r != NULL);
         CHECK_EQ_I(l, 24);
         if (r) {
-            CHECK_EQ_I(r[5], 0x02);                     /* fw version 0x0002 */
-            CHECK_EQ_I(r[6], 0x00);
+            /* #12 修复：这里原来写死 0x02（fw version 0x0002），而 host_link.h:111 的
+             * HOST_FW_VERSION 早就是 0x0003u，host_link.c 的 send_hello() 按低字节在前回版本
+             * ⇒ 这条断言必红（该测试白挂）。改成直接断言"HELLO 回的就是头文件里的版本"，
+             * 以后升版本不用再来改这里；协议漂移（字节序、位置）仍然会被抓到。 */
+            CHECK_EQ_I(r[5], (HOST_FW_VERSION & 0xFFu));        /* fw version 低字节 */
+            CHECK_EQ_I(r[6], ((HOST_FW_VERSION >> 8) & 0xFFu)); /* fw version 高字节 */
             CHECK_EQ_I(r[7], 0x02);                     /* proto version 2 */
             CHECK_EQ_I(memcmp(&r[13], "quandi-car", 10), 0);   /* 名字在 payload+8 */
             /* 能力位在 payload+20：v2 起 8 位全开（bit7 = HOST_CAP_TASK，任务页据此解禁） */

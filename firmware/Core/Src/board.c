@@ -153,8 +153,21 @@ void board_buzzer_init(void)
 /* 记下"此刻开响"。调用者负责按自己的 ms 关（app_ui.c 的 beep_poll）。 */
 void board_buzzer_mark_on(void)
 {
-  s_buzzer_on_ms = HAL_GetTick();
-  s_buzzer_on    = 1U;
+  /* ★2026-10-13 补修（审计 #7：蜂鸣器保险丝被重新计时）：
+   * 这里原来是无条件 `s_buzzer_on_ms = HAL_GetTick();` ⇒ 上面那枚保险丝量的是
+   * "距**最近一次**开响"而不是"**本次连续**响了多久"：只要调用者在 BEEP_MAX_MS 之内
+   * 再喊一次，基准就被推着往前走，`board_buzzer_safety()` 永远点不着火。
+   * 而任务切状态的「过点蜂鸣」（task_run.c:152 的 AppUi_Beep(50)）在 GOTO 自环/紧循环里
+   * 是每 5ms 喊一次 ⇒ 基准每 5ms 被刷一次，蜂鸣器一直响 —— 正是这枚保险丝 2026-10-13
+   * 要治的病（用户："转换状态时响一声（50ms）就可以，但是现在会一直响"）。
+   * 改法：只在"从关到开"（s_buzzer_on 0→1）的那一次记基准；响着的时候再喊多少次都不给
+   * 续命，连续响满 BEEP_MAX_MS 必被 board_buzzer_safety() 掐掉。
+   * 正常路径不受影响：到点关仍由 board_buzzer_off() 把 s_buzzer_on 清 0，
+   * 下一次 mark_on 就是新的一声，重新计时。 */
+  if (s_buzzer_on == 0U) {
+    s_buzzer_on_ms = HAL_GetTick();
+    s_buzzer_on    = 1U;
+  }
 }
 
 /* ★保险丝：由 5ms 中断调用。响了超过 BEEP_MAX_MS 就直接掐掉。 */
