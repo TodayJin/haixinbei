@@ -417,7 +417,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path == "/api/servo/center":
             self._json(con.servo_center())
         elif path == "/api/servo/deviation":
-            self._json(con.servo_deviation(int(body["ch"]), int(body["us"])))
+            # ★审计 #18（high）：这里原来读 body["us"]，而契约（docs/API.md）、
+            #   前端（web/src/lib/api.ts）、模拟器（web/mock/server.mjs）**全都是 dev_us**
+            #   ⇒ 前端 100% 走进 KeyError，被兜成 HTTP 500，中位偏差永远写不进。
+            #   兼容读法：优先 dev_us，老的 us 也认（免得有人照旧文档手搓 curl）。
+            _dev = int(body.get("dev_us", body.get("us")))
+            self._json(con.servo_deviation(int(body["ch"]), _dev))
         elif path == "/api/drive":
             self._json(con.drive(body.get("mode", "off"), body.get("vl"), body.get("vr"),
                                  body.get("base"), body.get("turn")))

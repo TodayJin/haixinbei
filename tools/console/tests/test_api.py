@@ -159,8 +159,10 @@ def test_servo_endpoints(live):
     assert POST(base + "/api/servo/set", {"ch": 1, "deg": 45})[1]["ok"] is True
     assert POST(base + "/api/servo/set", {"ch": 3, "deg": 45})[1]["ok"] is False
     assert POST(base + "/api/servo/set", {"ch": 1, "deg": 200})[1]["ok"] is False
-    assert POST(base + "/api/servo/deviation", {"ch": 1, "us": 30})[1]["ok"] is True
-    assert POST(base + "/api/servo/deviation", {"ch": 1, "us": 9999})[1]["ok"] is False
+    # ★审计 #18：这里原来用的就是错误的键名 `us`，所以那个 500 一直"测试通过"。
+    #   契约与前端都是 dev_us，测试必须按契约写。
+    assert POST(base + "/api/servo/deviation", {"ch": 1, "dev_us": 30})[1]["ok"] is True
+    assert POST(base + "/api/servo/deviation", {"ch": 1, "dev_us": 9999})[1]["ok"] is False
     assert POST(base + "/api/servo/center", {})[1]["ok"] is True
 
 

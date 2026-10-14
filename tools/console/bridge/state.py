@@ -1344,12 +1344,20 @@ class Console:
         return {"ok": all(o.get("ok") for o in out), "count": len(out), "results": out}
 
     def action_refresh(self) -> dict:
+        """★审计 #19（medium）：`action_vals` 在 `__init__` 里就被**出厂表**填满了，
+        所以原来那句 `if self.action_vals:` **恒为真** —— send() 之后第一个循环就 return，
+        永远拿本地表当"已从车读回"，车一声不吭也报 ok:true（错误分支是死代码）。
+        修法与姊妹函数 cal_refresh 一致：**先清空、记一个"本轮代次"，再等车的那一帧**。 """
+        with self.lock:
+            self.action_vals = []                       # 本轮没收到之前必须为空
         seq = self.send(pr.T_ACTIONS_GET)
         t0 = time.time()
         while time.time() - t0 < 0.5:
             with self.lock:
                 if self.action_vals:
                     return {"ok": True, "seq": seq, "actions": self.actions}
+            if not self._link_alive():
+                break                                   # 链路没在收帧，别干等满 0.5s
             time.sleep(0.02)
         return {"ok": False, "seq": seq, "error": "没收到动作表"}
 
