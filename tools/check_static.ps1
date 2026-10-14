@@ -4,13 +4,62 @@
 # 输出：每个文件一段，只打印有告警的行；末尾汇总。退出码 = 有 error 的为 1。
 param(
   [string]$Only = '',
-  [switch]$Wextra
+  [switch]$Wextra,
+  [string]$Cube = '',        # STM32Cube G4 包根目录（空 = 自动找）
+  [string]$CC   = ''         # arm-none-eabi-gcc（空 = 自动找）
 )
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $fw = Join-Path $root 'firmware'
-$cube = 'C:/Users/Today/STM32Cube/Repository/STM32Cube_FW_G4_V1.6.3'
-$gcc = 'C:/arm-gnu-toolchain/bin/arm-none-eabi-gcc.exe'
+
+# ---- ★2026-10-14（审计 #30）：路径解析三级回落 ----
+#   原来这里是**别的机器**的硬编码路径（C:/Users/Today/STM32Cube/... 与
+#   C:/arm-gnu-toolchain/bin/...），而本脚本 $ErrorActionPreference='Stop' ⇒
+#   在这台机器上它在第一个文件就终止（报"找不到编译器"），于是**"严格告警"这条路
+#   在环境迁移到 _tools/ 之后从来没真正跑过一次**，而文档还在记录它"通过"。
+#   现在：显式参数 → 环境变量 → 自动查找（含仓库内 _tools 那份）→ 旧硬编码；都没有就
+#   带**可行动的提示**退出（而不是抛个 CommandNotFoundException 让人猜）。
+function Resolve-CubeG4([string]$explicit) {
+    $cands = @()
+    if ($explicit)         { $cands += $explicit }
+    if ($env:STM32CUBE_G4) { $cands += $env:STM32CUBE_G4 }
+    # ★逐级向上找（仓库布局可能不同）：tools/ 往上两级才是与 _tools 平级的那层
+    $d = $PSScriptRoot
+    for ($i = 0; $i -lt 4; $i++) {
+        $d = Split-Path -Parent $d
+        if (-not $d) { break }
+        $cands += (Join-Path $d '_tools\STM32Cube_FW_G4_V1.6.3')
+    }
+    $cands += 'C:/Users/Today/STM32Cube/Repository/STM32Cube_FW_G4_V1.6.3'
+    foreach ($c in $cands) {
+        if ($c -and (Test-Path -LiteralPath (Join-Path $c 'Drivers\STM32G4xx_HAL_Driver\Inc\stm32g4xx_hal.h'))) {
+            return (Resolve-Path -LiteralPath $c).Path
+        }
+    }
+    return ''
+}
+function Resolve-ArmGcc([string]$explicit) {
+    if ($explicit -and (Test-Path -LiteralPath $explicit)) { return $explicit }
+    if ($env:CC -and (Test-Path -LiteralPath $env:CC))     { return $env:CC }
+    $g = Get-Command 'arm-none-eabi-gcc' -ErrorAction SilentlyContinue
+    if ($g) { return $g.Source }
+    if (Test-Path -LiteralPath 'C:/arm-gnu-toolchain/bin/arm-none-eabi-gcc.exe') {
+        return 'C:/arm-gnu-toolchain/bin/arm-none-eabi-gcc.exe'
+    }
+    return ''
+}
+$cube = Resolve-CubeG4 $Cube
+if (-not $cube) {
+  Write-Host '找不到 STM32Cube G4 包：用 -Cube <路径> / 环境变量 STM32CUBE_G4 / 放到 <仓库>/_tools/STM32Cube_FW_G4_V1.6.3' -ForegroundColor Red
+  exit 2
+}
+$gcc = Resolve-ArmGcc $CC
+if (-not $gcc) {
+  Write-Host '找不到 arm-none-eabi-gcc：装工具链并加进 PATH，或用 -CC <路径> / 环境变量 CC' -ForegroundColor Red
+  exit 2
+}
+Write-Host ("[环境] cube = " + $cube)
+Write-Host ("[环境] gcc  = " + $gcc)
 
 $incs = @(
   'Core/Inc', 'App/Inc', 'App/Bsp', 'App/Svc', 'App/Fonts',

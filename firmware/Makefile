@@ -14,12 +14,20 @@
 # ============================================================
 
 # ---- 本地 STM32Cube G4 包路径 ----
-CUBE_G4 ?= C:/Users/Today/STM32Cube/Repository/STM32Cube_FW_G4_V1.6.3
+# ★2026-10-14（审计 #30）：原来只有**别的机器**的硬编码路径 ⇒ 在这台机器上 make 直接失败。
+#   现在优先找仓库内那份（firmware/ 往上两级就是仓库根，_tools 与 _haixinbei-push 平级），
+#   找不到才退回旧路径。可用 `make CUBE_G4=...` 或环境变量覆盖。
+CUBE_G4 ?= $(firstword $(wildcard ../../_tools/STM32Cube_FW_G4_V1.6.3) \
+                      $(wildcard ../../../_tools/STM32Cube_FW_G4_V1.6.3) \
+                      C:/Users/Today/STM32Cube/Repository/STM32Cube_FW_G4_V1.6.3)
 HAL_DIR   = $(CUBE_G4)/Drivers/STM32G4xx_HAL_Driver
 CMSIS_DEV = $(CUBE_G4)/Drivers/CMSIS/Device/ST/STM32G4xx
 CMSIS     = $(CUBE_G4)/Drivers/CMSIS
 
-JLINK  = C:/Program Files (x86)/SEGGER/JLink/JLink.exe
+# ★2026-10-14（审计 #30）：改成 ?= 以便 `make JLINK=...` / 环境变量覆盖。
+#   本机没装 SEGGER J-Link（车用的是 DAPLink + openocd），烧录请优先用
+#   tools/flash_fw.ps1（它自己带保护区和 DHCSR 校验）。
+JLINK  ?= C:/Program Files (x86)/SEGGER/JLink/JLink.exe
 DEVICE = STM32G474RE
 
 # -- local make shell: the sh.exe shipped with Git for Windows --

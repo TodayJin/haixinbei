@@ -131,11 +131,25 @@ float   GyroControl_GetYawCont(void) { return Yaw; }
 float   GyroControl_HeadingError(void) { return stub_gyro_err; }
 float   GyroControl_DebugRateRef(void) { return 2.5f; }
 float   GyroControl_DebugCorr(void) { return -3.75f; }
-float   NormalizeAngle(float a)
+/* ★2026-10-14（审计 #32）：这里原来是**加固前的旧版本**（无界 while 减法），
+ * 而真实现（gyro_control.c:268）2026-10-02 已改成"非法值直接返 0 + fmodf 常数时间"。
+ * 桩不同步的后果：拿桩编出来的用例**测的不是真行为** —— 而且如果有人给
+ * `GyroControl_SetTargetAngle()` 传 ±Inf，旧 while 是**真死循环**
+ * （float 下 a-360.0f == a，迭代永远不会结束），而 run_tests.ps1 跑 exe 没有超时
+ * ⇒ 整轮测试挂死，而不是"红色失败"。
+ * 现在与真实现逐行等价（math.h 本文件已 include）。 */
+float   NormalizeAngle(float angle)
 {
-    while (a > 180.0f)  a -= 360.0f;
-    while (a < -180.0f) a += 360.0f;
-    return a;
+    float r;
+
+    if (!(angle >= -1.0e9f && angle <= 1.0e9f)) {
+        return 0.0f;                     /* NaN 与 ±Inf 都走这里 */
+    }
+
+    r = fmodf(angle, 360.0f);            /* |r| < 360 */
+    if (r > 180.0f)  r -= 360.0f;
+    if (r < -180.0f) r += 360.0f;
+    return r;
 }
 
 /* ---- servo ----
