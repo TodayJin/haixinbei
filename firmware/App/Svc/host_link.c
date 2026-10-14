@@ -28,6 +28,7 @@
 #include "nvram.h"         /* v2：T_PARAM_SAVE 真保存（nvram_touch） */
 #include "servo.h"         /* v2：动作表/舵机角度 */
 #include "speed_control.h" /* 遥测 v_l/v_r：真实轮速（编码器 mm/s） */
+#include "app_ui.h"          /* ★审计 #10：g_cfg 镜像（T_PARAM_SET 要同步）*/
 #include "task_run.h"      /* v2：任务解释器（T_TASK_RUN 启动 / T_TASK_STATUS 查询） */
 #include "task_store.h"    /* v2：任务程序 Flash 存储（页 58 目录 + 页 59..61 程序区） */
 #include "trace_cal.h"     /* v2：T_CAL_GET 标定回读 */
@@ -946,6 +947,42 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
      * 把 NaN/±Inf 挡住（原来的 v < min || v > max 会让 NaN 通过范围检查）。 */
     if (!(v >= SPECS[i].min && v <= SPECS[i].max)) { send_ack(seq, ST_OUT_OF_RANGE); break; }
     s_param[i] = v;
+
+    /* ★2026-10-13（审计 #10，high）：**把 g_cfg 镜像一起同步**。
+     *
+     *  这 16 项参数有**两个写者** —— 上位机走这里写参数表 `s_param[]`，而车上菜单写的是
+     *  `g_cfg` 里 ×100 的整数镜像（app_ui.c 的 push/pull_pid_params）。但 **nvram 固化时存的是
+     *  `g_cfg`**（nvram.c 的 snapshot() 读 g_cfg.xxx）。
+     *
+     *  原来的语义是"上位机 SET 的参数要**下次开机**才同步进 UI"（app_ui.c 那句注释），于是：
+     *      网页改参数 → 固化 → nvram 存的是**没变过的旧 g_cfg** → 断电重启还是旧值 ✗
+     *  而协议层**无条件回 ST_OK**，用户完全看不出没存进去。
+     *
+     *  修法：SET 的当下就把镜像改成同一个值 ⇒ 固化拿到的就是新值，不需要重启。
+     *  量化口径与 app_ui.c 的 pull_pid_params() 一字不差（×100 / ×1000 / 四舍五入）。
+     *  没有镜像的 id 落到 default，什么都不做。
+     *
+     *  ⚠ 只加在**这里**：本文件另一个写 s_param 的地方是 `host_param_set_local()`，
+     *     它会被 app_ui 的 `push_pid_params()` 调用 ⇒ 在那儿加会造成 g_cfg↔参数表 互相写。 */
+    switch (id) {
+    case HP_BASE_SPEED:     g_cfg.trace_speed          = (int32_t)(v + 0.5f); break;
+    case HP_SPEED_KP:       g_cfg.speed_kp_x100        = (int32_t)(v * 100.0f + 0.5f); break;
+    case HP_SPEED_KI:       g_cfg.speed_ki_x100        = (int32_t)(v * 100.0f + 0.5f); break;
+    case HP_SPEED_KD:       g_cfg.speed_kd_x100        = (int32_t)(v * 100.0f + 0.5f); break;
+    case HP_SPEED_ILIMIT:   g_cfg.speed_ilim           = (int32_t)(v + 0.5f); break;
+    case HP_SPEED_FF_SLOPE: g_cfg.speed_ff_slope_x1000 = (int32_t)(v * 1000.0f + 0.5f); break;
+    case HP_SPEED_FF_FRIC:  g_cfg.speed_ff_fric        = (int32_t)(v + 0.5f); break;
+    case HP_LINE_KP:        g_cfg.line_kp_x100         = (int32_t)(v * 100.0f + 0.5f); break;
+    case HP_LINE_KI:        g_cfg.line_ki_x100         = (int32_t)(v * 100.0f + 0.5f); break;
+    case HP_LINE_KD:        g_cfg.line_kd_x100         = (int32_t)(v * 100.0f + 0.5f); break;
+    case HP_LINE_ILIMIT:    g_cfg.line_ilim            = (int32_t)(v + 0.5f); break;
+    case HP_GYRO_KP:        g_cfg.gyro_kp_x100         = (int32_t)(v * 100.0f + 0.5f); break;
+    case HP_GYRO_KI:        g_cfg.gyro_ki_x100         = (int32_t)(v * 100.0f + 0.5f); break;
+    case HP_GYRO_KD:        g_cfg.gyro_kd_x100         = (int32_t)(v * 100.0f + 0.5f); break;
+    case HP_GYRO_ILIMIT:    g_cfg.gyro_ilim            = (int32_t)(v + 0.5f); break;
+    case HP_TRACE_CORNER:   g_cfg.trace_corner         = (v >= 0.5f); break;
+    default: break;   /* 其余参数没有 g_cfg 镜像，走参数表自己那条持久化路 */
+    }
     s_stats.param_sets++;
     send_ack(seq, ST_OK);
     send_param_report(seq, id, v);       /* 回读，上位机立刻看到生效值 */
