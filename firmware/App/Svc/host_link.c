@@ -133,6 +133,10 @@ static const param_spec_t SPECS[] = {
   { HP_COUNTS_PER_REV,   1980.0f,     1.0f,   100000.0f },
   { HP_WHEEL_DIA,          65.0f,    10.0f,      300.0f },
   { HP_WHEEL_BASE,        150.0f,    10.0f,      500.0f },
+  /* 满 PWM(7200) 时每 5ms 的期望编码器计数：速度环的"PWM 刻度 ↔ 计数"换算刻度。
+   * 默认 25 = 旧电机那版硬编码值 ⇒ 不 push 时行为与以前**逐位一致**。
+   * 换电机后按 host_link.h 里那条注释的公式重标，写进这里即可，不用重烧。 */
+  { HP_SPEED_FULL_COUNTS,    25.0f,     1.0f,     5000.0f },
   { HP_PWM_MAX,          7200.0f,   100.0f,     7200.0f },
   { HP_VBAT_NOMINAL,    12000.0f,  3000.0f,    30000.0f },
   { HP_STALL_CURRENT,    2500.0f,   100.0f,    20000.0f },

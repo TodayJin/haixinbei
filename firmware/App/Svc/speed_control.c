@@ -201,9 +201,12 @@ void SpeedControl_Stop(void)
  * counts 是滑动平均后的转速（仍是"计数/5ms"的量纲，但带小数）—— 不要取整，
  * 取整就把 20ms 平均换来的亚计数分辨率又丢掉了。 */
 static int speed_pi_step(speed_pi_t *s, float counts, float kp, float ki, float kd, float ilim,
-                         float ff_slope, float ff_fric)
+                         float ff_slope, float ff_fric, float full_counts)
 {
-    float target_counts = s->target * (SPEED_FULL_COUNTS / (float)MOTOR_PWM_MAX);
+    /* ★2026-10-14：刻度从参数表取（HP_SPEED_FULL_COUNTS），不再用编译期常数。
+     *  原来写死 `SPEED_FULL_COUNTS`(25) 是旧电机的标定值，换电机后目标够不到 ⇒ 环饱和。
+     *  调用方传进来而不是在这里 host_param_get，是为了让本函数保持"纯函数、可单测" */
+    float target_counts = s->target * (full_counts / (float)MOTOR_PWM_MAX);
     float err = target_counts - counts;
     float u_ff, out;
 
@@ -251,6 +254,7 @@ void SpeedControl_Task(void)
     int   dl = 0, dr = 0;
     float kp, ki, kd, ilim, cpr, dia;
     float ff_slope, ff_fric;
+    float full_counts;              /* ★满 PWM 时每 5ms 的期望计数（HP_SPEED_FULL_COUNTS）*/
     float avg_l, avg_r;
     int   i;
 
@@ -293,6 +297,9 @@ void SpeedControl_Task(void)
     /* 前馈也从参数表取：菜单「前馈斜率/前馈摩擦」、上位机、台架改完都是下一拍生效 */
     ff_slope = host_param_get(HP_SPEED_FF_SLOPE, SPEED_FF_SLOPE);
     ff_fric  = host_param_get(HP_SPEED_FF_FRIC,  SPEED_FF_FRIC);
+    /* ★速度环的"PWM 刻度 → 期望计数"刻度（换电机后要重标的那个）。兜底 25 = 旧硬编码值 */
+    full_counts = host_param_get(HP_SPEED_FULL_COUNTS, SPEED_FULL_COUNTS);
+    if (!(full_counts >= 1.0f)) full_counts = SPEED_FULL_COUNTS;   /* NaN/0 兜底 */
 
     /* 4) 目标斜坡（软启动/防打滑）：
      *    幅值变大（起步/加速）用 s_ramp 慢慢爬，防打滑、防电流冲击；
@@ -313,8 +320,8 @@ void SpeedControl_Task(void)
     }
 
     /* 5) 双轮 PI -> PWM（反馈用 20ms 平滑值，控制节拍仍是 5ms） */
-    s_pi[0].out = speed_pi_step(&s_pi[0], avg_l, kp, ki, kd, ilim, ff_slope, ff_fric);
-    s_pi[1].out = speed_pi_step(&s_pi[1], avg_r, kp, ki, kd, ilim, ff_slope, ff_fric);
+    s_pi[0].out = speed_pi_step(&s_pi[0], avg_l, kp, ki, kd, ilim, ff_slope, ff_fric, full_counts);
+    s_pi[1].out = speed_pi_step(&s_pi[1], avg_r, kp, ki, kd, ilim, ff_slope, ff_fric, full_counts);
     Load(s_pi[0].out, s_pi[1].out);
 }
 

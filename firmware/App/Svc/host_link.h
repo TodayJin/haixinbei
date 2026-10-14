@@ -55,6 +55,23 @@
 #define HP_COUNTS_PER_REV    0x0305u
 #define HP_WHEEL_DIA         0x0306u
 #define HP_WHEEL_BASE        0x0307u
+/* ★2026-10-14：**满 PWM 时每 5ms 的期望编码器计数** —— 速度环把"PWM 刻度目标"换算成
+ * "期望计数"用的就是这个刻度（speed_control.c 的 speed_pi_step）。
+ *
+ * 为什么必须做成参数：它原来是编译期常数 `SPEED_FULL_COUNTS = 25.0f`，来源是**旧电机**
+ *   （源码注释：「12V 空载 150rpm -> 4950 计数/s -> 每 5ms 约 25 个计数」）。
+ *   用户 2026-10-14 换了电机后实测：目标 4000 与 6000 的**稳态速度几乎一样（288 / 279 mm/s）**
+ *   ⇒ 速度**物理饱和**，而环想要的反馈（4000 ⇒ 13.9 计数/5ms、6000 ⇒ 20.8）里，
+ *   6000 那个值**永远够不到** ⇒ 环满 PWM 输出、完全失去调节能力。
+ *   实测反推：287.9 mm/s ⇒ 13.98 计数/5ms ⇒ **环其实精确跟踪了它的目标（误差 0.6%）**，
+ *   是"目标→计数"这个刻度错了 ⇒ 观感就是"PID 完全不对"。
+ *
+ * 做成参数后：换电机/换减速比只需在上位机改一个数，**不必重烧固件**。
+ * 标定法：wheels 模式给一个**够得到**的目标 T，读稳态 vl(mm/s)，则
+ *     full_counts = (vl/1000 × 5 / (π×wheel_dia) × counts_per_rev) × 7200 / T
+ * ⚠ 用 mm/s 反推前必须先确认 counts_per_rev / wheel_dia 是准的（否则是循环论证）：
+ *   手推车走一段已知距离，比对"固件积分出的距离"与卷尺读数。 */
+#define HP_SPEED_FULL_COUNTS 0x0308u
 #define HP_PWM_MAX           0x0303u
 #define HP_VBAT_NOMINAL      0x0501u
 #define HP_STALL_CURRENT     0x0502u
