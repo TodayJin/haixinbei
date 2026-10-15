@@ -76,6 +76,10 @@
 #define HP_VBAT_NOMINAL      0x0501u
 #define HP_STALL_CURRENT     0x0502u
 #define HP_VBAT_LOW          0x0503u
+#define HP_GYRO_SETTLE_RATE  0x0117u /* ★到位锁存的角速度阈值(°/s)，默认 30。
+                                      * 锁存判据是 |err|<settle_deg 且 |v|<settle_rate 持续 settle_ms。
+                                      * 打开 v_floor 后 v 一直 ≥floor ⇒ 若本阈值仍 ≤floor 则**永远锁不上**
+                                      * ⇒ 车被 floor 顶着在目标附近来回微摆（实测抖动 13~22°）⇒ 必须配套放大。 */
 #define HP_GYRO_V_FLOOR      0x0116u /* ★逼近段最低允许角速度(°/s)，0=关(默认)。
                                       * 用途：原地转要"维持转动"需 ~90~100°/s，低于它车会在离目标 10~40° 处
                                       * 咬死停住(欠调)；而 P 型外环 err 小 ⇒ 命令也小 ⇒ 必然进慢滚区。

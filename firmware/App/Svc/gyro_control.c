@@ -664,6 +664,8 @@ void GyroControl_Task(void)
     if (!(s_brake_gain >= 1.0f && s_brake_gain <= 10.0f)) s_brake_gain = 1.0f;  /* 坏值=关闭 */
     s_v_floor    = host_param_get(HP_GYRO_V_FLOOR,     s_v_floor);
     if (!(s_v_floor >= 0.0f && s_v_floor <= 120.0f)) s_v_floor = 0.0f;  /* 坏值=关 */
+    s_settle_rate = host_param_get(HP_GYRO_SETTLE_RATE, s_settle_rate);
+    if (!(s_settle_rate >= 0.0f && s_settle_rate <= 300.0f)) s_settle_rate = 30.0f;  /* 坏值=默认 */
 
     /* 差速上限：按上一步回读到的 s_corr_limit / s_corr_ref 与基准速度算一次，本拍各律共用。
      * 放在参数回读之后，保证"上位机改完参数同一拍就按新值算"。 */
