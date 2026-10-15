@@ -128,11 +128,32 @@ def test_task_get_returns_immediately_on_clear_refusal():
 
 # ---------------------------------------------------------------- #30 新参数
 def test_speed_full_counts_param_exists():
+    """★2026-10-15：默认值随现役电机换成 **MG513X（轮趣科技）** 的真值。
+
+    MG513X 数据手册（用户提供）：13 线霍尔、减速比 1:28、额定 12V/0.36A、
+    堵转 3.2A、空载 370±12rpm、4.1W。
+      · counts_per_rev = 13 × 4 × 28 = 1456
+      · speed_full_counts = 370/60 × 1456 / 200 = 44.9 ⇒ 45
+    旧值是上一代 JGB37-3865-520 的（11 线 / 45:1 ⇒ 1980；空载 150rpm ⇒ 25）。
+    这两个**必须成对改**，否则 mm/s 遥测与速度环的量纲各差一个比例。
+    """
     sp = P.by_id_or_key("speed_full_counts")
     assert sp is not None, "HP_SPEED_FULL_COUNTS / speed_full_counts 没进参数表"
     assert sp.id == 0x0308
-    assert sp.default == 25.0        # 与固件 SPECS 一致（test_params.py 也会逐项核对）
+    assert sp.default == 45.0        # 与固件 SPECS 一致（test_params.py 也会逐项核对）
     assert sp.min == 1.0 and sp.max == 5000.0
+
+    cpr = P.by_id_or_key("counts_per_rev")
+    assert cpr is not None and cpr.id == 0x0305
+    assert cpr.default == 1456.0     # MG513X = 13 × 4 × 28
+
+    # 两个数要自洽：full/cpr × 200 × (π×dia) 应等于手册空载线速度
+    import math
+    dia = P.by_id_or_key("wheel_dia").default
+    mmps = sp.default / cpr.default * 200.0 * math.pi * dia
+    assert abs(mmps - 370 / 60 * math.pi * dia) < 30, (
+        f"full_counts/counts_per_rev 不自洽：算出 {mmps:.0f} mm/s，" 
+        f"手册空载 {370 / 60 * math.pi * dia:.0f} mm/s")
 
 
 # ---------------------------------------------------------------- #11 nvram 3 态
