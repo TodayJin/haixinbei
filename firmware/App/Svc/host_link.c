@@ -35,6 +35,7 @@
 #include "trace_cal.h"     /* v2：T_CAL_GET 标定回读 */
 #include "tracing.h"
 #include "SEGGER_RTT.h"
+#include "gyro_control.h"   /* GyroControl_GetYawCont / GetTargetAngle：角度环探针用 */
 
 /* 实际 PWM / 舵机脉宽要从定时器比较寄存器读 */
 extern TIM_HandleTypeDef htim1;
