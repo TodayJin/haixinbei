@@ -35,11 +35,18 @@ void Motor_Init(void)
  * 配套的编码器侧翻转在 encoder.c 的 Encoder_ReadDelta() 里（左路取负），两处必须一起改。
  * 标定依据：+6000 时两路编码器都读负；手推前进时左编码器 -21676 / 右编码器 +14623。
  * 翻完再代回去：Load(+) -> 左轮前进、右轮前进；两路编码器都为 +。 */
+/* 探针：Load() 实际算出的两路值（a=左、b=右，已含右路取负与 Limit 夹取）。
+ * 用途：定位"环要多少 / Load 写多少 / TIM8 寄存器实际多少"三段差异。 */
+volatile int g_load_a = 0;
+volatile int g_load_b = 0;
+
 void Load(int moto1, int moto2)
 {
 	int a = moto1;
 	int b = -moto2;
 	Limit(&a, &b);
+	g_load_a = a;
+	g_load_b = b;
 
 	__HAL_TIM_SetCompare(&htim8, TIM_CHANNEL_1, (a > 0) ? (uint32_t)a : 0U);
 	__HAL_TIM_SetCompare(&htim8, TIM_CHANNEL_2, (a < 0) ? (uint32_t)(-a) : 0U);

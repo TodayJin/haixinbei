@@ -305,6 +305,11 @@ static uint8_t  s_dump_busy;
  *   2 = 两个都发（调试用；早先 115200 下 50Hz 就占 37% 带宽，921600 之后随便发） */
 static uint8_t s_telem_mode = 1u;
 
+/* ★探针（2026-10-15）：Load() 实际算出的两路值，定义在 motor.c。
+ * 用来对照"环要多少(req/out) / Load 写多少(loadA/B) / TIM8 寄存器(regL/R)"三段，
+ * 定位"右路对负目标无输出"这类问题。 */
+extern volatile int g_load_a, g_load_b;
+
 static int spec_index(uint16_t id)
 {
   uint16_t i;
@@ -1367,6 +1372,20 @@ void host_link_tick_1hz(void)
                    (unsigned long)g_stop_src[0], (unsigned long)g_stop_src[1],
                    (unsigned long)g_stop_src[2], (unsigned long)g_stop_src[3]);
     host_link_send_text(tb);
+  }
+
+  /* ★探针：速度环三段 + TIM8 寄存器（查"右路负值无输出"用）。 */
+
+  {
+    char pb[160];
+    (void)snprintf(pb, sizeof(pb),
+      "[fw] sp en=%d reqL=%d reqR=%d outL=%d outR=%d loadA=%d loadB=%d regL=%d regR=%d ibat=%d\r\n",
+      SpeedControl_IsEnabled(), SpeedControl_Target(0), SpeedControl_Target(1),
+      SpeedControl_Output(0), SpeedControl_Output(1),
+      g_load_a, g_load_b,
+      (int)motor_pwm(TIM_CHANNEL_1, TIM_CHANNEL_2),
+      (int)motor_pwm(TIM_CHANNEL_3, TIM_CHANNEL_4));
+    host_link_send_text(pb);
   }
 
   SEGGER_RTT_printf(0, "HOST: rx=%lu tx=%lu crc=%lu resync=%lu sets=%lu hz=%u txdrop=%lu rxover=%lu\r\n",

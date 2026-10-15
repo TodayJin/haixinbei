@@ -211,8 +211,20 @@ static int speed_pi_step(speed_pi_t *s, float counts, float kp, float ki, float 
     float u_ff, out;
 
     s->integral += err;
-    s->integral = clampf(s->integral, -ilim, ilim);
-
+    /* ★2026-10-15：**ilim 的量纲修错了** —— 它的语义是"积分项的 PWM 贡献上限"，
+     * 而这里原来拿它去夹"误差原始和"（计数单位）。第 228 行是 ki * s->integral，
+     * 所以积分项实际能到 ki*ilim = 2*3000 = **6000 PWM**，而满量程只有 7200
+     * ⇒ **光积分一项就能把输出顶满** ⇒ 任何目标都饱和、输出在 ±7200 之间狂摆。
+     * 实测症状（直连串口，单轮）：目标 1000/2000/3000/4500 全都跑到 ~700mm/s 满速，
+     * 探针 outL 恒 = 7200（而按公式该是 ~1900）。速度环完全失控，不是编码器也不是硬件。
+     * 修法：按 ki 折算，保证 ki*integral ≤ ilim。ki=0 时积分恒 0（纯 P+前馈）。
+     * 注意 ilim 仍然只限**积分项**，不限制前馈/P 项（那两项本来就有各自的物理意义）。 */
+    if (ki > 1.0e-6f) {
+        float ilim_i = ilim / ki;
+        s->integral = clampf(s->integral, -ilim_i, ilim_i);
+    } else {
+        s->integral = 0.0f;
+    }
     /* 前馈 = 斜率项 + 摩擦项。摩擦项按目标符号取正负，目标为 0 就不给
      * （不然零目标时轮子会自己走）。目标 1500 时它直接给出 1870+1125 = 2995 PWM，
      * 落点就在稳态工作点上，PI 只剩几十个 PWM 的活要干。 */
