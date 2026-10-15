@@ -1379,7 +1379,7 @@ void host_link_tick_1hz(void)
   {
     char pb[160];
     (void)snprintf(pb, sizeof(pb),
-      "[fw] sp en=%d reqL=%d reqR=%d outL=%d outR=%d loadA=%d loadB=%d regL=%d regR=%d ibat=%d\r\n",
+      "[fw] sp en=%d reqL=%d reqR=%d outL=%d outR=%d loadA=%d loadB=%d regL=%d regR=%d\r\n",
       SpeedControl_IsEnabled(), SpeedControl_Target(0), SpeedControl_Target(1),
       SpeedControl_Output(0), SpeedControl_Output(1),
       g_load_a, g_load_b,
