@@ -43,6 +43,14 @@ static uint32_t s_vbus_low_ms;      /* 本轮连续低压的起点（0 = 还没�
 static uint8_t  s_vbus_disarmed;    /* 本轮低压已经停过机了（不重复动手/计数） */
 static uint8_t  s_vbus_disarms;     /* 低压自动停机的次数（诊断） */
 
+/* ★2026-10-15：**谁把驾驶会话停掉的** —— 各来源分别计数。
+ * 起因：逐帧实测 `pwm==0` 的帧占 39%，其中 `host_drive=0`（会话被清）占 89%，
+ * 但按代码看几条路径都不该触发（trips=0、vbus 最低 10.6V 远高于 3V 阈值）
+ * ⇒ 不靠读代码猜，让固件自己报是哪一条。
+ *   [0] 低压保护  [1] 驾驶看门狗  [2] 显式 OFF  [3] CMD_STOP（暂未接，host_link 侧留待下轮）
+ * 烧录后可用 SWD 读 g_stop_src，或看 host_link 每秒发的文本。 */
+volatile uint32_t g_stop_src[4] = {0U, 0U, 0U, 0U};
+
 void HostExt_Init(void)
 {
     s_mode          = HOST_DRIVE_OFF;
@@ -144,6 +152,7 @@ static void low_voltage_guard(uint32_t now)
     s_vbus_disarmed = 1U;
     s_vbus_disarms++;
     TaskRun_Stop();                              /* 任务先停：不然它下一块 SET_MODE 又把环开起来 */
+    g_stop_src[0]++;                             /* ★诊断：低压保护停的 */
     HostExt_DriveStop();                         /* 会话清掉 + SpeedControl_Stop() */
     Motion_SetMode(MOTION_IDLE);                 /* 兜底：非 IDLE 模式也真转换回 IDLE */
 }
@@ -166,6 +175,7 @@ void HostExt_Task(uint32_t now_ms)
     /* 链路断了（线掉了 / 上位机崩了 / 串口拔了）：绝不能把最后一条指令留着。
      * 用户 m13466 的场景是"人在旁边调车"，车自己冲出去是最大的风险。 */
     s_trips++;
+    g_stop_src[1]++;                             /* ★诊断：驾驶看门狗停的 */
     HostExt_DriveStop();
 }
 
@@ -181,6 +191,7 @@ int HostExt_DriveSet(uint8_t mode, int a, int b)
 
     switch (mode) {
     case HOST_DRIVE_OFF:
+        g_stop_src[2]++;                         /* ★诊断：显式 OFF 停的 */
         HostExt_DriveStop();
         return 0;
 

@@ -56,7 +56,10 @@ void    HostExt_Init(void);
 void    HostExt_Task(uint32_t now_ms);            /* host_link_poll() 每拍调：看门狗 + 低压保护 */
 void    HostExt_DriveKeepAlive(uint32_t now_ms);  /* 每收到一个合法帧调一次 */
 void    HostExt_NoteVbusMv(uint16_t mv);          /* host_link 每真读到一次母线电压就报一次 */
-uint8_t HostExt_LowVoltageDisarms(void);          /* 因母线低压自动停机的次数（诊断） */
+uint8_t HostExt_LowVoltageDisarms(void);
+
+/* ★2026-10-15：驾驶会话被停的原因计数（诊断）。见 host_ext.c 的说明。 */
+extern volatile uint32_t g_stop_src[4];          /* 因母线低压自动停机的次数（诊断） */
 
 /* @return 0 = 成功；-1 = 模式非法；-2 = 任务解释器在跑，拒绝远程驾驶 */
 int     HostExt_DriveSet(uint8_t mode, int a, int b);
