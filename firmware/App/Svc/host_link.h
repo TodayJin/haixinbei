@@ -76,6 +76,10 @@
 #define HP_VBAT_NOMINAL      0x0501u
 #define HP_STALL_CURRENT     0x0502u
 #define HP_VBAT_LOW          0x0503u
+#define HP_GYRO_V_FLOOR      0x0116u /* ★逼近段最低允许角速度(°/s)，0=关(默认)。
+                                      * 用途：原地转要"维持转动"需 ~90~100°/s，低于它车会在离目标 10~40° 处
+                                      * 咬死停住(欠调)；而 P 型外环 err 小 ⇒ 命令也小 ⇒ 必然进慢滚区。
+                                      * 打开它(35~60)可让全程不进 stick-slip 区，最后靠停车带一次性刹停。 */
 #define HP_GYRO_BRAKE_GAIN   0x0115u /* ★刹车增强系数（>=1）：速率环里"该减速"时把负向误差放大。
                                       * 实测超调根因：该刹车时 (rate_ref-v) 反而变小(仅 ~300) 而需要 ~3000。
                                       * 1.0 = 关闭（与旧行为逐位一致）；默认 2.0。 */
