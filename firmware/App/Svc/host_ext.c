@@ -32,6 +32,8 @@ static uint8_t  s_mode;             /* HOST_DRIVE_* */
 static int      s_a, s_b;           /* 最近一次驾驶指令的原样参数（遥测/回报用） */
 static float    s_base_yaw;         /* 进 HOST_DRIVE_BASE 时的航向（b 是相对它的偏转） */
 static float    s_base_yaw_cont;    /* 同上，但**连续域**（不取模）——见 HostExt_DriveSet 的 BASE 分支 */
+static uint32_t s_base_leave_ms;    /* 离开 HOST_DRIVE_BASE 的时刻（短暂掉帧要沿用旧基准，见 BASE 分支） */
+static uint8_t  s_base_first = 1U;  /* 上电后第一次进 BASE 必须重记基准 */
 static uint32_t s_keepalive_ms;     /* 最近一次收到合法帧的时刻 */
 static uint8_t  s_trips;            /* 看门狗自动停车的次数（诊断） */
 static uint8_t  s_cur_action;       /* 最近一次下发的动作号（0 = 没下发过） */
@@ -58,6 +60,8 @@ void HostExt_Init(void)
     s_b             = 0;
     s_base_yaw      = 0.0f;
     s_base_yaw_cont = 0.0f;
+    s_base_leave_ms = 0U;
+    s_base_first    = 1U;
     s_keepalive_ms  = HAL_GetTick();
     s_trips         = 0U;
     s_cur_action    = 0U;
@@ -179,6 +183,8 @@ void HostExt_Task(uint32_t now_ms)
     HostExt_DriveStop();
 }
 
+#define HOST_BASE_REGRAB_MS 150U  /* 离开 BASE 超过这么久才重记基准航向（短暂掉帧沿用旧基准） */
+
 int HostExt_DriveSet(uint8_t mode, int a, int b)
 {
     if (TaskRun_IsRunning() != 0U) {
@@ -188,6 +194,11 @@ int HostExt_DriveSet(uint8_t mode, int a, int b)
     s_a = a;
     s_b = b;
     HostExt_DriveKeepAlive(HAL_GetTick());
+
+    /* ★2026-10-15：记下"离开 BASE"的时刻。见 BASE 分支的短暂掉帧保护。 */
+    if (s_mode == HOST_DRIVE_BASE && mode != HOST_DRIVE_BASE) {
+        s_base_leave_ms = HAL_GetTick();
+    }
 
     switch (mode) {
     case HOST_DRIVE_OFF:
@@ -221,8 +232,20 @@ int HostExt_DriveSet(uint8_t mode, int a, int b)
         Motion_SetSpeed(a);
         Motion_SetMode(MOTION_GYRO);   /* 角度环 + 速度环（两种形态里的"障碍流程"） */
         if (s_mode != HOST_DRIVE_BASE) {
-            s_base_yaw = Yaw;                              /* 进模式那一刻的航向（遥测/诊断用） */
-            s_base_yaw_cont = GyroControl_GetYawCont();    /* 连续域基准（未取模） */
+            /* ★2026-10-15（用户实测"转过去超过目标很多再回来"，逐帧抓到真因）：
+             *  —— **短暂掉帧不许重捕基准** ——
+             * 原来只要离开 BASE 一拍就重记基准 ⇒ 只要上位机发帧慢了一拍（掉帧/刷新空档/
+             * 看门狗边界），下一帧就把"当前车头"当成新基准 ⇒ 目标 = 当前车头 + b，
+             * **已经转过的角度被重复计入目标** ⇒ 车多转"已转过的角度" ⇒ 必然大幅超调再回来。
+             * 逐帧证据（IMU 页设 90°，30/80ms 发帧）：环内航向比真实航向少 48°，
+             * 且差值恒定 48.0±0.5°（从重捕那一刻起）⇒ 峰值转到 +151°，超调 +61°。
+             * 现在：只有**离开 BASE 超过 HOST_BASE_REGRAB_MS(150ms)** 才重记基准；短暂掉帧沿用旧基准。 */
+            if (s_base_first != 0U ||
+                (uint32_t)(HAL_GetTick() - s_base_leave_ms) > HOST_BASE_REGRAB_MS) {
+                s_base_yaw = Yaw;                              /* 进模式那一刻的航向（遥测/诊断用） */
+                s_base_yaw_cont = GyroControl_GetYawCont();    /* 连续域基准（未取模） */
+                s_base_first = 0U;
+            }
         }
         /* ★2026-10-07：b 是上位机的**累计转角**（可到 ±540°），必须走连续域目标。
          * 走 `GyroControl_SetTargetAngle(NormalizeAngle(...))` 时，只要累计目标领先车头
