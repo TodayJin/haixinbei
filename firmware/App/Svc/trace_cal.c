@@ -146,6 +146,10 @@ static int32_t s_median(int32_t *v, uint8_t n);
 
 static uint16_t s_buf[TRACE_CAL_CH][TRACE_CAL_SAMPLE_N];  /* 标定采样缓冲：8×32×2 = 512B */
 static uint8_t  s_n;                      /* 本次标定点实际采到的帧数 */
+/* ★2026-10-15（审计 #16）：标定采样从"一口气采完"改成"每轮主循环采一帧"。
+ * s_samp_k = 本轮已采到第几帧；s_sampling = 1 表示正在采（press 发起、poll 推进）。 */
+static uint8_t  s_samp_k;
+static uint8_t  s_sampling;
 static uint8_t  s_fail;
 static uint8_t  s_tried;                  /* 1 = 已经为本次探测换过通道了（只换一次） */
 static uint8_t  s_first;                  /* 首选通道（自动模式：串口优先） */
@@ -254,6 +258,8 @@ void trace_cal_init(void)
         s_bad[i]  = 0U;
     }
     s_state = TRACE_CAL_IDLE;
+    s_sampling = 0U;      /* ★审计 #16：跨轮采样的状态，上电必须归零 */
+    s_samp_k   = 0U;
     trace_cal_analog_ok = 0U;
     trace_cal_valid     = 0U;
     s_off_until_ms      = 0U;
@@ -351,35 +357,39 @@ static uint8_t source_read(uint8_t *b16)
     return 0U;
 }
 
-/* 一口气连采 TRACE_CAL_SAMPLE_N 帧（IIC 一帧 ≈0.6ms → 32 帧 ≈20ms）。
- * 返回 1 = 采够了。IIC 与 OLED 共用总线：每帧前等屏空闲，别插进它的搬运中间。 */
-static uint8_t sample_point(void)
+/* 采**一帧**标定样本，推进 s_samp_k；返回 1 = 这一帧读失败。
+ *
+ * ★2026-10-15（审计 #16）：这里原来是 `sample_point()`，**一口气连采 32 帧**。
+ *  它的注释按 **I2C** 估（一帧 ≈0.6ms ⇒ 32 帧 ≈20ms），但 `TRACE_SRC_AUTO` 是
+ *  **串口优先**：串口一帧 = 发 2 字节 + 每字节最多等 `TRACE_UART_BYTE_MS`(2ms)
+ *  ⇒ 健康链路 ≈1.8~2.5ms/帧 ⇒ 32 帧 ≈ **60~80ms**；链路半死时最坏 22×2ms×32 ≈ **1.4s**。
+ *  这段时间全在**主循环里同步阻塞**：屏幕不刷、按键不响应；任务在跑时车还会带着
+ *  最后一条指令继续动。现在拆成"每次 poll 采一帧"，单次阻塞降到**一帧**。
+ *
+ * I2C 与 OLED 共用总线：每帧前等屏空闲，别插进它的搬运中间。 */
+static uint8_t sample_one(void)
 {
     uint8_t b16[TRACE_CAL_CH * 2U];
-    uint8_t k, i;
+    uint8_t i;
 
-    for (k = 0U; k < (uint8_t)TRACE_CAL_SAMPLE_N; k++) {
-        if (trace_cal_src == TRACE_SRC_I2C) {
-            uint16_t guard = 0U;
-            while (OLED_IsBusy()) {
-                if (++guard > 200U) break;   /* 200ms 还不空闲：屏那边有问题，别死等 */
-                HAL_Delay(1);
-            }
-        }
-        if (!source_read(b16)) break;
-        for (i = 0; i < TRACE_CAL_CH; i++) {
-            uint16_t v = (uint16_t)(((uint16_t)b16[i * 2U] << 8) |
-                                    (uint16_t)b16[i * 2U + 1U]);
-            s_buf[i][k] = v;
-            if (v < s_rmin[i]) s_rmin[i] = v;
-            if (v > s_rmax[i]) s_rmax[i] = v;
-            trace_cal_raw[i] = v;
+    if (trace_cal_src == TRACE_SRC_I2C) {
+        uint16_t guard = 0U;
+        while (OLED_IsBusy()) {
+            if (++guard > 200U) break;   /* 200ms 还不空闲：屏那边有问题，别死等 */
+            HAL_Delay(1);
         }
     }
-
-    if (k < 8U) return 0U;    /* 连 8 帧都没采到：这次算失败，别拿半份数据去算平均 */
-    s_n = k;
-    return 1U;
+    if (!source_read(b16)) return 1U;
+    for (i = 0; i < TRACE_CAL_CH; i++) {
+        uint16_t v = (uint16_t)(((uint16_t)b16[i * 2U] << 8) |
+                                (uint16_t)b16[i * 2U + 1U]);
+        s_buf[i][s_samp_k] = v;
+        if (v < s_rmin[i]) s_rmin[i] = v;
+        if (v > s_rmax[i]) s_rmax[i] = v;
+        trace_cal_raw[i] = v;
+    }
+    s_samp_k++;
+    return 0U;
 }
 
 /* 采样完算平均并推进状态。进入时 s_state 还是 WAIT_BLACK / WAIT_WHITE。 */
@@ -478,6 +488,35 @@ void trace_cal_poll(void)
         trace_cal_src       = TRACE_SRC_NONE;
         trace_cal_analog_ok = 0U;
         return;
+    }
+
+    /* ★2026-10-15（审计 #16）：标定采样推进 —— `trace_cal_wizard_press()` 只**发起**
+     *  （s_sampling=1, s_samp_k=0），真正的取帧在这里**一轮一帧**地做。
+     * 放在周期闸门**之前**：采样本事有它自己的节奏（一帧就是一次总线/串口往返），
+     * 不该再被 20ms/5ms 的常规读取周期拖慢。
+     * 这几十轮里会跳过常规周期采样与 `frame_compute()` —— 循迹的线状态最多陈旧
+     * 这么多轮；用户按标定键时车是静止的，无影响。 */
+    if (s_sampling) {
+        if (sample_one()) {
+            /* 这一帧读失败 ⇒ **停止采样**（与原 `sample_point()` 里 `break` 的语义一致），
+             *  但已经采到的帧照样用：够 8 帧就照常算，不够才当"采样根本没做成"。
+             *  两种出口都与审计 #13 的口径一致：采样没做成时**保留进标定前那份旧标定**。 */
+            s_sampling = 0U;
+            if (s_samp_k >= 8U) {
+                s_n = s_samp_k;
+                sample_finish();
+            } else {
+                trace_cal_valid = s_valid_before;
+                s_state         = TRACE_CAL_FAILED;
+            }
+            return;
+        }
+        if (s_samp_k >= (uint8_t)TRACE_CAL_SAMPLE_N) {
+            s_sampling = 0U;
+            s_n        = s_samp_k;
+            sample_finish();
+        }
+        return;   /* 还在采、或刚采完这一轮：本轮都不做常规采样 */
     }
 
     {
@@ -1022,18 +1061,15 @@ void trace_cal_wizard_press(void)
         return;
     }
 
-    /* 一口气采完这一个点（≈20ms），采完直接推进状态/算阈值。
-     * 这么短就不需要"0/32"的采样进度画面了（用户 m03536：几十毫秒就够）。 */
-    s_n = 0U;
-    if (!sample_point()) {
-        /* ★2026-10-13（审计 #13）：这两条都属于"**采样根本没做成**"（读不到模拟量 / 连 8 帧
-         *  都没采到）—— 一个采样点都没写进 s_blk/s_wht。旧标定必须原样保留，否则用户只是
-         *  "进了标定页又退出来"，整套旧标定就被清掉、并在 ~1.5s 后被 nvram 固化进 Flash（掉电也丢）。 */
-        trace_cal_valid = s_valid_before;
-        s_state = TRACE_CAL_FAILED;
-        return;
-    }
-    sample_finish();
+    /* ★2026-10-15（审计 #16）：这里原来**一口气采完 32 帧** —— 注释按 I2C 估（≈20ms），
+     *  但默认走的是**串口**：32 帧 ≈60~80ms，链路半死时最坏 ≈1.4s，全在**主循环里阻塞**
+     *  （屏幕不刷、按键不响应；任务在跑时车还会带着最后一条指令继续动）。
+     *  现在这里只**发起**采样，取帧交给 `trace_cal_poll()` 一轮一帧做完
+     *  ⇒ 单次阻塞从"32 帧"降到"一帧"。
+     *  失败分支（读失败且采到的帧不够 8）已随采样一起搬到 poll 里，口径不变
+     *  （都属于"采样根本没做成"⇒ 保留进标定前那份旧标定，见审计 #13）。 */
+    s_samp_k   = 0U;
+    s_sampling = 1U;
 }
 
 /* ------------------------------------------- 标定数据（Flash 持久化搬运） */
@@ -1155,6 +1191,11 @@ void trace_cal_wizard_cancel(void)
     }
     s_state = TRACE_CAL_IDLE;
     s_n = 0U;
+    /* ★2026-10-15（审计 #16）：采样现在是跨轮做的 ⇒ 取消时必须把它停掉，
+     *  否则退出向导后 poll 还会继续往 s_buf 里塞帧、甚至调 sample_finish()
+     *  把 s_blk/s_wht 改掉（那时 s_state 已经不是 WAIT_*，会写错分支）。 */
+    s_sampling = 0U;
+    s_samp_k   = 0U;
 }
 
 trace_cal_state_t trace_cal_state(void)
