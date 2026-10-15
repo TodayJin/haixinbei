@@ -33,6 +33,7 @@ static int      s_a, s_b;           /* 最近一次驾驶指令的原样参数�
 static float    s_base_yaw;         /* 进 HOST_DRIVE_BASE 时的航向（b 是相对它的偏转） */
 static float    s_base_yaw_cont;    /* 同上，但**连续域**（不取模）——见 HostExt_DriveSet 的 BASE 分支 */
 static uint32_t s_base_leave_ms;    /* 离开 HOST_DRIVE_BASE 的时刻（短暂掉帧要沿用旧基准，见 BASE 分支） */
+static uint32_t s_base_frame_ms;    /* ★2026-10-16：上一帧 BASE 到达的时刻（0 = 还没有过）——见 BASE 分支 */
 static uint8_t  s_base_first = 1U;  /* 上电后第一次进 BASE 必须重记基准 */
 static uint32_t s_keepalive_ms;     /* 最近一次收到合法帧的时刻 */
 static uint8_t  s_trips;            /* 看门狗自动停车的次数（诊断） */
@@ -61,6 +62,7 @@ void HostExt_Init(void)
     s_base_yaw      = 0.0f;
     s_base_yaw_cont = 0.0f;
     s_base_leave_ms = 0U;
+    s_base_frame_ms = 0U;
     s_base_first    = 1U;
     s_keepalive_ms  = HAL_GetTick();
     s_trips         = 0U;
@@ -234,7 +236,15 @@ int HostExt_DriveSet(uint8_t mode, int a, int b)
     case HOST_DRIVE_BASE:
         Motion_SetSpeed(a);
         Motion_SetMode(MOTION_GYRO);   /* 角度环 + 速度环（两种形态里的"障碍流程"） */
-        if (s_mode != HOST_DRIVE_BASE) {
+        /* ★2026-10-16 根治"阶梯式转不停"（用户："在 IMU 页看它一直震荡"）：
+         * 长测逐帧证据 —— 目标设 90°，车先完美停在 90.2°（峰峰 0.1°），4 秒后自己又转了 +88.4° 停在 178.4°，
+         * 依此类推 90→178→268…（台阶式转个不停）。唯一可能是 `s_base_yaw_cont` 被重抓成了当前车头。
+         * 原判据是 `s_mode != HOST_DRIVE_BASE`（只要中途被别处改成 IDLE/别的模式，下一帧就重抓基准），
+         * 于是"会话被打断一次"⇒ 目标 = 当前车头 + b ⇒ **已转过的角度被重复计入** ⇒ 一圈圈转下去。
+         * 新判据只看"距上一帧 BASE 有多久"：**只要上位机还在连续发 BASE 帧，就绝不重记基准** ✓
+         * （b 是相对"最近一次真正重新进入 BASE"那一刻的车头，语义更符合上位机"设一个绝对朝向"的用法。） */
+        if (s_base_frame_ms == 0U ||
+            (uint32_t)(HAL_GetTick() - s_base_frame_ms) > HOST_BASE_REGRAB_MS) {
             /* ★2026-10-15（用户实测"转过去超过目标很多再回来"，逐帧抓到真因）：
              *  —— **短暂掉帧不许重捕基准** ——
              * 原来只要离开 BASE 一拍就重记基准 ⇒ 只要上位机发帧慢了一拍（掉帧/刷新空档/
@@ -250,6 +260,7 @@ int HostExt_DriveSet(uint8_t mode, int a, int b)
                 s_base_first = 0U;
             }
         }
+        s_base_frame_ms = HAL_GetTick();   /* ★记下本帧时刻：下一帧若在 1s 内到达就沿用同一基准 */
         /* ★2026-10-07：b 是上位机的**累计转角**（可到 ±540°），必须走连续域目标。
          * 走 `GyroControl_SetTargetAngle(NormalizeAngle(...))` 时，只要累计目标领先车头
          * 超过 180°，角度环的 `CalculateAngleError`（±180 取模 + 最近路）就会把"继续往左"
