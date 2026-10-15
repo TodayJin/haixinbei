@@ -183,7 +183,10 @@ void HostExt_Task(uint32_t now_ms)
     HostExt_DriveStop();
 }
 
-#define HOST_BASE_REGRAB_MS 150U  /* 离开 BASE 超过这么久才重记基准航向（短暂掉帧沿用旧基准） */
+#define HOST_BASE_REGRAB_MS 1000U /* 离开 BASE 超过这么久才重记基准航向（短暂掉帧沿用旧基准）。
+                                        * ★2026-10-15 实测：150ms 仍会被串口偶发空档踩到 ⇒ 车转到 36° 时基准被重捕、
+                                        * 目标变成 36+90=126 ⇒ 末值停在 126 不回（与实测数值完全吻合）。
+                                        * 提到 1000ms：只有用户真的松手/退出模式才会重记基准。 */
 
 int HostExt_DriveSet(uint8_t mode, int a, int b)
 {
