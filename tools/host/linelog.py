@@ -54,7 +54,7 @@ def main() -> int:
     with open(path, "w", newline="", encoding="utf-8") as fh:
         wr = csv.writer(fh)
         wr.writerow(["t_ms", "pos", "lost", "vl", "vr", "pwm_l", "pwm_r", "corr", "rate_ref",
-                     "ang_err", "g0", "g1", "g2", "g3", "g4", "g5", "g6", "g7", "vbat", "ibat"])
+                     "ang_err", "yaw", "g0", "g1", "g2", "g3", "g4", "g5", "g6", "g7", "vbat", "ibat"])
         while time.time() - t0 < args.sec:
             now = time.time()
             if mode != 0 and (now - last_drv) >= args.keepalive:
@@ -71,7 +71,7 @@ def main() -> int:
                 an = d.get("angle") or {}
                 rows.append([d.get("t", 0), tr.get("pos", 0.0), 1 if d.get("flags", {}).get("lost") else 0,
                              d.get("vl", 0), d.get("vr", 0), d.get("pwm_l", 0), d.get("pwm_r", 0),
-                             an.get("corr", 0.0), an.get("rate_ref", 0.0), an.get("err", 0.0)]
+                             an.get("corr", 0.0), an.get("rate_ref", 0.0), an.get("err", 0.0), d.get("yaw", 0.0)]
                             + list(g)[:8] + [d.get("vbat_mv", 0), d.get("ibat_ma", 0)])
             time.sleep(0.002)
         if mode != 0:
