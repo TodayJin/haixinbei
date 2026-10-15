@@ -845,7 +845,16 @@ void GyroControl_Task(void)
          * 减速度前馈 s_kacc·Δv_ref/dt（v_ref 被 ±s_rate_max 夹住 ⇒ 误差过零时
          * a_cmd=±44000，前馈自己变成继电器，出 ±23°/174°/s 的剧烈极限环）。 */
         float err = err_now;
-        float v   = s_rate_f;
+        /* ★2026-10-15（用户："控制它转，它都不转，左右轮交替动原地蹭"）——**角速度反馈符号修正**。
+         *  证据（读代码）：
+         *    · 老律 s_law=0 用的是 `float derivative = -Gyro_Z;`（本文件 :334）⇒ **取负**；
+         *    · 而 s_law=2/3 的反馈是 s_rate_f，它由 `s_rate_f += (Gyro_Z - s_rate_f)*a`（:623-628）
+         *      直接拿 Gyro_Z，**没有取负** ⇒ 两律对同一物理量的符号约定相反 ✗
+         *  后果：内环 `correction = rate_kp*(rate_ref - v)` 一开车转起来 v 就给出反号
+         *        ⇒ correction 立刻反号 ⇒ 两轮交替猛推 ⇒ 原地蹭、yaw 不前进（实测就是如此）。
+         *  修法：s_law=3 这一路的反馈取负，与 s_law=0 的 `-Gyro_Z` 约定统一。
+         *  ⚠ 只改本分支的局部变量，不动 s_rate_f 本身（settle 判定 :1001 与循迹 :710 另有用处）。 */
+        float v   = -s_rate_f;
 
         gyro_pid.target   = target_angle;
         gyro_pid.actual   = actual_angle;
