@@ -327,8 +327,16 @@ static uint8_t uart_read_analog(uint8_t *b16)
     uint8_t b;
     uint8_t drop = 0U;          /* ★已丢弃的"非帧头"字节数（见下面的上限说明） */
 
-    /* 先冲刷掉可能残留的字节：读取帧是"你问我才答"，正常不会有 */
-    while (board_uart4_read_byte(&b, 0U)) { /* 丢掉 */ }
+    /* 先冲刷掉可能残留的字节：读取帧是"你问我才答"，正常不会有。
+     * ★2026-10-15：这里同样要有上限 —— 超时是 0（不等），但若总线**持续**来字节
+     *  （线悬空/波特率不符时会被误当连续字节），这个 while 也会一直转。
+     *  与下面找帧头处的 TRACE_UART_MAX_DROP 同一个原因：**不允许无界循环**。 */
+    {
+        uint8_t flush = 0U;
+        while (board_uart4_read_byte(&b, 0U)) {
+            if (++flush > 32U) break;
+        }
+    }
 
     board_uart4_write(req, sizeof(req));
 
