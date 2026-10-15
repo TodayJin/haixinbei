@@ -1031,8 +1031,8 @@ void GyroControl_Task(void)
     s_dbg_corr = correction;                  /* 只给遥测看 */
 
     // 根据PID输出调整左右轮速度
-    left_speed  = base_speed_left  + (int)correction;   /* ★2026-10-15: 输出符号互换 */
-    right_speed = base_speed_right - (int)correction;   /* 实测: 左反右正 => 顺时针(yaw减小); 命令+角需 yaw 增大 => 左正右反 */
+    left_speed  = base_speed_left  - (int)correction;   /* 原式(2026-10-15 实测确认: 配合角速度反馈取负后, 负指令b<0 => yaw 单调增大, 平滑无摆动) */
+    right_speed = base_speed_right + (int)correction;
 
     // 限制速度范围
     if(left_speed >  MOTOR_PWM_MAX) left_speed =  MOTOR_PWM_MAX;
