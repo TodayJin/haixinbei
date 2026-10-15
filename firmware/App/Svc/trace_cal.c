@@ -55,6 +55,11 @@
 #define TRACE_MODE_REQ_MS     500U    /* 读不通时重播"输出=全部"的最小间隔（用户 m29611） */
 #define TRACE_MIN_SPAN         32U    /* 黑白原值差小于这个 = 这一路没数据 */
 #define TRACE_UART_BYTE_MS      2U    /* 每字节超时：115200 下一字节 87us，2ms 很宽裕 */
+/* ★2026-10-15：找帧头时最多丢弃多少个字节就放弃这一帧。
+ * 没有这个上限的话，总线持续来乱码时 uart_read_analog() 会**无限循环**
+ * （每轮还等 2ms）⇒ 主循环被 trace_cal_poll() 反复饿死（实测遥测卡 195ms）。
+ * 8 个字节 × 2ms = 上限 16ms，足够正常情况（正常时下一字节 87us 内就来）。 */
+#define TRACE_UART_MAX_DROP      8U
 
 #define TRACE_UART_SOF       0x75U    /* 模块回的帧头 */
 #define TRACE_UART_READ      0x57U    /* 读命令（+ 1 字节地址） */
@@ -320,15 +325,27 @@ static uint8_t uart_read_analog(uint8_t *b16)
     uint8_t buf[22];
     uint8_t n = 0U;
     uint8_t b;
+    uint8_t drop = 0U;          /* ★已丢弃的"非帧头"字节数（见下面的上限说明） */
 
     /* 先冲刷掉可能残留的字节：读取帧是"你问我才答"，正常不会有 */
     while (board_uart4_read_byte(&b, 0U)) { /* 丢掉 */ }
 
     board_uart4_write(req, sizeof(req));
 
+    /* ★2026-10-15（实测抓到）：丢字节**必须有上限**。
+     *  原来 `if (n == 0U && b != TRACE_UART_SOF) continue;` 里 `n` 不自增
+     *  ⇒ 只要总线上持续来"非帧头"字节（传感器没插/线悬空/乱码时就是这样），
+     *    这个循环**永远不会结束**，而每轮还要等最多 TRACE_UART_BYTE_MS(2ms)
+     *  ⇒ **无界阻塞**。trace_cal_poll() 每 20ms 就来调一次 ⇒ 主循环被反复饿死。
+     *  实测症状：逐帧采集发现遥测**周期性卡 195ms**（帧间隔中位 5ms、最大 195ms），
+     *  电机电流稳定在 2.1~2.8A 而编码器读数一半为 0 ⇒ 之前所有速度环数据都被它污染。
+     *  修法：最多丢弃 TRACE_UART_MAX_DROP 个字节就认定"这一帧没齐"，交给上层退避逻辑。 */
     while (n < (uint8_t)sizeof(buf)) {
         if (!board_uart4_read_byte(&b, TRACE_UART_BYTE_MS)) break;  /* 字节没来 = 帧没齐 */
-        if (n == 0U && b != TRACE_UART_SOF) continue;               /* 帧头前全丢 */
+        if (n == 0U && b != TRACE_UART_SOF) {
+            if (++drop > (uint8_t)TRACE_UART_MAX_DROP) break;       /* ★丢够了就放弃这一帧 */
+            continue;                                               /* 帧头前全丢 */
+        }
         buf[n++] = b;
         if (n == 18U && buf[17] == TRACE_UART_TAIL_ANA) {
             memcpy(b16, &buf[1], TRACE_CAL_CH * 2U);
