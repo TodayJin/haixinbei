@@ -21,6 +21,7 @@
 #include "main.h"
 #include "board.h"
 #include "bsp_board.h"
+#include <stdio.h>          /* snprintf（每秒诊断文本用）*/
 #include "host_ext.h"      /* v2：驾驶/动作/舵机/固化（业务都在这里，协议层不碰控制模块） */
 #include "jy61p.h"
 #include "kk_oled.h"
@@ -1030,6 +1031,7 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
     switch (cmd) {
     case CMD_STOP:
       /* 急停：松驾驶 + 停任务解释器（红色停止按钮必须能停住正在跑的任务） */
+      g_stop_src[3]++;                         /* 诊断：CMD_STOP 停的 */
       HostExt_DriveStop();
       TaskRun_Stop();
       send_ack(seq, ST_OK);
@@ -1358,6 +1360,15 @@ void host_link_tick_1hz(void)
   uint32_t now = HAL_GetTick();
   if (now - last < 1000u) return;
   last = now;
+  /* 2026-10-15：把"谁停了驾驶会话"每秒发一行到串口（不用调试器就能读）。 */
+  {
+    char tb[96];
+    (void)snprintf(tb, sizeof(tb), "[fw] stops low=%lu wd=%lu off=%lu cmd=%lu\r\n",
+                   (unsigned long)g_stop_src[0], (unsigned long)g_stop_src[1],
+                   (unsigned long)g_stop_src[2], (unsigned long)g_stop_src[3]);
+    host_link_send_text(tb);
+  }
+
   SEGGER_RTT_printf(0, "HOST: rx=%lu tx=%lu crc=%lu resync=%lu sets=%lu hz=%u txdrop=%lu rxover=%lu\r\n",
                     (unsigned long)s_stats.rx_frames, (unsigned long)s_stats.tx_frames,
                     (unsigned long)s_stats.crc_errors, (unsigned long)s_stats.resyncs,
