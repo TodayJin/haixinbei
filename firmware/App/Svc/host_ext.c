@@ -186,11 +186,23 @@ int HostExt_DriveSet(uint8_t mode, int a, int b)
 
     case HOST_DRIVE_WHEELS:
         /* 速度环单环：不角度环、不循迹（只有 IDLE 分支会只跑速度环）。
-         * 先切 IDLE（会把速度环停掉、目标清零），再自己设目标使能。 */
-        Motion_SetMode(MOTION_IDLE);
-        SpeedControl_SetRamp(HOST_DRIVE_RAMP);
-        SpeedControl_SetTarget(a, b);
-        SpeedControl_Enable(1U);
+         *
+         * ★2026-10-15（实测抓到的真 bug）：这个分支**必须幂等**。
+         *  原来每次收到驾驶帧都 `Motion_SetMode(MOTION_IDLE)` —— 而 IDLE 分支内部会
+         *  `GyroControl_Stop() + SpeedControl_Stop()` —— 然后才 Enable(1) 重新开环。
+         *  可是**喂狗必须每 <HOST_DRIVE_TIMEOUT_MS(500ms) 重发一次驾驶帧**（上位机与我
+         *  的测试脚本都是 ~80~200ms 重发）⇒ **速度环每 80ms 被停掉再开一次** ✗。
+         *  逐帧实测（trace.py，200Hz）：`pwm==0` 的帧占 39%，其中 `motor(使能)=0` 占 89%；
+         *  表现就是"满油门 7200 ↔ 全松 0"的 bang-bang，且实测转速与目标无关
+         *  （2200/2500/2800/3000 四个目标的最大转速都是 ~525~645）⇒ 环根本来不及稳。
+         *  这也解释了用户"速度快不匹配"：上位机操控页同样在周期性喂狗。
+         *  修法与 HOST_DRIVE_BASE 分支一致：**只在模式变化时**停/起，其它时候只更新目标。 */
+        if (s_mode != HOST_DRIVE_WHEELS) {
+            Motion_SetMode(MOTION_IDLE);          /* 会停掉角度环/速度环（只做一次）*/
+            SpeedControl_SetRamp(HOST_DRIVE_RAMP);
+            SpeedControl_Enable(1U);
+        }
+        SpeedControl_SetTarget(a, b);             /* 每帧都更新目标（这样才跟得上）*/
         s_mode = HOST_DRIVE_WHEELS;
         return 0;
 
