@@ -194,6 +194,7 @@ static float s_rate_f    = 0.0f;
  *   （第一次助推没把车"带住"就得等冷却结束再点一次）—— 所以它必须能扫、也能回退。 */
 volatile float s_boost_gap   = 250.0f;
 volatile float s_brake_gain  = 2.0f;   /* ★刹车增强：只在"该减速"时放大 (rate_ref-v)，加速段不动 */
+#define GYRO_BRAKE_VREF   150.0f  /* ★自适应刹车参考转率(°/s)：|v| 达到 2×VREF 时刹车系数取满 s_brake_gain×2 */
 static float  s_boost_cool = 0.0f;     /* 冷却剩余 ms */
 static float  s_boost_mag = 0.0f;
 /* corr 的斜率限幅状态（上一拍的输出），以及"到位锁存"状态。
@@ -924,7 +925,18 @@ void GyroControl_Task(void)
              * 加速段/稳态/锁存逻辑一字不改。s_brake_gain = 1.0 时与旧行为逐位一致。 */
             {
                 float e_brake = rate_ref - v;
-                if (e_brake * rate_ref < 0.0f) e_brake *= s_brake_gain;
+                if (e_brake * rate_ref < 0.0f) {
+                    /* ★2026-10-15 方案A（自适应刹车）：固定系数在"高速冲过来"时压不住（ang_kp=4 ⇒ 超调 +61~72%），
+                     * 所以让刹车系数随转率增大：|v|=0 ⇒ 1（不动低速收尾）；|v|=2×GYRO_BRAKE_VREF ⇒ s_brake_gain×2。
+                     * 目标：允许把 ang_kp 提到 3~4 换速度，而峰值仍压得住。s_brake_gain=1.0 时整体仍是旧行为。 */
+                    float g_brake = s_brake_gain;
+                    if (g_brake > 1.0f) {
+                        float k_brake = fabsf(v) / GYRO_BRAKE_VREF;
+                        if (k_brake > 2.0f) k_brake = 2.0f;
+                        g_brake = 1.0f + (g_brake - 1.0f) * k_brake;
+                    }
+                    e_brake *= g_brake;
+                }
                 correction = s_rate_kp * e_brake;
             }
             /* 速率微分阻尼（PD）：对"角速度正在变化"这件事加阻尼。
