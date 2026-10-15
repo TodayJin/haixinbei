@@ -38,6 +38,13 @@ volatile uint32_t g_isr_cyc_sum  = 0U;
 volatile uint32_t g_isr_n        = 0U;
 volatile uint32_t g_isr_over     = 0U;
 
+/* ★2026-10-15：分段耗时峰值 —— 找 TIM6 中断里的 4ms 尖峰用。
+ * 逐帧实测 loop_us：中位 8us、最大 4308us、>500us 占 24% ⇒ **卡顿在中断内部**。
+ * 只知总时长定位不到函数，所以把 Motion_Task() 切成 3 段各记峰值：
+ *   [0] 陀螺活性看门狗   [1] 模式段（角度环 / 循迹环 / IDLE 后台）   [2] 速度环
+ * 单位 DWT 周期（170MHz ⇒ 1us = 170）。用 SWD 读，不占遥测字节。 */
+volatile uint32_t g_seg_cyc_max[3] = {0U, 0U, 0U};
+
 void Motion_Init(void)
 {
     s_mode = MOTION_IDLE;
@@ -136,6 +143,7 @@ void Motion_Stop(void)
 void Motion_Task(void)
 {
     uint32_t t0 = DWT->CYCCNT;
+    uint32_t c1 = 0U, c2 = 0U;      /* ★分段打点（见 g_seg_cyc_max 的说明）*/
 
     /* 陀螺仪活性检查（放在最前，5ms 一拍）。只有"帧数变了"才算活着：
      * 线断了以后 Yaw/Gyro_Z 是冻结的旧值，光看数值是看不出来的。 */
@@ -164,6 +172,10 @@ void Motion_Task(void)
             }
         }
     }
+
+    /* ★段 [0] = 陀螺活性看门狗 */
+    c1 = DWT->CYCCNT;
+    if ((c1 - t0) > g_seg_cyc_max[0]) g_seg_cyc_max[0] = c1 - t0;
 
     switch (s_mode) {
     case MOTION_GYRO:
@@ -194,7 +206,17 @@ void Motion_Task(void)
         break;
     }
 
+    /* ★段 [1] = 模式段（角度环 / 循迹环 / IDLE 的后台循迹）*/
+    c2 = DWT->CYCCNT;
+    if ((c2 - c1) > g_seg_cyc_max[1]) g_seg_cyc_max[1] = c2 - c1;
+
     SpeedControl_Task();    /* 最内层：永远测速；只有使能时才写 PWM */
+
+    /* ★段 [2] = 速度环 */
+    {
+        uint32_t c3 = DWT->CYCCNT;
+        if ((c3 - c2) > g_seg_cyc_max[2]) g_seg_cyc_max[2] = c3 - c2;
+    }
 
     /* 本拍耗时（DWT 是 32 位、170MHz 下 25s 回绕，无符号相减天然处理回绕） */
     {
