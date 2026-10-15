@@ -176,13 +176,14 @@ function HeadingCard({
 /** 角度环内部量：四个读数 + 三条迷你趋势 */
 function AngleLoopCard() {
   const yaw = useHotSelect((s) => s.telem?.yaw ?? null)
+  const yawCont = useHotSelect((s) => s.telem?.yawCont ?? null)
   const err = useHotSelect((s) => s.telem?.angle?.err ?? null)
   const rateRef = useHotSelect((s) => s.telem?.angle?.rate_ref ?? null)
   const corr = useHotSelect((s) => s.telem?.angle?.corr ?? null)
   return (
     <Card title="角度环内部量">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="目标角" value={fmt(normDeg(err ?? 0) + (yaw ?? 0), 1)} unit="°" hint="= 当前 + 误差" />
+        <Stat label="目标角" value={fmt((yawCont ?? yaw ?? 0) + (err ?? 0), 1)} unit="°" hint="连续航向 + 误差（同为连续域 ⇒ 恒自洽）" />
         <Stat label="误差" value={fmtSigned(err, 2)} unit="°" tone="violet" />
         <Stat label="期望角速度" value={fmt(rateRef, 1)} unit="°/s" tone="cyan" />
         <Stat label="修正输出" value={fmtSigned(corr, 0)} tone="amber" />
@@ -266,7 +267,7 @@ export function ImuPage() {
       // 第一次下发 = 接管那一刻：车上的 s_base_yaw 就是这时候的航向，记下来显示目标。
       // 航向直接从快照读：这一页的壳不订阅 telem，就不必为了记这一行每 tick 重渲染。
       armedRef.current = true
-      baseYawRef.current = store.getSnapshot().telem?.yaw ?? 0
+      baseYawRef.current = store.getSnapshot().telem?.yawCont ?? store.getSnapshot().telem?.yaw ?? 0
       setArmed(true)
     }
     void store.drive({ mode: 'base_turn', base: 0, turn: Math.round(offsetRef.current) })

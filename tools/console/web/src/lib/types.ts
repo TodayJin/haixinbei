@@ -171,6 +171,9 @@ export interface Telem {
   t: number
   t_host: number
   yaw: number
+  /** ★2026-10-15：**连续域航向**（把 ±180 取模的 yaw 逐帧解卷绕累加），由 store.onTelem 填。
+   *  仅供显示/绘图：波形不再在 ±180 处瞬跳，页面读数也不打架。与固件 s_yaw_cont 同口径，不参与控制。 */
+  yawCont?: number
   pitch: number
   roll: number
   vl: number

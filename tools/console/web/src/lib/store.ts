@@ -151,7 +151,17 @@ const TOAST_DEDUP_OK_MS = 1500
 /** 遥测是 100Hz，界面按这个间隔合并刷新（50ms = 20Hz，看得清又不费） */
 const HOT_MS = 50
 
+/** 最近路取模（±180）。与 lib/heading.ts 的 norm180 同义，这里内联以免多一个 import。 */
+function norm180Local(d: number): number {
+  let v = d % 360
+  if (v >= 180) v -= 360
+  if (v < -180) v += 360
+  return v
+}
+
 class ConsoleStore {
+  private yawCont: number | null = null   /* 连续域航向（解卷绕），见 onTelem */
+  private yawLast = 0
   private snap: ConsoleSnapshot = {
     version: 0,
     sse: 'connecting',
@@ -450,6 +460,18 @@ class ConsoleStore {
   }
 
   private onTelem(t: Telem): void {
+    /* ★2026-10-15（用户报"目标角/误差/实际角对不上、波形突然跳变"）：
+     * 遥测的 yaw 是 JY61P 的 **±180 取模**值 ⇒
+     *   ① 波形一过 ±180 就从 +179 瞬跳到 −179（不是噪声，是取模的固有现象）；
+     *   ② 页面把"连续域误差 angle.err"和"取模航向 yaw"直接相加 ⇒ 三个读数互相矛盾。
+     * 这里按"最近路"逐帧累加出**连续域航向**（与固件 s_yaw_cont 同算法）供显示用。
+     * 只影响显示，不参与任何控制。 */
+    if (Number.isFinite(t.yaw)) {
+      if (this.yawCont === null) this.yawCont = t.yaw
+      else this.yawCont += norm180Local(t.yaw - this.yawLast)
+      this.yawLast = t.yaw
+      t.yawCont = this.yawCont
+    }
     this.ring.push(t.t_host || t.t || Date.now(), CHANNELS.map((c) => c.get(t)))
     this.snap = { ...this.snap, telem: t, ringFill: this.ring.size }
     this.emitHot()

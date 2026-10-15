@@ -18,7 +18,8 @@ export interface ChannelDef {
 }
 
 export const CHANNELS: ChannelDef[] = [
-  { key: 'yaw', label: '偏航', unit: '°', color: '#22d3ee', decimals: 1, group: '姿态', get: (t) => t.yaw },
+  // ★2026-10-15：画**连续域**航向（t.yawCont，store.onTelem 解卷绕填充）⇒ 不再在 ±180 处瞬跳。
+  { key: 'yaw', label: '偏航', unit: '°', color: '#22d3ee', decimals: 1, group: '姿态', get: (t) => t.yawCont ?? t.yaw },
   // 姿态两路：**名字是车体轴，不是遥测帧里的同名字段**。车上那颗 JY61P 装成了横的 ——
   // 传感器 pitch 轴量的是车身横滚、roll 轴量的是车身俯仰（`固件接口规格.md` §3.5 的
   // M1..M8 表，默认档 M3：画面横滚 = −遥测 pitch、画面俯仰 = +遥测 roll）。
