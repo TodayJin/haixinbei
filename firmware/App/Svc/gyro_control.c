@@ -193,6 +193,7 @@ static float s_rate_f    = 0.0f;
  *   起步半秒：角速度 0→36°/s→掉回 0 停 ~0.3s→再冲到 75，正好是这个冷却在起作用
  *   （第一次助推没把车"带住"就得等冷却结束再点一次）—— 所以它必须能扫、也能回退。 */
 volatile float s_boost_gap   = 250.0f;
+volatile float s_brake_gain  = 2.0f;   /* ★刹车增强：只在"该减速"时放大 (rate_ref-v)，加速段不动 */
 static float  s_boost_cool = 0.0f;     /* 冷却剩余 ms */
 static float  s_boost_mag = 0.0f;
 /* corr 的斜率限幅状态（上一拍的输出），以及"到位锁存"状态。
@@ -659,6 +660,8 @@ void GyroControl_Task(void)
      * 三是"改完立刻生效"这条台架习惯（:621 的注释）对所有参数都成立、不会漏。 */
     s_boost_gap  = host_param_get(HP_GYRO_BOOST_GAP_MS, s_boost_gap);
     s_boost_rate = host_param_get(HP_GYRO_BOOST_RATE,   s_boost_rate);
+    s_brake_gain = host_param_get(HP_GYRO_BRAKE_GAIN,  s_brake_gain);
+    if (!(s_brake_gain >= 1.0f && s_brake_gain <= 10.0f)) s_brake_gain = 1.0f;  /* 坏值=关闭 */
 
     /* 差速上限：按上一步回读到的 s_corr_limit / s_corr_ref 与基准速度算一次，本拍各律共用。
      * 放在参数回读之后，保证"上位机改完参数同一拍就按新值算"。 */
@@ -914,7 +917,16 @@ void GyroControl_Task(void)
                 }
             }
             s_dbg_rate_ref = rate_ref;      /* 只给遥测看 */
-            correction = s_rate_kp * (rate_ref - v);
+            /* ★2026-10-15 刹车增强（用户："还是会超调"）：
+             * 实测根因：车朝目标跑到 v≈180°/s，随着 err 减小 rate_ref 也降（err=45 ⇒ rate_ref=90），
+             * 而 v 因惯性还有 ~120 ⇒ corr = rate_kp×(90−120) = **仅 300**，而刹住需要 ≈3000 ⇒ 冲过 20~30°。
+             * 修法：只在"e 与 rate_ref 反号"（= 车正朝目标方向但已超速 ⇒ 这是刹车不是转向）时把 e 放大，
+             * 加速段/稳态/锁存逻辑一字不改。s_brake_gain = 1.0 时与旧行为逐位一致。 */
+            {
+                float e_brake = rate_ref - v;
+                if (e_brake * rate_ref < 0.0f) e_brake *= s_brake_gain;
+                correction = s_rate_kp * e_brake;
+            }
             /* 速率微分阻尼（PD）：对"角速度正在变化"这件事加阻尼。
              * 用它是因为这台车的执行器是继电器性质的（低于起转阈值完全不动，
              * 一过阈值就窜），纯比例在"命令速率 + 实际速率"差得多时只能给 ±4000，

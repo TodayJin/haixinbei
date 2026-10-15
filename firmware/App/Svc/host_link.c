@@ -155,6 +155,7 @@ static const param_spec_t SPECS[] = {
   { HP_VBAT_NOMINAL,    12000.0f,  3000.0f,    30000.0f },
   { HP_STALL_CURRENT,    2500.0f,   100.0f,    20000.0f },
   { HP_VBAT_LOW,        10500.0f,  3000.0f,    30000.0f },
+  { HP_GYRO_BRAKE_GAIN,     2.0f,     1.0f,       10.0f },   /* ★刹车增强系数，见 host_link.h */
   /* ---- v2（用户 m13466 的新上位机）：控制环标定量全部进参数表 ----
    * 这几项原来只活在控制模块的 `volatile float` 全局里（台架靠 SWD 直接改），
    * 现在由各控制环每拍从参数表回读（见 gyro_control.c / pid.c / PID_tracing.c），
