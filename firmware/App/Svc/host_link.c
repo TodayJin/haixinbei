@@ -1374,6 +1374,18 @@ void host_link_tick_1hz(void)
     host_link_send_text(tb);
   }
 
+  /* ★探针（2026-10-15）：角度环"连续域航向 vs 真实航向"的偏差 —— 实测偏差 29~77°
+   * 导致"以为没到位、继续推、实际已冲过头"。yaw=实时取模航向，yawcont=环内累加值，
+   * tgt=环内目标（取模），err=tgt-yawcont（连续域误差）。 */
+  {
+    char yb[96];
+    (void)snprintf(yb, sizeof(yb), "[fw] yaw=%d yawcont=%d tgt=%d err=%d\r\n",
+                   (int)Yaw, (int)GyroControl_GetYawCont(),
+                   (int)GyroControl_GetTargetAngle(),
+                   (int)(GyroControl_GetTargetAngle() - GyroControl_GetYawCont()));
+    host_link_send_text(yb);
+  }
+
   /* ★探针：速度环三段 + TIM8 寄存器（查"右路负值无输出"用）。 */
 
   {
