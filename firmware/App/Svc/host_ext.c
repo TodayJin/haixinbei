@@ -271,6 +271,12 @@ int HostExt_DriveSet(uint8_t mode, int a, int b)
         s_mode = HOST_DRIVE_BASE;
         return 0;
 
+    case HOST_DRIVE_TRACE2:
+        Motion_SetSpeed(a);
+        Motion_SetMode(MOTION_TRACE);        /* ★直驱差速循迹（老思路）：误差直接改左右轮，不经角度环 */
+        s_mode = HOST_DRIVE_TRACE2;
+        return 0;
+
     case HOST_DRIVE_TRACE:
         Motion_SetSpeed(a);
         Motion_SetMode(MOTION_TRACE_GYRO);   /* 三级串级：循迹 → 角度 → 速度 */
