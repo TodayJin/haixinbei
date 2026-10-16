@@ -394,6 +394,11 @@ static void apply_speeds(float left, float right)
  */
 void read_tracing_data_pid(void)
 {
+    /* ★2026-10-16 跳变闸门状态（见文件顶部 TRACE_POS_JUMP_MAX 注释） */
+    static float    s_jump_last = 4.5f;
+    static float    s_jump_cand = 4.5f;
+    static uint8_t  s_jump_cnt  = 0U;
+    static uint32_t s_jump_rej  = 0U;
     float   w[TRACE_CAL_CH];
     trace_frame_t fr = trace_cal_frame(w);
     float   num = 0.0f, sum = 0.0f, wmax = 0.0f, wmin = 0.0f;
@@ -500,7 +505,7 @@ void read_tracing_data_pid(void)
                     if (s_jump_cnt < 250U) s_jump_cnt++;
                     if (s_jump_cnt < TRACE_POS_JUMP_CONFIRM) {
                         /* 还没确认 ⇒ 当丢线处理：data 保持旧值、方向不变 */
-                        trace_jump_rej++;
+                        s_jump_rej++;
                         lost = 1U;
                         return;
                     }
@@ -509,7 +514,7 @@ void read_tracing_data_pid(void)
                 } else {
                     s_jump_cand = m;      /* 又跳到别处 ⇒ 重新计数 */
                     s_jump_cnt  = 1U;
-                    trace_jump_rej++;
+                    s_jump_rej++;
                     lost = 1U;
                     return;
                 }
