@@ -25,6 +25,15 @@
 #include <math.h>
 
 #define TRACE_SETPOINT       4.5f    /* 车在线上正中时的重心值 */
+/* ★2026-10-16（用户要求："4000 高速下也必须稳"）：**按偏差自动减速** ——
+ * 直道（|误差| 小）保持发车速度；进弯（|误差| 大）按比例降速，出弯自动回速。
+ * 依据（真车实测）：4000 速度下轮速约 320mm/s，车能提供的最大航向角速度约 185°/s
+ *   ⇒ 最小转弯半径约 99mm；把速度降到 ~2500（200mm/s）时最小半径降到约 62mm ⇒ 急弯能过。
+ * 所以"直道快、弯道慢"是唯一能在 4000 目标下咬住急弯的办法。
+ * 关闭：把 TRACE_SLOW_ERR_GAIN 设成 0.0f ⇒ 逐位回到旧行为。 */
+#define TRACE_SLOW_ERR_GAIN   0.60f   /* 减速强度：k = 1/(1+GAIN*(|e|-FREE))；0=关闭 */
+#define TRACE_SLOW_ERR_FREE   1.00f   /* 死区（格）：|误差| ≤ 这个值不减速 */
+#define TRACE_SLOW_MIN_SPEED  2400    /* 减速下限（速度刻度，和发车速度同量纲）*/
 /* ★2026-10-16（用户："丢线了就按丢线之前的误差继续往那边拐，别来回抽"）：
  * 现场逐帧定位到"来回抽"= **假抓线** —— 地面结构/阴影通过了 L411 的均匀性闸门，被当成线；
  * 抓一帧就反向抽一次，抽完又丢。物理约束：灰度 20ms 一帧，车再快也不可能让重心一帧跳 >2.5 格。
@@ -726,6 +735,8 @@ void PID_Tracing_GetCascadeGains(float *deg_per_unit, float *aim_max_deg)
  * GyroControl_Start() 定成当前航向）；本函数每拍按灰度重心误差把它往线所在的方向推。
  * 详细口径见文件头「循迹外环怎么改全局目标航向」（用户 m32880 定案）。
  */
+static uint8_t trace_slow_active = 0U;   /* ★按偏差减速是否正在生效 */
+
 void motor_tracing_cascade(int base_speed)
 {
     float err;
@@ -738,6 +749,21 @@ void motor_tracing_cascade(int base_speed)
     GyroControl_SetTraceRate(0.0f);
 
     err = data - s_setpoint;                 /* >0：线在车的右侧 */
+
+    /* ★2026-10-16 按偏差自动减速（见文件上方 TRACE_SLOW_* 注释）。
+     * base_speed 是外环的基准速度，后面所有"左右轮目标"都由它推出来；
+     * 这里就地把它按偏差缩小 ⇒ 进弯自动慢、出弯自动回到发车速度。 */
+    if (TRACE_SLOW_ERR_GAIN > 0.0f) {
+        float _a = fabsf(err) - TRACE_SLOW_ERR_FREE;
+        if (_a > 0.0f) {
+            float _k  = 1.0f / (1.0f + TRACE_SLOW_ERR_GAIN * _a);
+            int   _nb = (int)((float)base_speed * _k);
+            if (_nb < TRACE_SLOW_MIN_SPEED) _nb = TRACE_SLOW_MIN_SPEED;
+            if (_nb > base_speed)           _nb = base_speed;
+            base_speed = _nb;
+            trace_slow_active = (uint8_t)((_nb < (int)((float)(_nb) / _k + 0.5f)) ? 1U : 0U);
+        }
+    }
 
     /* ★2026-10-06 偏航角速度：**必须用陀螺直接给的 `Gyro_Z`，不能用 d(Yaw)/dt**。
      *   审查结论（见 DECISIONS 最新条目）：`Yaw` 名义 **10ms 才更新一次**（`gyro_control.c:309` 的注释
