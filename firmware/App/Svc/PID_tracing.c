@@ -25,6 +25,15 @@
 #include <math.h>
 
 #define TRACE_SETPOINT       4.5f    /* 车在线上正中时的重心值 */
+/* ★2026-10-16（用户："丢线了就按丢线之前的误差继续往那边拐，别来回抽"）：
+ * 现场逐帧定位到"来回抽"= **假抓线** —— 地面结构/阴影通过了 L411 的均匀性闸门，被当成线；
+ * 抓一帧就反向抽一次，抽完又丢。物理约束：灰度 20ms 一帧，车再快也不可能让重心一帧跳 >2.5 格。
+ * 于是加一道**跳变闸门**：新重心与上一次有效重心差 > TRACE_POS_JUMP_MAX 格时，本帧判"无效"
+ * （data 保持旧值、lost 保持 1、方向不变 ⇒ 车继续按丢线前的方向拐）；
+ * 只有连续 TRACE_POS_JUMP_CONFIRM 帧都指向新位置，才认定"真的拐过去了"并采信 ✓。
+ * 想关掉就把它设成 0（= 旧行为，逐位一致）。 */
+#define TRACE_POS_JUMP_MAX     2.5f    /* 单帧允许的重心最大跳变（格）；0 = 关 */
+#define TRACE_POS_JUMP_CONFIRM 3U      /* 连续几帧一致才采信新位置 */
 #define TRACE_ANGLE_PER_UNIT_DEFAULT 30.0f  /* 重心每偏 1 格 -> 要求 30°/s 转率（出厂值，2026-10-05 定稿） */
 #define TRACE_ANGLE_MAX_DEFAULT      35.0f  /* 目标航向相对**当前**航向的最大前置量（度）（出厂值） */
 #define TRACE_ANGLE_PER_UNIT_MIN      0.5f  /* 台架/上位机写坏值时的兜底夹子 */
@@ -481,6 +490,30 @@ void read_tracing_data_pid(void)
             s_prev_filt = m;
             trace_pos_frames++;
 
+            /* ★2026-10-16 跳变闸门（见文件顶部常量注释）：挡掉"假抓线" */
+            if (TRACE_POS_JUMP_MAX > 0.0f) {
+                if (fabsf(m - s_jump_last) <= TRACE_POS_JUMP_MAX) {
+                    s_jump_last = m;      /* 正常帧：直接采信 */
+                    s_jump_cnt  = 0U;
+                } else if (s_jump_cnt == 0U || fabsf(m - s_jump_cand) <= 1.0f) {
+                    s_jump_cand = m;      /* 新位置：累计确认 */
+                    if (s_jump_cnt < 250U) s_jump_cnt++;
+                    if (s_jump_cnt < TRACE_POS_JUMP_CONFIRM) {
+                        /* 还没确认 ⇒ 当丢线处理：data 保持旧值、方向不变 */
+                        trace_jump_rej++;
+                        lost = 1U;
+                        return;
+                    }
+                    s_jump_last = m;      /* 连续多帧一致 ⇒ 真的拐过去了，采信 */
+                    s_jump_cnt  = 0U;
+                } else {
+                    s_jump_cand = m;      /* 又跳到别处 ⇒ 重新计数 */
+                    s_jump_cnt  = 1U;
+                    trace_jump_rej++;
+                    lost = 1U;
+                    return;
+                }
+            }
             data      = m;
             last_data = data;
             lost      = 0U;
