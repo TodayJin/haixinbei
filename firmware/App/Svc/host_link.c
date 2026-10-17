@@ -395,7 +395,7 @@ enum { T_TELEM = 0x01, T_TELEM2 = 0x03, T_TELEM3 = 0x04, T_PARAM_GET = 0x10, T_P
         *   · T_CAL_REPORT_B = [当前套号 u8][**另一套** trace_cal_data_t]
         * 老上位机不认识这个帧类型，会按"不认识"忽略 —— 兼容是安全的。 */
        T_CAL_REPORT_B = 0x1F,
-       T_CMD = 0x20, T_ACK = 0x21, T_SESSION = 0x22, T_HELLO = 0x40, T_HELLO_REQ = 0x41, T_TEXT = 0x50,
+       T_CMD = 0x20, T_ACK = 0x21, T_SESSION = 0x22, T_PARAM_SAVE_ACK = 0x33, T_HELLO = 0x40, T_HELLO_REQ = 0x41, T_TEXT = 0x50,
        /* v2 上位机任务程序（docs/任务编程.md §5） */
        T_TASK_LIST = 0x60, T_TASK_LIST_R = 0x61, T_TASK_PUT = 0x62, T_TASK_COMMIT = 0x63,
        T_TASK_GET = 0x64, T_TASK_DATA = 0x65, T_TASK_DEL = 0x66, T_TASK_RUN = 0x67,
@@ -1066,14 +1066,39 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
     break;
   }
 
-  case T_PARAM_SAVE:
-    /* v2：真的固化（payload v5 已含菜单全部设置 + 控制环标定量 + 舵机动作表）。
-     * nvram_touch() 只是"立刻排一次保存"；真正擦写仍要等车停稳、屏不忙、
-     * 1.5s 防抖到期（nvram_poll 决定），所以这里回 OK 并说明是"排队中"。 */
+  case T_PARAM_SAVE: {
+    /* 审计第 8 条的"最省事修法"：保存后回一帧 T_PARAM_SAVE_ACK，
+     * 带 persist_bitmap（按 SPECS[] 下标）告诉上位机**哪些参数真的会落 Flash**。
+     * 现状：52 项里只有 16 项进 nvram_payload_t，另 36 项复位即回默认，
+     * 而 T_PARAM_SAVE 无条件回 OK ⇒ 用户在"固化"里改了 gyro_rate_kp 之类，重启就没了还不知道。 */
+    static const uint16_t kPersistIds[] = {
+      HP_BASE_SPEED, HP_SPEED_KP, HP_SPEED_KI, HP_SPEED_KD, HP_SPEED_ILIMIT,
+      HP_SPEED_FF_SLOPE, HP_SPEED_FF_FRIC,
+      HP_LINE_KP, HP_LINE_KI, HP_LINE_KD, HP_LINE_ILIMIT,
+      HP_GYRO_KP, HP_GYRO_KI, HP_GYRO_KD, HP_GYRO_ILIMIT,
+      HP_TRACE_CORNER
+    };
+    uint8_t ack[11];
+    uint32_t lo = 0u, hi = 0u;
+    unsigned i;
     (void)HostExt_SaveParams();
+    for (i = 0u; i < sizeof(kPersistIds) / sizeof(kPersistIds[0]); i++) {
+      int idx = spec_index(kPersistIds[i]);
+      if (idx >= 0 && idx < 32) { lo |= (1u << (unsigned)idx); }
+      else if (idx >= 32 && idx < 64) { hi |= (1u << (unsigned)(idx - 32)); }
+    }
+    ack[0] = (uint8_t)(lo & 0xFFu); ack[1] = (uint8_t)((lo >> 8) & 0xFFu);
+    ack[2] = (uint8_t)((lo >> 16) & 0xFFu); ack[3] = (uint8_t)((lo >> 24) & 0xFFu);
+    ack[4] = (uint8_t)(hi & 0xFFu); ack[5] = (uint8_t)((hi >> 8) & 0xFFu);
+    ack[6] = (uint8_t)((hi >> 16) & 0xFFu); ack[7] = (uint8_t)((hi >> 24) & 0xFFu);
+    put_u16(&ack[8], (uint16_t)(sizeof(kPersistIds) / sizeof(kPersistIds[0])));
+    ack[10] = (uint8_t)ST_OK;
     send_ack(seq, ST_OK);
+    frame_send(T_PARAM_SAVE_ACK, 0, ack, 11u);
     host_link_send_text("[fw] param save queued (writes when idle)\r\n");
     break;
+  }
+
 
   case T_CMD: {
     uint8_t cmd = (len >= 1u) ? p[0] : 0u;
