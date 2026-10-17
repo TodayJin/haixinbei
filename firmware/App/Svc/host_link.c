@@ -395,7 +395,7 @@ enum { T_TELEM = 0x01, T_TELEM2 = 0x03, T_PARAM_GET = 0x10, T_PARAM_SET = 0x11,
         *   · T_CAL_REPORT_B = [当前套号 u8][**另一套** trace_cal_data_t]
         * 老上位机不认识这个帧类型，会按"不认识"忽略 —— 兼容是安全的。 */
        T_CAL_REPORT_B = 0x1F,
-       T_CMD = 0x20, T_ACK = 0x21, T_HELLO = 0x40, T_HELLO_REQ = 0x41, T_TEXT = 0x50,
+       T_CMD = 0x20, T_ACK = 0x21, T_SESSION = 0x22, T_HELLO = 0x40, T_HELLO_REQ = 0x41, T_TEXT = 0x50,
        /* v2 上位机任务程序（docs/任务编程.md §5） */
        T_TASK_LIST = 0x60, T_TASK_LIST_R = 0x61, T_TASK_PUT = 0x62, T_TASK_COMMIT = 0x63,
        T_TASK_GET = 0x64, T_TASK_DATA = 0x65, T_TASK_DEL = 0x66, T_TASK_RUN = 0x67,
@@ -1149,6 +1149,61 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
     break;
   }
 
+  case T_SESSION: {
+    /* T_SESSION(0x22)：**一条命令完成 选环 + 启动 + 设遥测频率 + TTL**。
+     * 解决"必须有上位机每 500ms 硬喂 T_DRIVE"的问题，一次 BEGIN 就能连续跑。
+     * 请求: op(0=BEGIN 1=KEEPALIVE 2=END) sess(u16) hz(u16) tmode(u8) mask(u32)
+     *       loop(u8: 1仅速度 2速度+角度 3速度+循迹直驱 4三串级) a(i16) b(i16) ttl(u16) flags(u8)
+     * 返回: 原 payload + status(u8)
+     */
+    static int s_session_id = 0;
+    int op, sess, hz, tmode, loop, a, b, ttl;
+    uint8_t out[24];
+    if (len < 18u) { send_ack(seq, ST_BAD_PARAM); break; }
+    op    = p[0];
+    sess  = (int)((uint16_t)p[1] | ((uint16_t)p[2] << 8));
+    hz    = (int)((uint16_t)p[3] | ((uint16_t)p[4] << 8));
+    tmode = p[5];
+    loop  = p[10];
+    a     = (int)(int16_t)((uint16_t)p[11] | ((uint16_t)p[12] << 8));
+    b     = (int)(int16_t)((uint16_t)p[13] | ((uint16_t)p[14] << 8));
+    ttl   = (int)((uint16_t)p[15] | ((uint16_t)p[16] << 8));
+    if (op == 2) {                       /* END */
+      s_session_id = 0;
+      HostExt_DriveStop();
+      send_ack(seq, ST_OK);
+      break;
+    }
+    if (op == 1) {                       /* KEEPALIVE */
+      send_ack(seq, (s_session_id == sess) ? ST_OK : ST_BAD_PARAM);
+      break;
+    }
+    if (op != 0) { send_ack(seq, ST_BAD_PARAM); break; }
+    /* BEGIN */
+    if (hz >= 1 && hz <= 200) { s_stats.telem_hz = (uint16_t)hz; }
+    if (tmode <= 3u) { s_telem_mode = (uint8_t)tmode; }
+    if (loop < 1 || loop > 4) { send_ack(seq, ST_BAD_PARAM); break; }
+    if (loop == 1) {
+      if (a < -7200 || a > 7200 || b < -7200 || b > 7200) { send_ack(seq, ST_BAD_PARAM); break; }
+      (void)HostExt_DriveSet(HOST_DRIVE_WHEELS, a, b);
+    } else if (loop == 2) {
+      if (a < 0 || a > 7200 || b < -360 || b > 360) { send_ack(seq, ST_BAD_PARAM); break; }
+      (void)HostExt_DriveSet(HOST_DRIVE_BASE, a, b);
+    } else if (loop == 3) {
+      if (a < 0 || a > 7200) { send_ack(seq, ST_BAD_PARAM); break; }
+      (void)HostExt_DriveSet(HOST_DRIVE_TRACE2, a, b);
+    } else {
+      if (a < 0 || a > 7200) { send_ack(seq, ST_BAD_PARAM); break; }
+      (void)HostExt_DriveSet(HOST_DRIVE_TRACE, a, b);
+    }
+    s_session_id = sess;
+    (void)ttl;                            /* TTL 语义：暂用固件默认 500ms 看门狗，靠 KEEPALIVE 续期 */
+    out[0] = (uint8_t)seq;
+    out[1] = (uint8_t)T_SESSION;
+    out[2] = (uint8_t)ST_OK;
+    frame_send(T_SESSION, 0, out, 3u);
+    break;
+  }
   case T_DRIVE: {
     uint8_t mode;
     int a, b, rc;
