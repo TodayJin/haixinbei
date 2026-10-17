@@ -52,7 +52,7 @@
 #define TRACE_FAIL_LIMIT        5U    /* 连续失败这么多帧：按下面的"粘性"规则处理 */
 #define TRACE_SRC_STICK_MS    800U    /* 这个源 800ms 内还读到过帧 ⇒ 只重试，不换源/不判死（m31580） */
 #define TRACE_OFF_RETRY_MS    300U    /* 两条都不通：多久后再从头试一遍（原 2000 ⇒ 黑屏 2~3s，用户 m31580） */
-#define TRACE_MODE_REQ_MS     500U    /* 读不通时重播"输出=全部"的最小间隔（用户 m29611） */
+#define TRACE_MODE_REQ_MS    3000U    /* 读不通时重播"输出=全部"的最小间隔（用户 m29611） */
 #define TRACE_MIN_SPAN         32U    /* 黑白原值差小于这个 = 这一路没数据 */
 #define TRACE_UART_BYTE_MS      2U    /* 每字节超时：115200 下一字节 87us，2ms 很宽裕 */
 /* ★2026-10-15：找帧头时最多丢弃多少个字节就放弃这一帧。
@@ -584,7 +584,9 @@ void trace_cal_poll(void)
         if (s_fail < 255U) s_fail++;
         /* 一帧都读不成，先把模块的"输出=全部"再播一遍（节流）：模块自己复位过、
          * 或开机那一次广播撞在它启动过程上时，只有重播才能把模拟量要回来（用户 m29611）。 */
-        maybe_request_analog_mode(now);
+        /* 只在**连续**失败(>= TRACE_FAIL_LIMIT)时才允许重发配置：偶发一帧收错不动它。
+         * 用户反馈 2026-10-17：一直发配置占用 UART4、给循迹数据加延迟，反而更差。 */
+        if (s_fail >= TRACE_FAIL_LIMIT) maybe_request_analog_mode(now);
         if (s_fail >= TRACE_FAIL_LIMIT) {
             s_fail = 0U;
             if ((uint32_t)(now - s_ok_ms) < TRACE_SRC_STICK_MS) {
