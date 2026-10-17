@@ -782,10 +782,24 @@ static void rx_byte(uint8_t b)
     if (crc_rx == crc_calc) {
       s_stats.rx_frames++;
       handle_frame(rx_buf[2], rx_buf[3], &rx_buf[5], plen);
+      rx_reset();
     } else {
       s_stats.crc_errors++;
+      /* ★2026-10-16(#13 审计): 误码只前移到下一个包头重同步。
+       * 原来无条件 rx_reset() 会丢掉最多 135 字节（≈2 帧）；200Hz 满带宽下会连锁丢帧，
+       * 丢掉的恰好可能是 ACK ⇒ 上位机报'无应答'。 */
+      {
+        uint16_t j = 1u;
+        while (j < (uint16_t)rx_len && rx_buf[j] != SOF0) j++;
+        if (j < (uint16_t)rx_len) {
+          memmove(rx_buf, rx_buf + j, (size_t)((uint16_t)rx_len - j));
+          rx_len = (uint8_t)((uint16_t)rx_len - j);
+        } else {
+          rx_len = 0u;
+        }
+        rx_expect = 2u;
+      }
     }
-    rx_reset();
   }
 }
 
