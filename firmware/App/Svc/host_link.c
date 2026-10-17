@@ -395,7 +395,7 @@ enum { T_TELEM = 0x01, T_TELEM2 = 0x03, T_TELEM3 = 0x04, T_PARAM_GET = 0x10, T_P
         *   · T_CAL_REPORT_B = [当前套号 u8][**另一套** trace_cal_data_t]
         * 老上位机不认识这个帧类型，会按"不认识"忽略 —— 兼容是安全的。 */
        T_CAL_REPORT_B = 0x1F,
-       T_CMD = 0x20, T_ACK = 0x21, T_SESSION = 0x22, T_PARAM_SAVE_ACK = 0x33, T_HELLO = 0x40, T_HELLO_REQ = 0x41, T_TEXT = 0x50,
+       T_CMD = 0x20, T_ACK = 0x21, T_SESSION = 0x22, T_PARAM_SAVE_ACK = 0x33, T_RAW_TRACE = 0x26, T_HELLO = 0x40, T_HELLO_REQ = 0x41, T_TEXT = 0x50,
        /* v2 上位机任务程序（docs/任务编程.md §5） */
        T_TASK_LIST = 0x60, T_TASK_LIST_R = 0x61, T_TASK_PUT = 0x62, T_TASK_COMMIT = 0x63,
        T_TASK_GET = 0x64, T_TASK_DATA = 0x65, T_TASK_DEL = 0x66, T_TASK_RUN = 0x67,
@@ -1066,6 +1066,23 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
     break;
   }
 
+  case T_RAW_TRACE: {
+    /* T_RAW_TRACE(0x26)：传感器诊断帧 —— 34 字节
+     *   [0..15]  raw u16[8]  逐路原始值（当前给的是"黑度 0..255"柱高，原始 ADC 需 trace_cal 暴露，标 TODO）
+     *   [16..17] pos x100    灰度重心
+     *   [18..25] thr u8[8]   逐路阈值（TODO：需 trace_cal 暴露标定阈值）
+     *   [26..33] quality[8]  质量位（TODO：0 好/1 SPAN/2 JITTER/3 NOSAMPLE）
+     * 用途：判断"到底是线没压上、还是阈值标歪了" —— 这是 4000 不稳最常被怀疑又最难证伪的一件事。 */
+    uint8_t q[34];
+    uint8_t gl[8];
+    unsigned k;
+    HostExt_GrayLevel(gl);
+    memset(q, 0, sizeof(q));
+    for (k = 0u; k < 8u; k++) { q[k] = gl[k]; }          /* TODO: 原始 ADC */
+    put_i16(&q[16], clamp_i16(HostExt_TracePos() * 100.0f));
+    frame_send(T_RAW_TRACE, 0, q, 34u);
+    break;
+  }
   case T_PARAM_SAVE: {
     /* 审计第 8 条的"最省事修法"：保存后回一帧 T_PARAM_SAVE_ACK，
      * 带 persist_bitmap（按 SPECS[] 下标）告诉上位机**哪些参数真的会落 Flash**。
