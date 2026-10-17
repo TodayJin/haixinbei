@@ -90,7 +90,7 @@
  * 斜摆/歪着进弯的初值会像二阶欠阻尼那样**衰减**，而不是一直摆。
  * ė 只在**新的一帧**（50Hz，用 trace_pos_frames 当探针）上算，且一阶低通压噪。*/
 #define TRACE_POS_RATE_LPF   0.5f     /* 重心变化率的一阶低通系数（每个新帧一次）*/
-#define TRACE_FRAME_HZ       50.0f    /* 灰度帧率（20ms 一帧）*/
+#define TRACE_FRAME_HZ      200.0f    /* ★灰度"新样本"率（Hz）. 2026-10-16 修正: 主用 I2C 灰度源是 5ms/200Hz（trace_cal.c:TRACE_READ_PERIOD_I2C_MS=5），原来写 50 导致 D 项只有真值 1/4（等效 kd=9 而非 36）⇒ 外环零阻尼振荡. 若改用 20ms 数字/串口源，这里要跟着改（或用实测 dt）. */
 #define TRACE_POS_KD_DEFAULT 12.0f    /* 外环微分项出厂值（°/s per (格/s)），2026-10-05 定稿 */
 #define TRACE_POS_KD_MAX     1000.0f  /* 参数表里是坏值时的兜底夹子 */
 
