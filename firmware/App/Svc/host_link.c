@@ -22,7 +22,8 @@
 #include "board.h"
 #include "bsp_board.h"
 #include <stdio.h>          /* snprintf（每秒诊断文本用）*/
-#include "host_ext.h"      /* v2：驾驶/动作/舵机/固化（业务都在这里，协议层不碰控制模块） */
+#include "host_ext.h"
+#include "PID_tracing.h"   /* ★#11: PID_Tracing_Timer_Stop() 用于急停时停后台循迹环 */      /* v2：驾驶/动作/舵机/固化（业务都在这里，协议层不碰控制模块） */
 #include "jy61p.h"
 #include "kk_oled.h"
 #include "motion.h"        /* v2：驾驶状态回报用 Motion_GetMode */
@@ -1043,6 +1044,12 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
       g_stop_src[3]++;                         /* 诊断：CMD_STOP 停的 */
       HostExt_DriveStop();
       TaskRun_Stop();
+      /* ★2026-10-16(#11 审计): 还要停**后台循迹环**。motion.c 的 IDLE 分支每 100ms 仍会调
+       * PID_Tracing_BackgroundTask → apply_speeds → 速度环已被 Stop ⇒ 走 Load() 直写 PWM
+       * ⇒ 红色急停停不住车。 */
+      PID_Tracing_Timer_Stop();
+      GyroControl_Stop();
+      Motion_SetMode(MOTION_IDLE);
       send_ack(seq, ST_OK);
       break;
     case CMD_START_A:

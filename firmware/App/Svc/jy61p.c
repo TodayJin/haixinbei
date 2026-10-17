@@ -47,6 +47,19 @@ void jy61p_ReceiveData(uint8_t RxData)
             RxState = 2;
             RxIndex = 2; //进入下一状态
         }
+        else
+        {
+            /* ★2026-10-16(#16 审计): 半帧残留 —— 类型字节不认识时必须回状态 0，
+             * 否则后续字节会被当类型字节吞掉，最坏连丢 2~3 帧 ⇒ 500ms 失联判据误报'陀螺失联'停车。 */
+            RxState = 0;
+            RxIndex = 0;
+            if (RxData == 0x55)   /* 正好是包头：立刻按新帧重入 */
+            {
+                RxBuffer[0] = 0x55;
+                RxState = 1;
+                RxIndex = 1;
+            }
+        }
     }
     
     else if (RxState == 2)  //接收数据
