@@ -516,7 +516,7 @@ void read_tracing_data_pid(void)
                         /* 还没确认 ⇒ 当丢线处理：data 保持旧值、方向不变 */
                         s_jump_rej++;
                         lost = 1U;
-                        return;
+                        goto jump_done;   /* #2: 走统一丢线处理，别绕过状态机 */
                     }
                     s_jump_last = m;      /* 连续多帧一致 ⇒ 真的拐过去了，采信 */
                     s_jump_cnt  = 0U;
@@ -525,7 +525,7 @@ void read_tracing_data_pid(void)
                     s_jump_cnt  = 1U;
                     s_jump_rej++;
                     lost = 1U;
-                    return;
+                    goto jump_done;   /* #2: 走统一丢线处理，别绕过状态机 */
                 }
             }
             data      = m;
@@ -584,6 +584,7 @@ void read_tracing_data_pid(void)
         on   = 0;
         lost = 1U;
     }
+jump_done:   /* ★2026-10-16(#2)：跳变闸门判无效时跳到这里 —— 跳过 data 更新，但让下面丢线状态机照常跑（原来直接 return 会把 all_sensors_lost/s_lost_since/PID_Reset 全跳过）*/
     /* 丢线时 data 保持不变（= 上一次的重心），方向就不会突然反打 */
     all_sensors_lost = lost;
 
