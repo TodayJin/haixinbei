@@ -21,7 +21,7 @@
 #include <stddef.h>
 
 #define NVRAM_MAGIC      0x31425848UL   /* "HXB1"（小端存下来是 48 58 42 31） */
-#define NVRAM_VERSION    8U             /* v8：舵机动作表 14 → **20** 个（v7：直角转弯开关；v6：角度环差速天花板参考；
+#define NVRAM_VERSION    9U             /* v8：舵机动作表 14 → **20** 个（v7：直角转弯开关；v6：角度环差速天花板参考；
                                          * v5：控制环标定量 + 舵机动作表）。
                                          * ★铁律：**payload 长大就必须升这个版本号** —— 判据是
                                          *   `version == NVRAM_VERSION` 时要求 `length == sizeof(payload)`，
@@ -102,6 +102,14 @@ typedef struct {
      * 同样只往末尾加 + 留 pad：旧记录（length 更短）走 nvram_init 里"先 snapshot 铺默认值
      * 再 memcpy 前缀"那一支 ⇒ 新字段拿到的是**当前默认值**（0 = 关），不是 pad 区的 0。 */
     uint8_t  trace_corner;
+    /* ---- v9：调参关键量，经用户确认这三个必须真固化 ----
+     * pad9[5] 是**精确算出来的**：trace_corner(1) + 编译器对齐(3) + 4×int32(16) = 20，
+     * 要凑成 8 的倍数还需 4 ⇒ 5 字节刚好吃满 24（原来写 8 会变成 27 ⇒ 断言炸） */
+    int32_t  trace_rate_max;       /* 0x020A 转率上限（默认 300 会让角度环震荡） */
+    int32_t  speed_full_counts;    /* 0x0308 速度环满量程（默认 45 会车没力） */
+    int32_t  trace_slow_gain_x100; /* 0x020D 弯道降速强度 x100 */
+    int32_t  trace_slow_min_speed; /* 0x020E 弯道降速下限 */
+    uint8_t  pad9[5];
     uint8_t  pad7[7];                          /* ★必须凑满 8 字节：下面有编译期断言
                                                 *   `nvram_record_size_must_be_8x`，加 4 字节会当场编不过。 */
 } nvram_payload_t;
@@ -248,6 +256,11 @@ static void snapshot(nvram_payload_t *p)
         p->action_pose[i][0] = (uint8_t)a1;
         p->action_pose[i][1] = (uint8_t)a2;
     }
+    /* v9：调参关键量（从参数表读，Flash 里只是镜像） */
+    p->trace_rate_max       = (int32_t)(snap_param_scaled(HP_TRACE_RATE_MAX,      1.0f) + 0.5f);
+    p->speed_full_counts    = (int32_t)(snap_param_scaled(HP_SPEED_FULL_COUNTS,   1.0f) + 0.5f);
+    p->trace_slow_gain_x100 = (int32_t)(snap_param_scaled(0x020Du,                1.0f) + 0.5f);
+    p->trace_slow_min_speed = (int32_t)(snap_param_scaled(0x020Eu,                1.0f) + 0.5f);
 }
 
 static void apply(const nvram_payload_t *p)
@@ -312,6 +325,11 @@ static void apply(const nvram_payload_t *p)
 
     /* 让应用把刚恢复的东西推给控制环/循迹层（PID 参数表、灰度通讯方式） */
     app_ui_settings_loaded();
+    /* v9：调参关键量写回参数表 */
+    apply_param_scaled(HP_TRACE_RATE_MAX,       p->trace_rate_max,       1.0f);
+    apply_param_scaled(HP_SPEED_FULL_COUNTS,    p->speed_full_counts,    1.0f);
+    apply_param_scaled(0x020Du,               p->trace_slow_gain_x100, 1.0f);
+    apply_param_scaled(0x020Eu,               p->trace_slow_min_speed, 1.0f);
 }
 
 /* ------------------------------------------------------------------ 写 */
