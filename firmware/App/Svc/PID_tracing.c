@@ -751,6 +751,22 @@ void motor_tracing_cascade(int base_speed)
 
     err = data - s_setpoint;                 /* >0：线在车的右侧 */
 
+    /* ★2026-10-16(#1) 丢线超时停车后的**自愈**（审计第 1 条）。
+     * 原来 :935-940 会 GyroControl_Stop() + SpeedControl_Stop()，但全工程没有任何
+     * 重新使能的路径 ⇒ 车永久停住、PWM=0，而遥测照旧报 drive=3/enabled=1，
+     * 用户点"前进"没反应也看不出原因（只有断电重启才恢复）。
+     * 这里：只要这一拍重新看到线，就把两个环重新使能，并清掉停车标志。 */
+    if (!all_sensors_lost && s_lost_stop) {
+        s_lost_stop = 0U;
+        if (!GyroControl_IsEnabled()) {
+            GyroControl_Start();
+        }
+        if (!SpeedControl_IsEnabled()) {
+            SpeedControl_SetTarget(0.0f, 0.0f);
+            SpeedControl_Enable(1U);
+        }
+    }
+
     /* ★2026-10-16 按偏差自动减速（见文件上方 TRACE_SLOW_* 注释）。
      * base_speed 是外环的基准速度，后面所有"左右轮目标"都由它推出来；
      * 这里就地把它按偏差缩小 ⇒ 进弯自动慢、出弯自动回到发车速度。 */
