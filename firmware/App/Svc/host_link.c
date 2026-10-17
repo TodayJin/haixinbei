@@ -1181,7 +1181,7 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
     if (op != 0) { send_ack(seq, ST_BAD_PARAM); break; }
     /* BEGIN */
     if (hz >= 1 && hz <= 200) { s_stats.telem_hz = (uint16_t)hz; }
-    if (tmode <= 3u) { s_telem_mode = (uint8_t)tmode; }
+    if (tmode <= 3) { s_telem_mode = (uint8_t)tmode; }
     if (loop < 1 || loop > 4) { send_ack(seq, ST_BAD_PARAM); break; }
     if (loop == 1) {
       if (a < -7200 || a > 7200 || b < -7200 || b > 7200) { send_ack(seq, ST_BAD_PARAM); break; }
