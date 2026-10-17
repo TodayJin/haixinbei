@@ -668,7 +668,7 @@ class ConsoleStore {
 
   // ---- 驾驶 / 命令 ----
   /** 驾驶指令：三种模式（off/wheels/base_turn），只改目标速度，闭环还是车上的三环 */
-  async drive(req: { mode: 'off' | 'wheels' | 'base_turn'; vl?: number; vr?: number; base?: number; turn?: number }): Promise<void> {
+  async drive(req: { mode: 'off' | 'wheels' | 'base_turn' | 'trace' | 'trace2'; vl?: number; vr?: number; base?: number; turn?: number }): Promise<void> {
     // 只有"停车"给成功提示：操控过程中每一帧都吐一条 "驾驶指令已下发" 就是刷屏
     // （转向 10 帧/秒）。失败仍然会弹，由 toast 的去重窗口挡成一条。
     await this.op('驾驶', () => api.drive(req), req.mode === 'off' ? '已停车（host_drive 关闭）' : undefined)

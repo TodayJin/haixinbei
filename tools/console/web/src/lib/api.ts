@@ -149,7 +149,7 @@ export const api = {
   servoDeviation: (ch: 1 | 2, dev_us: number) =>
     post<{ ok: true }>('/api/servo/deviation', { ch, dev_us }),
 
-  drive: (req: { mode: 'off' | 'wheels' | 'base_turn'; vl?: number; vr?: number; base?: number; turn?: number }) =>
+  drive: (req: { mode: 'off' | 'wheels' | 'base_turn' | 'trace' | 'trace2'; vl?: number; vr?: number; base?: number; turn?: number }) =>
     post<{ ok: true }>('/api/drive', req),
   cmd: (cmd: string, arg?: number) => post<{ ok: true }>('/api/cmd', { cmd, arg }),
 
