@@ -38,6 +38,36 @@ T_SERVO_SET = 0x1A
 T_SERVO_PLAY = 0x1B
 T_DRIVE = 0x1C
 T_DRIVE_REPORT = 0x1D
+T_SESSION = 0x22        # 一条命令完成 选环+启动+设遥测频率（见 docs/loop_test_protocol.md）
+T_DRIVE_V2 = 0x23
+T_LOOP_STATUS = 0x24
+T_RAW_TRACE = 0x26
+T_TELEM3 = 0x04         # 96 字节扩展遥测：前 64 字节与 T_TELEM2 相同 + 目标/实测角速度/环输出
+
+SESSION_BEGIN = 0
+SESSION_KEEPALIVE = 1
+SESSION_END = 2
+LOOP_SPEED_ONLY = 1
+LOOP_SPEED_ANGLE = 2
+LOOP_SPEED_TRACE2 = 3
+LOOP_SPEED_ANGLE_TRACE = 4
+
+
+def frame_session(seq: int, op: int, sess: int, hz: int = 100, tmode: int = 3,
+                  loop: int = 4, a: int = 0, b: int = 0, ttl: int = 2000, flags: int = 0) -> bytes:
+    """T_SESSION(0x22): one command does loop-select + start + telemetry-rate."""
+    p = bytearray(18)
+    p[0] = op & 0xFF
+    struct.pack_into("<H", p, 1, sess & 0xFFFF)
+    struct.pack_into("<H", p, 3, hz & 0xFFFF)
+    p[5] = tmode & 0xFF
+    struct.pack_into("<I", p, 6, 0x1F)
+    p[10] = loop & 0xFF
+    struct.pack_into("<h", p, 11, int(a))
+    struct.pack_into("<h", p, 13, int(b))
+    struct.pack_into("<H", p, 15, ttl & 0xFFFF)
+    p[17] = flags & 0xFF
+    return build_frame(T_SESSION, seq, bytes(p))
 T_SERVO_DEV = 0x1E          # 舵机软件中位偏差 {ch u8, dev_us i16}（契约 /api/servo/deviation）
 # ★2026-10-11：第二套灰度标定 [当前套号 u8][另一套 trace_cal_data_t(82B)]。
 #   为什么分两帧：一帧装不下两套（82×2=164 > 固件 MAX_PAYLOAD 128）。
