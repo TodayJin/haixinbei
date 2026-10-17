@@ -638,6 +638,7 @@ void show_tracing_data_pid(void)
 void motor_tracing_pid_speed(int base_speed)
 {
     float pid_output, l, r;
+    static uint8_t s_dd_stop = 0U;   /* #3: 直驱差速丢线超时已停车标志（重新看到线自愈） */
 
     read_tracing_data_pid();
 
@@ -661,10 +662,17 @@ void motor_tracing_pid_speed(int base_speed)
                         : (1.0f - (float)over / (float)TRACE_LOST_DECAY_MS);
             pid_output = last_pid_output * k;
             base_speed = base_speed / 2;              /* 丢太久：减速找线 */
+            if (lost_ms > TRACE_LOST_STOP_MS) {
+                /* #3 审计: 直驱原来只减半速、一路开出赛道，没有停车兜底 */
+                s_dd_stop = 1U;
+                apply_speeds(0.0f, 0.0f);
+                return;
+            }
         } else {
             pid_output = last_pid_output;             /* 短暂丢线：保持上一次的转向 */
         }
     } else {
+        if (s_dd_stop) { s_dd_stop = 0U; }   /* #3: 自愈，重新看到线就恢复 */
         pid_output    = PID_Compute(s_setpoint, data);
         last_pid_output = pid_output;
     }
