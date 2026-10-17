@@ -384,7 +384,7 @@ void host_param_set_local(uint16_t id, float v)
 #define SOF1 0x5Au
 #define MAX_PAYLOAD 128u
 
-enum { T_TELEM = 0x01, T_TELEM2 = 0x03, T_PARAM_GET = 0x10, T_PARAM_SET = 0x11,
+enum { T_TELEM = 0x01, T_TELEM2 = 0x03, T_TELEM3 = 0x04, T_PARAM_GET = 0x10, T_PARAM_SET = 0x11,
        T_PARAM_REPORT = 0x12, T_PARAM_SAVE = 0x13, T_CAL_GET = 0x14, T_CAL_REPORT = 0x15,
        T_ACTIONS_GET = 0x16, T_ACTIONS = 0x17, T_ACTION_SET = 0x18, T_ACTION_SAVE = 0x19,
        T_SERVO_SET = 0x1A, T_SERVO_PLAY = 0x1B, T_DRIVE = 0x1C, T_DRIVE_REPORT = 0x1D,
@@ -644,9 +644,8 @@ static void send_telemetry(uint32_t loop_us)
 }
 
 /* v2 扩展遥测：老 32 字节 + 灰度柱高/重心/角度环/模式/动作/驾驶状态 */
-static void send_telemetry2(uint32_t loop_us)
+static void put_telemetry2(uint8_t *p, uint32_t loop_us)
 {
-  uint8_t p[TELEM2_LEN];
   uint8_t gray[8];
 
   put_telemetry_base(p, loop_us);
@@ -670,6 +669,43 @@ static void send_telemetry2(uint32_t loop_us)
   p[TELEM2_TRIPS_OFF] = HostExt_DriveWatchdogTrips();
   put_i16(&p[TELEM2_DEV1_OFF], (int16_t)Servo_GetDeviation(1));
   put_i16(&p[TELEM2_DEV2_OFF], (int16_t)Servo_GetDeviation(2));
+}
+
+/* v3 扩展遥测（96 字节）：**前 64 字节与 T_TELEM2 逐字节相同**，老解析器直接兼容；
+ * 后面补上"目标 vs 实测"里缺的那一半，以及饱和/丢帧/参数表版本等诊断量。
+ * 为什么要有它：调参必须看"环要多少(tgt/rate_ref) vs 实测多少(vl/vr/Gyro_Z) vs 输出多少(out/pwm)"，
+ * 原来只有实测，没有目标 ⇒ 做不出对比图，只能靠猜。 */
+static void send_telemetry3(uint32_t loop_us)
+{
+  static uint16_t seq3 = 0u;
+  uint8_t p[96];
+  put_telemetry2(p, loop_us);
+  memset(&p[64], 0, 96u - 64u);
+  put_u16(&p[64], ++seq3);                                        /* telem_seq */
+  put_i16(&p[66], clamp_i16((Gyro_Z == Gyro_Z) ? Gyro_Z * 10.0f : 0.0f));  /* NaN 自检 */          /* 实测偏航角速度 ×10 */
+  put_i16(&p[68], clamp_i16(SpeedControl_Target(0)));             /* 速度环目标 左 */
+  put_i16(&p[70], clamp_i16(SpeedControl_Target(1)));             /* 速度环目标 右 */
+  put_i16(&p[72], clamp_i16(SpeedControl_Output(0)));             /* 速度环输出 左 */
+  put_i16(&p[74], clamp_i16(SpeedControl_Output(1)));             /* 速度环输出 右 */
+  put_i16(&p[76], clamp_i16((HostExt_TracePos() - 4.5f) * 100.0f));/* 重心误差 ×100 */
+  p[78] = 0u;                                                     /* ch_left  (TODO: 需 trace_cal 暴露半边计数) */
+  p[79] = 0u;                                                     /* ch_right (TODO 同上) */
+  p[80] = 0u;                                                     /* sess_id  (TODO: 需把 T_SESSION 会话号提成文件级) */
+  p[81] = HostExt_DriveMode();                                    /* loop_sel 实际在跑的环 */
+  put_u16(&p[82], 0u);                                            /* isr_cyc_max_us (TODO: 需 board 暴露) */
+  put_u16(&p[84], (uint16_t)board_dl_tx_dropped());               /* tx_drop */
+  put_u16(&p[86], (uint16_t)board_dl_rx_overrun());               /* rx_overrun */
+  put_u16(&p[88], param_table_crc());                             /* 参数表 CRC */
+  p[90] = 0u;                                                     /* s_law (TODO: 需 gyro_control 暴露) */
+  p[91] = 0u;
+  put_u16(&p[92], 0u);                                            /* flags2 (TODO: 饱和/丢线锁存位) */
+  frame_send(T_TELEM3, 0, p, 96u);
+}
+
+static void send_telemetry2(uint32_t loop_us)
+{
+  uint8_t p[TELEM2_LEN];
+  put_telemetry2(p, loop_us);
   frame_send(T_TELEM2, 0, p, TELEM2_LEN);
 }
 
