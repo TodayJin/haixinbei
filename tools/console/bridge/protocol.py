@@ -96,7 +96,7 @@ TASK_DATA_CHUNK = 64               # 固件每帧 T_TASK_DATA 带 64 B
 TASK_SLOT_BYTES = 4096             # 单个任务上限（= firmware/App/Svc/task_store.h 的 TASK_STORE_CAP）
 
 TYPE_NAMES = {
-    T_TELEM: "telem", T_TELEM2: "telem2", T_PARAM_GET: "param_get",
+    T_TELEM: "telem", T_TELEM2: "telem2", T_TELEM3: "telem3", T_SESSION: "session", T_PARAM_GET: "param_get",
     T_PARAM_SET: "param_set", T_PARAM_REPORT: "param_report", T_PARAM_SAVE: "param_save",
     T_CAL_GET: "cal_get", T_CAL_REPORT: "cal_report", T_ACTIONS_GET: "actions_get",
     T_ACTIONS: "actions", T_ACTION_SET: "action_set", T_ACTION_SAVE: "action_save",
@@ -465,6 +465,35 @@ def decode_cal(p: bytes) -> dict:
     #   ★真值由 T_CAL_REPORT_B（第二帧）带回来，state.py 收到后会把它填进 self.cal。
     return {"active_set": None, "quality": sum(1 for c in ch if c["ok"]), "ch": ch}
 
+
+def decode_telem3(p: bytes) -> dict:
+    """T_TELEM3(0x04, 96 字节): 前 64 字节与 T_TELEM2 相同, 后面是"目标 vs 实测"扩展。
+
+    返回 T_TELEM2 的全部字段 + 新增:
+      seq3 / wz_dps(实测偏航角速度) / tgt_l,tgt_r(速度环目标) / out_l,out_r(速度环输出)
+      err_x100(重心误差×100) / loop_sel(实际在跑的环) / tx_drop / rx_overrun / param_crc
+    """
+    d = decode_telemetry2(p[:64])
+    if len(p) < 96:
+        return d
+    d["seq3"] = u16(p, 64)
+    d["wz_dps"] = i16(p, 66) / 10.0
+    d["tgt_l"] = i16(p, 68)
+    d["tgt_r"] = i16(p, 70)
+    d["out_l"] = i16(p, 72)
+    d["out_r"] = i16(p, 74)
+    d["err_x100"] = i16(p, 76)
+    d["ch_left"] = p[78]
+    d["ch_right"] = p[79]
+    d["sess_id"] = p[80]
+    d["loop_sel"] = p[81]
+    d["isr_cyc_max_us"] = u16(p, 82)
+    d["tx_drop"] = u16(p, 84)
+    d["rx_overrun"] = u16(p, 86)
+    d["param_crc"] = u16(p, 88)
+    d["s_law"] = p[90]
+    d["flags2"] = u16(p, 92)
+    return d
 
 def decode_drive_report(p: bytes) -> dict:
     if len(p) < 12:
