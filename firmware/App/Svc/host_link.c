@@ -1480,8 +1480,14 @@ void host_link_poll(uint32_t loop_us)
        *   整数倍上 —— 2026-10-04 真车实测：要 100Hz 却只出 75.5 帧/s（230400 下量到
        *   的 11236 字节/2s 也正好对上）。上位机 `bridge/sim.py:142-146` 早就是累加写法。 */
       next_tx += period;
-      if (s_telem_mode != 0u) send_telemetry2(loop_us);
-      if (s_telem_mode != 1u) send_telemetry(loop_us);
+      /* telem_mode: 0=只老32字节 1=只T_TELEM2(默认) 2=只T_TELEM3(96字节扩展) 3=T_TELEM2+T_TELEM3 */
+      switch (s_telem_mode) {
+      case 0u: send_telemetry(loop_us); break;
+      case 2u: send_telemetry3(loop_us); break;
+      case 3u: send_telemetry2(loop_us); send_telemetry3(loop_us); break;
+      case 1u:
+      default: send_telemetry2(loop_us); break;
+      }
     }
   }
 
