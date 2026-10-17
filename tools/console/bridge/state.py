@@ -618,6 +618,16 @@ class Console:
             self.log("info", f"握手：固件 v{h['version']} 协议 v{h['proto']} "
                              f"能力位 0x{h['caps']:02X} 名字 {h['name']}")
             self.emit({"n": "hello", "src": h})
+            # ★2026-10-17：每次握手后自动把车上的参数全读一遍（fire-and-forget，不等回复）。
+            # 用户反馈：连上上位机后页面显示的是本地默认值，跟车上不一致，看着像"参数变了"。
+            # 在这里发一遍 param_get，回应帧走 T_PARAM_REPORT 分支把值填进 car_values，
+            # 页面随之刷新成车上的真值。用 send() 而不是 send_wait()，避免在收帧线程里等回复（会死锁）。
+            try:
+                for _sp in P.PARAMS:
+                    self.send(pr.T_PARAM_GET, pr.pack_u16(_sp.id))
+                self._auto_param_read = True
+            except Exception:
+                self.log("warn", "自动读参数失败（不影响使用，可手动点 reload）")
         elif f.type == pr.T_PARAM_REPORT:
             pid, v = pr.decode_param_report(f.payload)
             with self.lock:
