@@ -1142,6 +1142,32 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
     mode = p[0];
     a = (int)(int16_t)((uint16_t)p[1] | ((uint16_t)p[2] << 8));
     b = (int)(int16_t)((uint16_t)p[3] | ((uint16_t)p[4] << 8));
+    /* ★2026-10-16(#7 审计)：发车参数**必须校验**。原来完全不查：给 30000 时
+     *   BASE 会把 CorrLimit 的 b 撑到 30000（cap 更大）⇒ 两轮全顶 7200 满速冲出去；
+     *   WHEELS 给速度环一个够不到的目标 ⇒ 长期饱和。而且一律回 ST_OK，用户不知道被拒。 */
+    if (mode > 5u) {
+      send_ack(seq, ST_BAD_PARAM);
+      host_link_send_text("[fw] drive refused: bad mode\r\n");
+      break;
+    }
+    if (mode == HOST_DRIVE_WHEELS) {
+      if (a < -7200 || a > 7200 || b < -7200 || b > 7200) {
+        send_ack(seq, ST_BAD_PARAM);
+        host_link_send_text("[fw] drive refused: wheel out of range\r\n");
+        break;
+      }
+    } else if (mode != HOST_DRIVE_OFF) {
+      if (a < -7200 || a > 7200) {
+        send_ack(seq, ST_BAD_PARAM);
+        host_link_send_text("[fw] drive refused: speed out of range\r\n");
+        break;
+      }
+      if (mode == HOST_DRIVE_BASE && (b < -360 || b > 360)) {
+        send_ack(seq, ST_BAD_PARAM);
+        host_link_send_text("[fw] drive refused: angle out of range\r\n");
+        break;
+      }
+    }
     rc = HostExt_DriveSet(mode, a, b);
     if (rc == -2) {
       /* 任务流程在跑：抢电机会出事故，明确拒绝 */
