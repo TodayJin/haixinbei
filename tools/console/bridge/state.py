@@ -40,7 +40,7 @@ CMD_NAMES = {
     "set_telem_hz": pr.CMD_SET_TELEM_HZ, "reset": pr.CMD_RESET,
     "set_logging": pr.CMD_SET_LOGGING, "set_telem_mode": pr.CMD_SET_TELEM_MODE,
 }
-DRIVE_MODES = {"off": 0, "wheels": 1, "base_turn": 2, "trace": 3}
+DRIVE_MODES = {"off": 0, "wheels": 1, "base_turn": 2, "trace": 3, "trace2": 4}
 DRIVE_KEEPALIVE_MS = 200      # 车上驾驶看门狗是 500ms，留 2 倍余量
 DRIVE_HOLD_MS = 3000          # 有 /api/stream 订阅者挂着就算"在场"，超时就不再喂
 MODE_NAMES = {0: "空闲", 1: "陀螺", 2: "循迹", 3: "串级"}
@@ -1464,7 +1464,7 @@ class Console:
     def drive(self, mode, vl=None, vr=None, base=None, turn=None) -> dict:
         if isinstance(mode, str):
             mode = DRIVE_MODES.get(mode, -1)
-        if mode is None or int(mode) not in (0, 1, 2, 3):
+        if mode is None or int(mode) not in (0, 1, 2, 3, 4):
             return {"ok": False, "error": f"驾驶模式不对：{mode}"}
         mode = int(mode)
         a = int(vl or 0) if mode == 1 else int(base or 0)

@@ -280,7 +280,7 @@ export const NVRAM_TEXT: Record<number, string> = {
 }
 
 /** 驾驶模式 */
-export type DriveMode = 'off' | 'wheels' | 'base_turn'
+export type DriveMode = 'off' | 'wheels' | 'base_turn' | 'trace' | 'trace2'
 
 export interface DriveRequest {
   mode: DriveMode

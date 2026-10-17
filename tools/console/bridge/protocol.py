@@ -148,6 +148,7 @@ MODE_NAMES = {0: "空闲", 1: "陀螺", 2: "循迹", 3: "串级"}
 #   一处都不用，只有测试引用它）⇒ 已删，改由文件头从 params 回导（pr.ACTION_COUNT）。
 #   **别再在本文件里写动作表长度的字面量。**
 DRIVE_OFF, DRIVE_WHEELS, DRIVE_BASE_TURN, DRIVE_TRACE = 0, 1, 2, 3
+DRIVE_TRACE2 = 4  # 直驱差速循迹（MOTION_TRACE，误差直接改左右轮差速）
 
 
 # ---------------------------------------------------------------- CRC / 组帧
@@ -332,7 +333,9 @@ def decode_telemetry(p: bytes) -> dict:
         "vl": i16(p, 10),
         "vr": i16(p, 12),
         "pwm_l": i16(p, 14),
-        "pwm_r": i16(p, 16),
+        # 固件 host_link.c 读的是 TIM8 CH3/CH4 原始极性, 而 motor.c 已把右路取负,
+        # 所以正常前进时 pwm_r 遥测为负; 这里取反成"物理方向", 否则波形页会以为右轮在反转.
+        "pwm_r": -i16(p, 16),
         "vbat_mv": u16(p, 18),
         "ibat_ma": i16(p, 20),
         "servo1_us": u16(p, 22),
