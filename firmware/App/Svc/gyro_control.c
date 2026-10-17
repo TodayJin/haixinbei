@@ -578,7 +578,7 @@ float GyroControl_CorrLimit(void)
     if (b  < 0) b  = -b;
     if (b2 < 0) b2 = -b2;
     if (b2 > b) b = b2;                      /* 两轮基准里取大的那个 */
-    if (ref > 1.0f && (float)b > ref) cap *= (float)b / ref;
+    if (ref > 1.0f && (float)b > ref) cap += (float)b;   /* ★2026-10-16(E.2): 原 cap*=b/ref 让软上限恒等于 base ⇒ 内侧轮永远到不了 0 以下（与 :582-589 注释自相矛盾）。改成 corr_limit + base，内侧轮可反转到负；精细循迹时 corr 只有一两千、离夹子很远，不受影响。 */
     /* ★2026-10-06 夹子从 MOTOR_PWM_MAX 放宽到 MOTOR_PWM_MAX + |base|（用户 m 明确放行：
      *   「如果这个转弯要特别大，比如碰见90°的直角之类的，它的左轮或者右轮是可以变成负数的」）。
      *
