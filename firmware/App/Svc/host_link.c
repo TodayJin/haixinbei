@@ -395,7 +395,7 @@ enum { T_TELEM = 0x01, T_TELEM2 = 0x03, T_TELEM3 = 0x04, T_PARAM_GET = 0x10, T_P
         *   · T_CAL_REPORT_B = [当前套号 u8][**另一套** trace_cal_data_t]
         * 老上位机不认识这个帧类型，会按"不认识"忽略 —— 兼容是安全的。 */
        T_CAL_REPORT_B = 0x1F,
-       T_CMD = 0x20, T_ACK = 0x21, T_SESSION = 0x22, T_PARAM_SAVE_ACK = 0x33, T_RAW_TRACE = 0x26, T_HELLO = 0x40, T_HELLO_REQ = 0x41, T_TEXT = 0x50,
+       T_CMD = 0x20, T_ACK = 0x21, T_SESSION = 0x22, T_PARAM_SAVE_ACK = 0x33, T_RAW_TRACE = 0x26, T_LOOP_STATUS = 0x24, T_HELLO = 0x40, T_HELLO_REQ = 0x41, T_TEXT = 0x50,
        /* v2 上位机任务程序（docs/任务编程.md §5） */
        T_TASK_LIST = 0x60, T_TASK_LIST_R = 0x61, T_TASK_PUT = 0x62, T_TASK_COMMIT = 0x63,
        T_TASK_GET = 0x64, T_TASK_DATA = 0x65, T_TASK_DEL = 0x66, T_TASK_RUN = 0x67,
@@ -1066,6 +1066,42 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
     break;
   }
 
+  case T_LOOP_STATUS: {
+    /* T_LOOP_STATUS(0x24)：这个环**实际在用**的增益 + 当前误差/转率。
+     * 调参页以前只能显示参数表里的值，看不出"环真正读到的是什么"（参数被写坏时会静默回兜底值）。
+     * 返回 15 字节（全部 ×100 定点，避免 f32 跨平台对齐问题）：
+     *   [0] loop 回显  [1..2] per_unit  [3..4] pos_kd(line_kd)
+     *   [5..6] ang_kp  [7..8] rate_kp   [9..10] 重心误差  [11..12] 期望转率
+     *   [13] |corr| 占上限的百分比(sat_pct)  [14] 保留
+     * 注：err_mean/err_pp 的 1 秒滑动统计需要三个环各自加窗口，标 TODO。 */
+    uint8_t q[15];
+    float per_unit, pos_kd, ang_kp, rate_kp, e_now, r_now, c_now, c_lim;
+    int sat = 0;
+    memset(q, 0, sizeof(q));
+    per_unit = host_param_get(HP_TRACE_ANGLE_PER_UNIT, 30.0f);
+    pos_kd   = host_param_get(HP_LINE_KD, 36.0f);
+    ang_kp   = host_param_get(HP_GYRO_KP, 100.0f);
+    rate_kp  = host_param_get(HP_GYRO_RATE_KP, 10.0f);
+    e_now    = HostExt_TracePos() - 4.5f;
+    r_now    = HostExt_AngleRateRef();
+    c_now    = HostExt_AngleCorr();
+    c_lim    = (float)SpeedControl_Target(0);   /* 用左轮目标当量级参考，避免引入不存在的 API */
+    if (c_lim < 1.0f) c_lim = 1.0f;
+    if (c_now < 0.0f) c_now = -c_now;
+    sat = (int)(100.0f * c_now / c_lim);
+    if (sat > 100) sat = 100;
+    q[0] = (len >= 1u) ? p[0] : 0u;
+    put_i16(&q[1],  clamp_i16(per_unit * 100.0f));
+    put_i16(&q[3],  clamp_i16(pos_kd   * 100.0f));
+    put_i16(&q[5],  clamp_i16(ang_kp   * 100.0f));
+    put_i16(&q[7],  clamp_i16(rate_kp  * 100.0f));
+    put_i16(&q[9],  clamp_i16(e_now    * 100.0f));
+    put_i16(&q[11], clamp_i16(r_now    * 100.0f));
+    q[13] = (uint8_t)sat;
+    q[14] = 0u;
+    frame_send(T_LOOP_STATUS, seq, q, 15u);
+    break;
+  }
   case T_RAW_TRACE: {
     /* T_RAW_TRACE(0x26)：传感器诊断帧 —— 34 字节
      *   [0..15]  raw u16[8]  逐路原始值（当前给的是"黑度 0..255"柱高，原始 ADC 需 trace_cal 暴露，标 TODO）
