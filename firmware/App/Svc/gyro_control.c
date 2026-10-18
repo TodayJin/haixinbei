@@ -960,6 +960,17 @@ void GyroControl_Task(void)
                 p_term = 0.0f;
             }
             float rate_ref = p_term + ff_rate;
+            /* ★2026-10-19 刹车曲线（梯形速度规划，默认关）：详见 host_link.h 的
+             * HP_GYRO_APPROACH_ACC 说明。只在 pivot（无循迹前馈）时用，循迹路径逐位不变。 */
+            {
+                float acc = host_param_get(HP_GYRO_APPROACH_ACC, 0.0f);
+                if (acc > 1.0f && ff_rate == 0.0f && fabsf(err) > s_settle_deg) {
+                    float v_curve = sqrtf(2.0f * acc * fabsf(err));
+                    float rmax_c  = s_rate_max;
+                    if (v_curve > rmax_c) v_curve = rmax_c;
+                    rate_ref = (err > 0.0f) ? v_curve : -v_curve;
+                }
+            }
             /* 期望角速度上限**分两种工况**：pivot（无前馈）用 s_rate_max，循迹（有前馈，
              * 来自 PID_tracing 的串级）用 s_trace_rate_max。为什么必须分开：
              * corr = s_rate_kp×(rate_ref − v) ⇒ **corr 的上限 = rate_kp × rate_max**。

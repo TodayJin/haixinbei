@@ -163,7 +163,7 @@ static const param_spec_t SPECS[] = {
     { 0x0119, 0.0f, -10.0f, 10.0f },   /* 陀螺零偏 °/s（校准后写入） */
     { HP_STRAIGHT_TRIM, 0.0f, -1000.0f, 1000.0f }, /* 直行差速补偿：>0 = 右轮多给（补右偏） */
     { HP_GYRO_LATCH_MOVING, 0.0f, 0.0f, 1.0f },    /* 行进中是否允许到位锁存：1=允许(旧行为) 0=不允许 */
-    { HP_GYRO_LATCH_MOVING, 1.0f, 0.0f, 1.0f },    /* 行进中是否允许到位锁存：1=允许(旧行为) 0=不允许 */
+    { HP_GYRO_APPROACH_ACC, 0.0f, 0.0f, 2000.0f }, /* 刹车曲线减速度 deg/s^2：0=关(纯比例) 建议150~400 */
   /* ---- v2（用户 m13466 的新上位机）：控制环标定量全部进参数表 ----
    * 这几项原来只活在控制模块的 `volatile float` 全局里（台架靠 SWD 直接改），
    * 现在由各控制环每拍从参数表回读（见 gyro_control.c / pid.c / PID_tracing.c），
@@ -1211,7 +1211,7 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
       send_ack(seq, ST_OK);
       break;
     case CMD_CAL_GYRO_BIAS: {
-      uint32_t ms = (arg > 0) ? (uint32_t)arg : 2000u;   /* arg 毫秒；默认 2 秒 */
+      uint32_t ms = (arg > 0) ? (uint32_t)arg : 2000u;   /* arg 毫秒；默认 2 秒 */
       float b = GyroControl_CalibrateBias(ms);
       host_param_set_local(0x0119u, b);
       send_ack(seq, ST_OK);
