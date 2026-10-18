@@ -335,6 +335,22 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"ok": False, "error": r.get("error", "没收到标定数据")}, 200)
                     return
             self._json({"ok": True, **con.cal})
+        elif path == "/api/gyro/cal":
+            # 2026-10-18 陀螺零偏标定（车必须静止）。body: {"ms": 2000}
+            body = self._body() if hasattr(self, "_body") else {}
+            try:
+                ms = int((body or {}).get("ms", 2000))
+            except Exception:
+                ms = 2000
+            ms = max(200, min(5000, ms))
+            r = con.cmd(0xC1, ms)
+            con.param_reload()
+            it = con.param_item(0x0119)
+            self._json({"ok": True, "ms": ms, "bias": (it or {}).get("value")})
+        elif path == "/api/gyro/bias":
+            con.param_reload()
+            it = con.param_item(0x0119)
+            self._json({"ok": True, "bias": (it or {}).get("value")})
         elif path == "/api/presets":
             self._json({"ok": True, "items": con.preset_list()})
         elif path == "/api/log":
