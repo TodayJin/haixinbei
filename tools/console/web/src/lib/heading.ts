@@ -167,8 +167,14 @@ export function stepDrive(
 
   const turning = intent.turnRate !== 0
 
-  // 全松开：停车复位（只在自己确实下过指令时才需要发 off）
+  // 全松开：**2026-10-18 改**（用户："设了目标角度，按停止也应该原地转到目标"）
+  //   目标角度不为 0 时 ⇒ 发 base_turn(base=0, turn=目标) ⇒ 角度环继续工作、原地转到目标并锁住 ✓
+  //   目标为 0 时才真正交还控制权（发 off）
   if (!turning && intent.base === 0) {
+    if (Math.abs(rt.offset) > 0.5) {
+      const hold = Math.round(rt.offset)
+      return { rt: { ...rt, lead: 0 }, send: [{ mode: 'base_turn', base: 0, turn: hold }] }
+    }
     return { rt: initDriveRuntime(), send: rt.armed ? [{ mode: 'off' }] : [] }
   }
 
