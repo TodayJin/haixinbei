@@ -983,7 +983,14 @@ void GyroControl_Task(void)
              * 加速段/稳态/锁存逻辑一字不改。s_brake_gain = 1.0 时与旧行为逐位一致。 */
             {
                 float e_brake = rate_ref - v;
-                if (e_brake * rate_ref < 0.0f) e_brake *= s_brake_gain;
+                /* ★2026-10-19（用户："要稳、不要超调"，实测收尾滑过头）：**判据写错了**。
+                 * 原来用 _brake * rate_ref < 0 判断"是不是在刹车"，可是**最后一次进停车带时
+                 * rate_ref 被上面 :969-970 置成 0** ⇒ 乘积恒为 0 ⇒ 条件永不成立
+                 * ⇒ **刹车增强在最关键的那一段完全不生效** ✗ ⇒ 车带着惯性滑过去 ⇒ 超调。
+                 * 这也是"同一组参数有时 0% 有时 20~40%"的原因：滑行距离由摩擦力（电压/地面）决定。
+                 * 正确判据：修正量是否**反着当前运动方向**出力 —— 用实际角速度 v，与 rate_ref 无关。
+                 *   e_brake * v < 0  ⇔  correction 与 v 反号 ⇔ 这一拍是在"刹"，不是在"推"。 */
+                if (e_brake * v < 0.0f) e_brake *= s_brake_gain;
                 correction = s_rate_kp * e_brake;
             }
             /* 速率微分阻尼（PD）：对"角速度正在变化"这件事加阻尼。
