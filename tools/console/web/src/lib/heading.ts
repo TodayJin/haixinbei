@@ -131,15 +131,23 @@ export interface DriveRuntime {
   lead: number
   /** 上一拍看到的车头航向（遥测 `yaw`，±180 的原始值），用来算这一拍车转了多少。 */
   lastYaw: number | null
+  /**
+   * ★2026-10-18：**接管那一刻**的车头航向（绝对，±180）。
+   * 松手时用它 + offset 算出绝对目标航向，交给固件的 hold 模式（见 stepDrive 的松手分支）。
+   */
+  baseYaw: number | null
 }
 
 export function initDriveRuntime(): DriveRuntime {
-  return { offset: 0, armed: false, last: null, lead: 0, lastYaw: null }
+  return { offset: 0, armed: false, last: null, lead: 0, lastYaw: null, baseYaw: null }
 }
 
 function same(a: DriveRequest | null, b: DriveRequest): boolean {
   if (!a || a.mode !== b.mode) return false
-  return a.mode === 'off' || (a.base === b.base && a.turn === b.turn)
+  if (a.mode === 'off') return true
+  // ★hold 比的是绝对航向 yaw，base_turn 比的是相对偏移 turn
+  if (a.mode === 'hold') return a.base === b.base && a.yaw === b.yaw
+  return a.base === b.base && a.turn === b.turn
 }
 
 /**
@@ -167,8 +175,23 @@ export function stepDrive(
 
   const turning = intent.turnRate !== 0
 
-  // 全松开：停车复位（只在自己确实下过指令时才需要发 off）
+  // ★2026-10-18：接管那一刻的车头航向（绝对方位）。之后一直沿用，绝不改 ——
+  //   否则"基准"会跟着车跑，目标就永远追不上（这正是 base_turn 1 秒重抓基准的老毛病）。
+  let baseYaw = rt.baseYaw
+  if (baseYaw === null && yawNow !== undefined && Number.isFinite(yawNow)) baseYaw = yawNow
+
+  // 全松开 ⇒ **发改 hold（绝对目标航向），让车原地转到目标并锁住**，而不是 off。
+  //   用户 m（原话）："我一松的时候，它不应该立马结束控制，就算我松了，它也应该回到这个目标角度"。
+  //   为什么用 hold 而不是继续发 base_turn：base_turn 的 turn 是**相对**固件抓的基准，
+  //   固件在 HOST_BASE_REGRAB_MS(1s) 后会重抓基准 ⇒ 目标被反复累加 ⇒ 震荡/反向（已实测踩过）。
+  //   hold 的 yaw 是绝对量、且幂等 ⇒ 连发 N 帧 == 1 帧，安全。
   if (!turning && intent.base === 0) {
+    if (rt.armed && baseYaw !== null) {
+      const yaw = norm180(baseYaw + rt.offset)
+      const hold: DriveRequest = { mode: 'hold', base: 0, yaw: Math.round(yaw * 10) / 10 }
+      const send = same(rt.last, hold) ? [] : [hold]
+      return { rt: { ...rt, baseYaw, last: hold, lead: 0 }, send }
+    }
     return { rt: initDriveRuntime(), send: rt.armed ? [{ mode: 'off' }] : [] }
   }
 
@@ -200,5 +223,5 @@ export function stepDrive(
 
   const cmd: DriveRequest = { mode: 'base_turn', base: Math.round(intent.base), turn: Math.round(offset) }
   const send = same(rt.last, cmd) ? [] : [cmd]
-  return { rt: { offset, lead, lastYaw, armed: true, last: cmd }, send }
+  return { rt: { offset, lead, lastYaw, baseYaw, armed: true, last: cmd }, send }
 }

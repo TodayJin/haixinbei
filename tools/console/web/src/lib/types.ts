@@ -280,7 +280,7 @@ export const NVRAM_TEXT: Record<number, string> = {
 }
 
 /** 驾驶模式 */
-export type DriveMode = 'off' | 'wheels' | 'base_turn' | 'trace' | 'trace2'
+export type DriveMode = 'off' | 'wheels' | 'base_turn' | 'trace' | 'trace2' | 'hold'
 
 export interface DriveRequest {
   mode: DriveMode
@@ -292,6 +292,13 @@ export interface DriveRequest {
   base?: number
   /** `base_turn`：目标航向偏移（度，正 = 左转），相对**进入本模式时**的航向；其他模式忽略 */
   turn?: number
+  /**
+   * ★`hold`（固件 HOST_DRIVE_HOLD=5）：**绝对**目标航向（度，±180，正 = 左）。
+   * 与 `turn` 的区别：`turn` 是相对量（固件 1 秒后会重抓基准，会被累加）；
+   * `yaw` 是绝对量、幂等 —— 连发 N 帧同值 == 发 1 帧 ⇒ 不可能累加、不可能漂。
+   * 松手后用它 ⇒ 车原地转到该航向并锁住（而不是 "off" 撒手不管）。
+   */
+  yaw?: number
 }
 
 /** /api/cmd 支持的命令（`start_a/b/c` 已废弃：固件删了内置任务流程，收到回 `ST_UNSUPPORTED`） */

@@ -272,3 +272,58 @@ describe('MAX_LEAD 领先保护（2026-10-07 真车实测：领先过 180° 车�
     expect(back.send).not.toEqual([])
   })
 })
+
+/* __HOLD_MODE_TESTS__ */
+/**
+ * ★2026-10-18：松手 ⇒ 发 hold（绝对目标航向），让车原地转到位并锁住。
+ *
+ * 用户原话："我一松的时候，它不应该立马结束控制。就算我松了，它也应该回到这个目标角度"。
+ * 为什么必须用 hold 而不是继续发 base_turn：base_turn 的 turn 是**相对**固件抓的基准，
+ * 而固件在 HOST_BASE_REGRAB_MS(1s) 后会重抓基准 ⇒ 目标被反复累加 ⇒ 震荡/反向（已实测踩过）。
+ * hold 的 yaw 是绝对量、幂等 ⇒ 连发 N 帧 == 1 帧。
+ */
+describe('松手保持目标角度（HOLD 模式）', () => {
+  it('接管→转向→松手 ⇒ 发 hold(base=0, yaw=基准+偏移)，且仍然 armed', () => {
+    let rt = initDriveRuntime()
+    const sent: { mode: string; base?: number; yaw?: number }[] = []
+    const tick = (i: Partial<DriveIntent>, dt: number, yaw?: number) => {
+      const r = stepDrive(rt, intent(i), dt, yaw)
+      rt = r.rt
+      for (const f of r.send) sent.push(f as { mode: string; base?: number; yaw?: number })
+    }
+    tick({ base: 600, turnRate: 90 }, 0, 30)    // 接管那一刻车头 30° ⇒ baseYaw = 30
+    tick({ base: 600, turnRate: 90 }, 500)      // 按住 A 0.5 秒 ⇒ offset = +45°
+    const offsetAtRelease = rt.offset
+    tick({}, 0, 34)                             // 全松开
+
+    const last = sent[sent.length - 1]
+    expect(last.mode).toBe('hold')
+    expect(last.base).toBe(0)
+    expect(last.yaw).toBeCloseTo(norm180(30 + offsetAtRelease), 1)
+    expect(rt.armed).toBe(true)                 // 不撒手
+    expect(rt.offset).toBe(offsetAtRelease)     // 目标不丢
+  })
+
+  it('hold 帧幂等：同样的目标再走一拍不会再发（去重）', () => {
+    let rt = initDriveRuntime()
+    const tick = (i: Partial<DriveIntent>, dt: number, yaw?: number) => {
+      const r = stepDrive(rt, intent(i), dt, yaw)
+      rt = r.rt
+      return r.send
+    }
+    tick({ base: 600, turnRate: 90 }, 0, 30)
+    const rel = tick({}, 0, 30)                 // 第一次松手 ⇒ 必发一帧
+    expect(rel.length).toBe(1)
+    expect(rel[0].mode).toBe('hold')
+    const again = tick({}, 0, 30)               // 再来一拍 ⇒ 完全一样，去重后不发
+    expect(again.length).toBe(0)
+  })
+
+  it('没有遥测航向（yawNow 未定义）时回退成 off，绝不乱发绝对角', () => {
+    const { sent } = run([
+      { intent: { base: 600, turnRate: 90 }, dtMs: 0 },
+      { intent: {}, dtMs: 0 },
+    ])
+    expect((sent[sent.length - 1] as { mode: string }).mode).toBe('off')
+  })
+})
