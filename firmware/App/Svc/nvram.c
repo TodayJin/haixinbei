@@ -21,7 +21,7 @@
 #include <stddef.h>
 
 #define NVRAM_MAGIC      0x31425848UL   /* "HXB1"（小端存下来是 48 58 42 31） */
-#define NVRAM_VERSION    9U             /* v8：舵机动作表 14 → **20** 个（v7：直角转弯开关；v6：角度环差速天花板参考；
+#define NVRAM_VERSION    10U             /* v8：舵机动作表 14 → **20** 个（v7：直角转弯开关；v6：角度环差速天花板参考；
                                          * v5：控制环标定量 + 舵机动作表）。
                                          * ★铁律：**payload 长大就必须升这个版本号** —— 判据是
                                          *   `version == NVRAM_VERSION` 时要求 `length == sizeof(payload)`，
@@ -110,6 +110,14 @@ typedef struct {
     int32_t  trace_slow_gain_x100; /* 0x020D 弯道降速强度 x100 */
     int32_t  trace_slow_min_speed; /* 0x020E 弯道降速下限 */
     uint8_t  pad9[5];
+    /* ---- v10：调参关键量第二批 ----
+     * 3 个 int32(12) + pad10[4] = 16 字节，保持 payload 的 8 字节对齐
+     * （pad9[5] 已经让前一段吃满 24，这里再加 16 仍是 8 的倍数）*/
+    int32_t  trace_line_ki_x100;    /* 0x0210 外环积分 Ki ×100 */
+    int32_t  gyro_v_floor;          /* 0x0116 逼近段最低转率 °/s */
+    int32_t  speed_ramp;            /* 0x0607 起步斜坡 PWM/s（缓起步）*/
+    uint8_t  pad10[24];
+
     uint8_t  pad7[7];                          /* ★必须凑满 8 字节：下面有编译期断言
                                                 *   `nvram_record_size_must_be_8x`，加 4 字节会当场编不过。 */
 } nvram_payload_t;
@@ -261,6 +269,9 @@ static void snapshot(nvram_payload_t *p)
     p->speed_full_counts    = (int32_t)(snap_param_scaled(HP_SPEED_FULL_COUNTS,   1.0f) + 0.5f);
     p->trace_slow_gain_x100 = (int32_t)(snap_param_scaled(0x020Du,                1.0f) + 0.5f);
     p->trace_slow_min_speed = (int32_t)(snap_param_scaled(0x020Eu,                1.0f) + 0.5f);
+    p->trace_line_ki_x100  = (int32_t)(snap_param_scaled(0x0210u,                100.0f) + 0.5f);
+    p->gyro_v_floor        = (int32_t)(snap_param_scaled(HP_GYRO_V_FLOOR,         1.0f) + 0.5f);
+    p->speed_ramp          = (int32_t)(snap_param_scaled(0x0607u,                1.0f) + 0.5f);
 }
 
 static void apply(const nvram_payload_t *p)
@@ -330,6 +341,9 @@ static void apply(const nvram_payload_t *p)
     apply_param_scaled(HP_SPEED_FULL_COUNTS,    p->speed_full_counts,    1.0f);
     apply_param_scaled(0x020Du,               p->trace_slow_gain_x100, 1.0f);
     apply_param_scaled(0x020Eu,               p->trace_slow_min_speed, 1.0f);
+    apply_param_scaled(0x0210u,              p->trace_line_ki_x100,  100.0f);
+    apply_param_scaled(HP_GYRO_V_FLOOR,      p->gyro_v_floor,          1.0f);
+    apply_param_scaled(0x0607u,              p->speed_ramp,            1.0f);
 }
 
 /* ------------------------------------------------------------------ 写 */

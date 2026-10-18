@@ -76,7 +76,8 @@ typedef struct {
 
 static speed_pi_t s_pi[2];
 static float      s_req[2];        /* 上层请求的目标 */
-static float      s_ramp = SPEED_RAMP_DEFAULT;
+static float      s_ramp = SPEED_RAMP_DEFAULT;   /* 下面在 SpeedControl_Task 里每拍从参数表 0x0607 覆盖 */
+
 volatile float    s_ramp_brake = SPEED_RAMP_BRAKE_MAX;  /* 减速/换向方向用的斜坡（台架可 poke） */
 static int        s_counts[2];     /* 本拍原始增量（计数/5ms），对外报数用 */
 static int        s_win[2][SPEED_AVG_TICKS];  /* 滑动窗口：最近几拍的原始增量 */
@@ -155,6 +156,12 @@ void SpeedControl_SetTarget(int left, int right)
 {
     s_req[0] = (float)left;
     s_req[1] = (float)right;
+    /* 2026-10-18：起步斜坡做成参数 0x0607 —— 每次下目标时刷新，
+     * 串口/上位机改完立刻生效（不用重烧）。0 或负值退回默认。 */
+    {
+        float r = host_param_get(0x0607u, SPEED_RAMP_DEFAULT);
+        s_ramp = (r > 100.0f) ? r : SPEED_RAMP_DEFAULT;
+    }
 }
 
 void SpeedControl_SetRamp(float ramp_pwm_per_s)
