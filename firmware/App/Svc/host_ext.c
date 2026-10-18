@@ -246,14 +246,12 @@ void HostExt_Task(uint32_t now_ms)
         if (Motion_GetMode() == MOTION_GYRO && GyroControl_IsEnabled() != 0U &&
             Motion_GetFault() == MOTION_FAULT_NONE) {
             s_hold_dead_ms = 0U;
-            /* 目标被别处改掉（任务/循迹/别的模式）就补回来。健康时应恒为 0 次。 */
-            if (s_hold_valid != 0U) {
-                float d = hold_norm180(GyroControl_GetTargetAngle() - tgt_now);
-                if (d > 0.05f || d < -0.05f) {
-                    GyroControl_SetTargetAngle(tgt_now);
-                    s_hold_reasserts++;
-                }
-            }
+            /* ★2026-10-19：**去掉了"每拍补目标"**。
+             * 原来每 5ms 比一次目标，差 >0.05° 就重写 ⇒ 而 SetTargetAngle() 会清 s_settled（到位锁存）
+             * 和积分 ⇒ 只要有任何微小差异就会**每 5ms 清一次锁存** ⇒ 转到目标后永远停不下来（震荡）。
+             * 目标被别处改掉这种情况由"模式/使能检查"兜底（下面 else 分支直接失效退出），
+             * 不需要每拍强制回写。s_hold_reasserts 保留计数但恒为 0。 */
+            (void)tgt_now;
         } else {
             if (s_hold_dead_ms == 0U) {
                 s_hold_dead_ms = (now_ms != 0U) ? now_ms : 1U;

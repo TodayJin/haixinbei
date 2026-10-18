@@ -447,8 +447,11 @@ class Handler(BaseHTTPRequestHandler):
             _dev = int(body.get("dev_us", body.get("us")))
             self._json(con.servo_deviation(int(body["ch"]), _dev))
         elif path == "/api/drive":
+            # ★2026-10-18：mode="hold"(5) 时 b = 绝对目标航向×10，必须把 yaw 传下去。
+            #   原来这里漏了 yaw ⇒ 车上永远收到 b=0 ⇒ 目标角恒为 0°，
+            #   表现为"页面显示目标 -42.5°，但车停在误差 1.2° 不动"（0 − 当前航向）。
             self._json(con.drive(body.get("mode", "off"), body.get("vl"), body.get("vr"),
-                                 body.get("base"), body.get("turn")))
+                                 body.get("base"), body.get("turn"), body.get("yaw")))
         elif path == "/api/drive/stop":
             self._json(con.drive(0))
         elif path == "/api/cmd":

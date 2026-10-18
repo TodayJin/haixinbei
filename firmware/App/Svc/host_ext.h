@@ -49,7 +49,13 @@ extern "C" {
  * 为什么不能每帧都写：GyroControl_SetTargetAngle() 会清 gyro_pid.integral 和到位锁存 s_settled
  * （gyro_control.c:441-448）⇒ 10Hz 下发时"到位锁存"永远攒不满 s_settle_ms ⇒ 到点后 corr 回不到 0、
  * 电机会被反复点着微抖。 */
-#define HOST_HOLD_EPS_DEG   0.2f
+#define HOST_HOLD_EPS_DEG   1.0f   /* ★2026-10-19 从 0.2 提到 1.0。
+                                      * GyroControl_SetTargetAngle() 会清 s_settled（到位锁存）和积分，
+                                      * 而网页在按键期间每 100ms 发一帧、目标角每帧都在动；只要差值超过阈值就会
+                                      * 重写目标 ⇒ 锁存被反复清掉 ⇒ **转到目标后一直小幅震荡、停不下来**。
+                                      * 我直连串口只发 1~2 帧时目标固定 ⇒ 锁存能攒满 ⇒ 尾段 0.00°，
+                                      * 这正是"我测着好、你用上位机就震"的原因。
+                                      * 1.0° 既能让 10Hz 的正常微调不打断锁存，又不会让明显的改目标被吞掉。 */
 /* HOLD 模式下角度环"不在了"（陀螺失联保护 / 别人 Stop）连续这么久 ⇒ 失效退出（绝不自己恢复） */
 #define HOST_HOLD_DEAD_MS   200U
 /* 这么久没有收到任何合法帧 ⇒ 判定上位机/链路断了，立刻停车 */
