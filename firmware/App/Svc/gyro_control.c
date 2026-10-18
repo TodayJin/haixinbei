@@ -586,6 +586,29 @@ uint8_t GyroControl_TurnDone(void)
  */
 void GyroControl_SetBaseSpeed(int left, int right)
 {
+    /* ★2026-10-18：**直行差速补偿**（HP_STRAIGHT_TRIM / 0x0118）放在这里，
+     * 而不是某一两个调用点 —— 这样**所有会走直线的路径**都自动获得补偿：
+     *   · MOTION_GYRO（角度环保持航向，网页按 W / 任务的"角度环+速度"）
+     *   · MOTION_TRACE_GYRO（三级串级循迹）← 用户反馈"循迹不往中间走"就是因为这里原来没补
+     *   · MOTION_TRACE（直驱差速循迹，虽然它不走 SetBaseSpeed，但由 PID_tracing 自己走速度环）
+     *
+     * 为什么必须有：台架表（speed_control.c:47-53）自证同一 PWM 下左右轮差 6~7%（左快）
+     * ⇒ 恒定约 7~11°/s 的右偏扰动；角度环增益受 JY61P 更新率限制（实测放大到 6/40 就失稳），
+     * 只能从**源头**做开环补偿。本车实测最优值 370（2.5 秒漂移从 −22° 降到 ±0.5°）。
+     *
+     * 规则：只对"基准速度足够大"的直行生效（|base| ≥ 300，否则原地转会被推歪）；
+     *       倒车自动反向（偏航方向相反）。trim > 0 ⇒ 右轮多给、左轮少给（补右偏）。 */
+    {
+        int trim = (int)host_param_get(HP_STRAIGHT_TRIM, 0.0f);
+        if (trim != 0) {
+            int sb = (left + right) / 2;      /* 用两者平均值判断"是否在直行" */
+            if (sb >= 300 || sb <= -300) {
+                int t = (sb < 0) ? -trim : trim;
+                left  -= t;
+                right += t;
+            }
+        }
+    }
     base_speed_left = left;
     base_speed_right = right;
 }

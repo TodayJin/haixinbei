@@ -179,20 +179,9 @@ void Motion_Task(void)
 
     switch (s_mode) {
     case MOTION_GYRO:
-        /* ★2026-10-18：直行差速补偿（HP_STRAIGHT_TRIM）。
-     * 起因：两轮机械不对称（台架表 6~7%，左轮一贯更快）⇒ 直行有约 7°/s 的恒定右偏扰动；
-     * 而角度环增益已被 JY61P 更新率限制（放大到 6/40 就失稳）⇒ 只能从源头补偿。
-     * trim > 0 ⇒ 右轮多给、左轮少给。原地转（s_base=0）不受影响；倒车自动反向。 */
-    {
-        int trim = (int)host_param_get(HP_STRAIGHT_TRIM, 0.0f);
-        int sb   = s_base;
-        if (trim != 0 && (sb >= 300 || sb <= -300)) {
-            if (sb < 0) trim = -trim;   /* 倒车：偏航方向相反 */
-            GyroControl_SetBaseSpeed(sb - trim, sb + trim);
-        } else {
-            GyroControl_SetBaseSpeed(sb, sb);
-        }
-    }
+        /* ★2026-10-18：直行差速补偿已移到 GyroControl_SetBaseSpeed() 内部（所有模式共享），
+     * 这里不要再加一次，否则会双份补偿。见 gyro_control.c 的说明。 */
+    GyroControl_SetBaseSpeed(s_base, s_base);
         GyroControl_Task();
         break;
 
