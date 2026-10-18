@@ -1208,7 +1208,8 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
       send_ack(seq, ST_OK);
       break;
     case CMD_CAL_GYRO_BIAS: {
-      float b = GyroControl_CalibrateBias(500u);
+      uint32_t ms = (arg > 0) ? (uint32_t)arg : 2000u;   /* arg 毫秒；默认 2 秒 */
+      float b = GyroControl_CalibrateBias(ms);
       host_param_set_local(0x0119u, b);
       send_ack(seq, ST_OK);
       break;

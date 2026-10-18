@@ -369,6 +369,8 @@ void GyroControl_Init(void)
  * 返回标定到的偏置（°/s），0 表示失败（陀螺没数据）。 */
 float GyroControl_CalibrateBias(uint32_t ms)
 {
+    if (ms < 200U)   ms = 200U;    /* 太短采不到几个点 */
+    if (ms > 5000U)  ms = 5000U;   /* 太长会卡主循环：5s 封顶 */
     uint32_t t0 = HAL_GetTick();
     double   sum = 0.0;
     uint32_t n = 0U;
@@ -380,7 +382,7 @@ float GyroControl_CalibrateBias(uint32_t ms)
         }
         HAL_Delay(1);
     }
-    if (n < 20U) return 0.0f;
+    if (n < 20U) return GyroControl_BiasZ();   /* 采样太少：保持上次的值，别把好的零偏冲掉 */
     s_bias_z = (float)(sum / (double)n);
     if (s_bias_z > 5.0f)  s_bias_z =  5.0f;   /* 夹住，防止误标出一个巨大的偏置 */
     if (s_bias_z < -5.0f) s_bias_z = -5.0f;
