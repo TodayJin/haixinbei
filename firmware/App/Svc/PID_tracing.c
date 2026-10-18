@@ -317,6 +317,7 @@ static float   last_data  = TRACE_SETPOINT;
 static uint8_t all_sensors_lost = 0;
 static uint8_t s_lost_stop       = 0;   /* 丢线停车已经执行过（每次丢线只执行一次）*/
 static int8_t  s_search_dir      = 0;   /* 最后一次看到线时它偏在哪一侧：+1 右 / -1 左（丢线找线用）*/
+static float   s_err_i     = 0.0f;   /* 2026-10-18 外环积分器（格·秒），消摩擦稳态偏移 */
 static float   s_err_dir         = 0.0f;/* err 的短 EMA（τ≈80ms@50Hz）：丢线找线判方向用，见 TRACE_SEARCH_DIR_LPF */
 static float   s_base_f          = 0.0f;/* 基准速度的一阶平滑值（PWM 刻度），见 TRACE_BASE_TAU_S */
 static int8_t  s_sweep_dir       = 0;   /* 找线扫描方向 ±1；0 = 没在扫（见 TRACE_SWEEP_DEG 注释） */
@@ -802,6 +803,7 @@ void motor_tracing_cascade(int base_speed)
         /* 丢线期间有效帧不再产生（trace_pos_frames 不前进），重新压线那一帧 data 会从冻住的
          * 旧值跳回来 ⇒ 标一下，让微分项重新起步，别把这个跳变当成"重心在飞"。*/
         s_rate_resync = 1U;
+        s_err_i = 0.0f;   /* 丢线清积分，防止饱和 */
         s_ff_lp       = 0.0f;   /* 前馈低通也重新起步：丢线期间它冻在旧值上，压回线时别拿旧值冲一下 */
     }
 
@@ -835,7 +837,18 @@ void motor_tracing_cascade(int base_speed)
         }
 
         /* 正负号与 P 项一致：ė > 0 = 线在往车的右边跑 = 车偏左 = 要往右转 = rate_cmd < 0 */
-        rate_cmd = -(per_unit * err + pos_kd * s_pos_rate);   /* °/s，>0 = 向左 */
+        /* ★2026-10-18 外环积分：P 在摩擦系统里一定留稳态偏移（线贴边不回中），
+         * 加 I 消掉它，这样 per_unit 可以保持小、不摆。默认 0（关）= 逐位回到旧行为。
+         * 单位 °/s per (格·秒)；限幅 ±4 格·秒 防积分饱和（丢线时也清零，见下面 lost 分支）。 */
+        {
+            float line_ki = host_param_get(0x0210u, 0.0f);
+            if (line_ki > 0.0f) {
+                s_err_i += err * (1.0f / TRACE_FRAME_HZ);
+                if (s_err_i >  4.0f) s_err_i =  4.0f;
+                if (s_err_i < -4.0f) s_err_i = -4.0f;
+            }
+            rate_cmd = -(per_unit * err + pos_kd * s_pos_rate + line_ki * s_err_i);   /* °/s，>0 = 向左 */
+        }
         /* 看见线时**用自己的（小）上限**，别用找线那个 300：见 TRACE_RATE_MAX_VISIBLE 注释。 */
         {
             float vlim = TRACE_RATE_MAX_VISIBLE;
