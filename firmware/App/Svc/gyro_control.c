@@ -1047,12 +1047,32 @@ void GyroControl_Task(void)
      * 循迹前馈期间必须让路：车是被线连续推着走的，角误差/角速度在转弯中途或过中线那一瞬
      * 很容易短暂落进停车带，一锁存就把前馈连同 correction 一起吃掉（车会"跟丢了不动"）。
      * 所以有前馈时每拍强制解锁，并跳过整个锁存块。 */
-    if (ff_rate != 0.0f) {
-        s_settled    = 0;
-        s_settle_cnt = 0U;
+    /* ★2026-10-18：行进中是否让锁存生效，由参数 0x011A 决定（**默认 0**）。
+     *
+     * 用户需求（原话）："切换到角度环模式时，它就是锁住当前的角度一直往前走；
+     *   除非下达转角度命令改变目标角度，或者它在循迹。"
+     * ⇒ 行进中**必须**一直闭环，不许锁存。
+     *
+     * 为什么以前会失效：锁存只要 |err|<settle_deg 且 |角速度|<settle_rate 持续 settle_ms
+     * 就置 s_settled=1 并把 correction 钉成 0。直行时起步目标=当前航向、err≈0 ⇒ 150ms 后
+     * 立刻锁存 ⇒ 方向盘等于松手 ⇒ 车按两轮机械不对称（台架 6~7%，约 7°/s）一路往右偏；
+     * 而解锁要 |err|>1.5×settle_deg(≈2.25°)，起转助推又要求 |角速度|<2°/s（车在漂 7°/s）
+     * ⇒ 永不点火 ⇒ 看起来就是"没有锁角度"。
+     *
+     * 锁存的语义只对"原地转到点后别再微抖"成立，所以现在只在 base==0 时生效。
+     * 参数保留是为了万一某台车需要退回去（0x011A=1）。 */
+    {
+        uint8_t moving = (base_speed_left != 0 || base_speed_right != 0) ? 1U : 0U;
+        uint8_t latch_moving = (host_param_get(HP_GYRO_LATCH_MOVING, 0.0f) > 0.5f) ? 1U : 0U;
+        if (ff_rate != 0.0f || (moving != 0U && latch_moving == 0U)) {
+            s_settled    = 0;
+            s_settle_cnt = 0U;
+        }
     }
 
-    if (s_law != 4U && ff_rate == 0.0f) {
+    if (s_law != 4U && ff_rate == 0.0f &&
+        (host_param_get(HP_GYRO_LATCH_MOVING, 0.0f) > 0.5f ||
+         (base_speed_left == 0 && base_speed_right == 0))) {
         float err_l = err_now;
 
         if (fabsf(err_l) < s_settle_deg * 2.0f && fabsf(s_rate_f) < s_settle_rate) {

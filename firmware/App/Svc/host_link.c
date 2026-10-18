@@ -162,6 +162,8 @@ static const param_spec_t SPECS[] = {
   { HP_GYRO_SETTLE_RATE,   30.0f,     0.0f,      300.0f },   /* ★到位锁存角速度阈值 */
     { 0x0119, 0.0f, -10.0f, 10.0f },   /* 陀螺零偏 °/s（校准后写入） */
     { HP_STRAIGHT_TRIM, 0.0f, -1000.0f, 1000.0f }, /* 直行差速补偿：>0 = 右轮多给（补右偏） */
+    { HP_GYRO_LATCH_MOVING, 0.0f, 0.0f, 1.0f },    /* 行进中是否允许到位锁存：1=允许(旧行为) 0=不允许 */
+    { HP_GYRO_LATCH_MOVING, 1.0f, 0.0f, 1.0f },    /* 行进中是否允许到位锁存：1=允许(旧行为) 0=不允许 */
   /* ---- v2（用户 m13466 的新上位机）：控制环标定量全部进参数表 ----
    * 这几项原来只活在控制模块的 `volatile float` 全局里（台架靠 SWD 直接改），
    * 现在由各控制环每拍从参数表回读（见 gyro_control.c / pid.c / PID_tracing.c），

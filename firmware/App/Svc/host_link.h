@@ -98,6 +98,16 @@
 #define HP_GYRO_RATE_MAX     0x010Du  /* 期望角速度上限 °/s */
 #define HP_GYRO_CORR_LIMIT   0x010Eu  /* 修正量限幅（PWM 刻度） */
 #define HP_GYRO_CORR_SLEW    0x010Fu  /* 修正量斜率限幅（PWM/s） */
+#define HP_GYRO_LATCH_MOVING 0x011Au  /* ★2026-10-18 行进中是否允许"到位锁存"。
+                                       * 1（默认）= 允许（旧行为）：直行时 150ms 内 |err|<settle_deg
+                                       *   就锁存、correction=0，角度环不干预（车按机械不对称往右偏）；
+                                       * 0 = 行进中不许锁存：角度环一直闭环去纠偏。
+                                       * 现场用 0x011A 一条命令对比，不用重烧。 */
+#define HP_GYRO_LATCH_MOVING 0x011Au  /* ★2026-10-18 行进中是否允许"到位锁存"。
+                                       * 1（默认）= 允许（旧行为）：直行时 150ms 内 |err|<settle_deg
+                                       *   就锁存、correction=0，角度环不干预（车按机械不对称往右偏）；
+                                       * 0 = 行进中不许锁存：角度环一直闭环去纠偏。
+                                       * 现场用 0x011A 一条命令对比，不用重烧。 */
 #define HP_STRAIGHT_TRIM     0x0118u  /* ★2026-10-18 直行差速补偿（PWM 刻度，±1000）。
                                       * trim > 0 ⇒ 右轮多给、左轮少给，用来抵消"直行往右偏"。
                                       * 为什么必须有：固件台架表（speed_control.c:47-53）自证同一 PWM 下

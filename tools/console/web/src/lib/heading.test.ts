@@ -224,7 +224,12 @@ describe('MAX_LEAD 领先保护（2026-10-07 真车实测：领先过 180° 车�
     for (let i = 0; i < ticks; i++) {
       const r = stepDrive(rt, intent({ turnRate: rate }), i === 0 ? 0 : 100, yaw)
       rt = r.rt
-      if (r.send.length) turns.push((r.send[0] as { turn: number }).turn)
+      if (r.send.length) {
+        const f = r.send[0] as { mode: string; turn?: number; yaw?: number }
+        // ★2026-10-18：接管期间改成 hold（绝对航向）⇒ 目标用 yaw 表示，物理上在 (-180,180]。
+        //   baseYaw 在这些用例里恒为 0（yaw 从 0 开始），所以 yaw 就等于偏移量（取模后）。
+        turns.push(f.mode === 'hold' ? norm180(f.yaw ?? 0) : (f.turn ?? 0))
+      }
       yaw = norm180(yaw + (carRate * 100) / 1000)
       if (kick && i === kick.at) yaw = norm180(yaw + kick.deg)
       maxLead = Math.max(maxLead, Math.abs(rt.lead))
@@ -237,7 +242,8 @@ describe('MAX_LEAD 领先保护（2026-10-07 真车实测：领先过 180° 车�
     expect(h.maxLead).toBeLessThanOrEqual(MAX_LEAD + 1e-6)
     // 一直按到底：目标仍然顶到 HOLD_LIMIT（车转过 540° 就该停），只是"贴着车"走完的
     expect(h.rt.offset).toBe(HOLD_LIMIT)
-    expect(h.turns.at(-1)).toBe(HOLD_LIMIT)
+    // hold 的绝对航向物理上在 (-180,180] ⇒ 540° 等价于 180°
+    expect(h.turns.at(-1)).toBe(norm180(HOLD_LIMIT))
     // 大部分拍都在发帧（目标前进或被拉回）；最后几拍目标饱和、车追上了才不发
     expect(h.turns.length).toBeGreaterThan(40)
     expect(h.turns.length).toBeLessThanOrEqual(60)

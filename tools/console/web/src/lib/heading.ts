@@ -221,7 +221,18 @@ export function stepDrive(
     lastYaw = yawNow
   }
 
-  const cmd: DriveRequest = { mode: 'base_turn', base: Math.round(intent.base), turn: Math.round(offset) }
+  // ★2026-10-18：接管期间也用 hold（**绝对目标航向**），而不是 base_turn（相对偏移）。
+  //   这样语义就完全符合用户要求：A/D 只改目标角度、W/S 只改基准速度，目标航向一直不变；
+  //   而且绝对量幂等 ⇒ 连发 N 帧同值 == 1 帧 ⇒ 固件 HOST_BASE_REGRAB_MS 的重抓基准对它无影响。
+  //   baseYaw 未知（没有遥测航向）时才退回 base_turn。
+  const cmd: DriveRequest =
+    baseYaw === null
+      ? { mode: 'base_turn', base: Math.round(intent.base), turn: Math.round(offset) }
+      : {
+          mode: 'hold',
+          base: Math.round(intent.base),
+          yaw: Math.round(norm180(baseYaw + offset) * 10) / 10,
+        }
   const send = same(rt.last, cmd) ? [] : [cmd]
   return { rt: { offset, lead, lastYaw, baseYaw, armed: true, last: cmd }, send }
 }
