@@ -21,7 +21,7 @@
 #include <stddef.h>
 
 #define NVRAM_MAGIC      0x31425848UL   /* "HXB1"（小端存下来是 48 58 42 31） */
-#define NVRAM_VERSION    10U             /* v8：舵机动作表 14 → **20** 个（v7：直角转弯开关；v6：角度环差速天花板参考；
+#define NVRAM_VERSION    11U             /* v8：舵机动作表 14 → **20** 个（v7：直角转弯开关；v6：角度环差速天花板参考；
                                          * v5：控制环标定量 + 舵机动作表）。
                                          * ★铁律：**payload 长大就必须升这个版本号** —— 判据是
                                          *   `version == NVRAM_VERSION` 时要求 `length == sizeof(payload)`，
@@ -116,7 +116,10 @@ typedef struct {
     int32_t  trace_line_ki_x100;    /* 0x0210 外环积分 Ki ×100 */
     int32_t  gyro_v_floor;          /* 0x0116 逼近段最低转率 °/s */
     int32_t  speed_ramp;            /* 0x0607 起步斜坡 PWM/s（缓起步）*/
-    uint8_t  pad10[24];
+    int32_t  straight_trim;         /* ★v11：0x0118 直行差速补偿（PWM 刻度，±1000）。
+                                     * 为什么必须固化：它对应"这对电机"的物理不对称量（本车 370），
+                                     * 断电丢了就白调了（用户实测：任务里又往右偏 = trim 回 0）。 */
+    uint8_t  pad10[20];             /* 24-4：加了上面的 int32，这里减 4 保持 payload 总长不变 */
 
     uint8_t  pad7[7];                          /* ★必须凑满 8 字节：下面有编译期断言
                                                 *   `nvram_record_size_must_be_8x`，加 4 字节会当场编不过。 */
@@ -272,6 +275,7 @@ static void snapshot(nvram_payload_t *p)
     p->trace_line_ki_x100  = (int32_t)(snap_param_scaled(0x0210u,                100.0f) + 0.5f);
     p->gyro_v_floor        = (int32_t)(snap_param_scaled(HP_GYRO_V_FLOOR,         1.0f) + 0.5f);
     p->speed_ramp          = (int32_t)(snap_param_scaled(0x0607u,                1.0f) + 0.5f);
+    p->straight_trim       = (int32_t)(snap_param_scaled(HP_STRAIGHT_TRIM,         1.0f) + 0.5f);
 }
 
 static void apply(const nvram_payload_t *p)
@@ -344,6 +348,7 @@ static void apply(const nvram_payload_t *p)
     apply_param_scaled(0x0210u,              p->trace_line_ki_x100,  100.0f);
     apply_param_scaled(HP_GYRO_V_FLOOR,      p->gyro_v_floor,          1.0f);
     apply_param_scaled(0x0607u,              p->speed_ramp,            1.0f);
+    apply_param_scaled(HP_STRAIGHT_TRIM,     p->straight_trim,         1.0f);
 }
 
 /* ------------------------------------------------------------------ 写 */
