@@ -148,18 +148,20 @@ describe('操控页状态机 stepDrive', () => {
     expect(after.send).toEqual([])
   })
 
-  it('全松开 ⇒ 发一帧 off 并把偏移清零（下次按 A 从新的正前方开始）', () => {
+  it('全松开但目标角度不为0 ⇒ 原地转到目标并保持（不再发 off）', () => {
     const { rt, sent } = run([
       { intent: { base: 600, turnRate: 90 }, dtMs: 0 },
       { intent: { base: 600, turnRate: 90 }, dtMs: 500 },
       { intent: {}, dtMs: 0 },
     ])
-    expect(sent.at(-1)).toEqual({ mode: 'off' })
-    expect(rt).toEqual(initDriveRuntime())
+    // 2026-10-18 用户要求：设了目标角度时，松手应该原地转到目标并保持（角度环继续工作），
+    // 而不是发 off 把角度环关掉（那会留下追不到的误差）。
+    expect(sent.at(-1)).toEqual({ mode: 'base_turn', base: 0, turn: Math.round(rt.offset) })
 
     // 已经停了就别再刷 off
     const again = stepDrive(rt, intent({}), 0)
-    expect(again.send).toEqual([])
+    // 保持模式下每拍都会重复下发同一帧（和正常操控一样），不会累加
+    expect(again.send).toEqual([{ mode: 'base_turn', base: 0, turn: Math.round(rt.offset) }])
   })
 
   it('空格急停 ⇒ 一帧 off；本来就没接管则什么都不发', () => {
