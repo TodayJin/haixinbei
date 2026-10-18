@@ -40,7 +40,11 @@ CMD_NAMES = {
     "set_telem_hz": pr.CMD_SET_TELEM_HZ, "reset": pr.CMD_RESET,
     "set_logging": pr.CMD_SET_LOGGING, "set_telem_mode": pr.CMD_SET_TELEM_MODE,
 }
-DRIVE_MODES = {"off": 0, "wheels": 1, "base_turn": 2, "trace": 3, "trace2": 4}
+DRIVE_MODES = {"off": 0, "wheels": 1, "base_turn": 2, "trace": 3, "trace2": 4,
+               # ★2026-10-18：hold = 绝对目标航向保持（b = 航向×10，±1800）。
+               # 与 base_turn 的区别：base_turn 的 b 是"相对进入基准的转角"，固件在 1s 重抓基准
+               # 后会把它累加；hold 的 b 是绝对量，连发 N 帧同值 == 1 帧 ⇒ 不可能累加。
+               "hold": 5}
 DRIVE_KEEPALIVE_MS = 200      # 车上驾驶看门狗是 500ms，留 2 倍余量
 DRIVE_HOLD_MS = 3000          # 有 /api/stream 订阅者挂着就算"在场"，超时就不再喂
 MODE_NAMES = {0: "空闲", 1: "陀螺", 2: "循迹", 3: "串级"}
@@ -1471,16 +1475,23 @@ class Console:
                 self.servo[f"dev{ch}_us"] = int(us)
         return r
 
-    def drive(self, mode, vl=None, vr=None, base=None, turn=None) -> dict:
+    def drive(self, mode, vl=None, vr=None, base=None, turn=None, yaw=None) -> dict:
         if isinstance(mode, str):
             mode = DRIVE_MODES.get(mode, -1)
-        if mode is None or int(mode) not in (0, 1, 2, 3, 4):
+        if mode is None or int(mode) not in (0, 1, 2, 3, 4, 5):
             return {"ok": False, "error": f"驾驶模式不对：{mode}"}
         mode = int(mode)
         a = int(vl or 0) if mode == 1 else int(base or 0)
-        b = int(vr or 0) if mode == 1 else int(turn or 0)
+        if mode == 5:
+            # hold：b = **绝对目标航向 × 10**（±1800）。yaw 单位是度，可以是小数。
+            b = int(round(float(yaw if yaw is not None else (turn or 0)) * 10.0))
+            b = max(-1800, min(1800, b))
+        else:
+            b = int(vr or 0) if mode == 1 else int(turn or 0)
+        # mode 5 必须 retries=0：retries=1 的迟到重试帧会在**急停之后**把车重新武装起来。
         r = self.send_wait(pr.T_DRIVE, bytes([mode]) + pr.pack_i16(a) + pr.pack_i16(b),
-                           want=(pr.T_ACK, pr.T_DRIVE_REPORT), req="drive", retries=1)
+                           want=(pr.T_ACK, pr.T_DRIVE_REPORT), req="drive",
+                           retries=(0 if mode == 5 else 1))
         r.update({"mode": mode, "a": a, "b": b})
         if not r.get("ok"):
             # 操控页是 10Hz 连续下发（转向时每 100ms 一帧），车一拒绝就会连着弹 ——

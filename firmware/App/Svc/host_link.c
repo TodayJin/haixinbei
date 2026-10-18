@@ -161,6 +161,7 @@ static const param_spec_t SPECS[] = {
   { HP_GYRO_V_FLOOR,        0.0f,     0.0f,      120.0f },   /* ★逼近段最低转率，0=关 */
   { HP_GYRO_SETTLE_RATE,   30.0f,     0.0f,      300.0f },   /* ★到位锁存角速度阈值 */
     { 0x0119, 0.0f, -10.0f, 10.0f },   /* 陀螺零偏 °/s（校准后写入） */
+    { HP_STRAIGHT_TRIM, 0.0f, -1000.0f, 1000.0f }, /* 直行差速补偿：>0 = 右轮多给（补右偏） */
   /* ---- v2（用户 m13466 的新上位机）：控制环标定量全部进参数表 ----
    * 这几项原来只活在控制模块的 `volatile float` 全局里（台架靠 SWD 直接改），
    * 现在由各控制环每拍从参数表回读（见 gyro_control.c / pid.c / PID_tracing.c），
@@ -1362,9 +1363,20 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
         host_link_send_text("[fw] drive refused: speed out of range\r\n");
         break;
       }
-      if (mode == HOST_DRIVE_BASE && (b < -360 || b > 360)) {
+      /* ★2026-10-18：原来限 ±360，但上位机 heading.ts 的 HOLD_LIMIT/MAX_LEAD 允许累计到 ±540
+       * ⇒ 长按 A/D 转过 360° 之后每一帧都被拒收，而桥的 drive() 只要不 ok 就清 drive_hold_until
+       * ⇒ **整个驾驶会话被弄没**（车 500ms 后自己停，用户感觉"按着按着就撒手了"）。
+       * 放到 ±540 与上位机一致。 */
+      if (mode == HOST_DRIVE_BASE && (b < -540 || b > 540)) {
         send_ack(seq, ST_BAD_PARAM);
         host_link_send_text("[fw] drive refused: angle out of range\r\n");
+        break;
+      }
+      /* ★2026-10-18 HOLD：b = 绝对目标航向 × 10 ⇒ ±1800（±180.0°）。
+       * 超范围就拒绝，免得一个坏帧把车转飞（历史上 CorrLimit 被撑满正是这么来的）。 */
+      if (mode == HOST_DRIVE_HOLD && (b < -1800 || b > 1800)) {
+        send_ack(seq, ST_BAD_PARAM);
+        host_link_send_text("[fw] drive refused: hold angle out of range\r\n");
         break;
       }
     }

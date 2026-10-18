@@ -34,7 +34,24 @@ extern "C" {
 #define HOST_DRIVE_BASE   2u   /* a = 基准速度刻度（0..7200，负 = 倒车），b = 目标转向角 °（相对进入本模式时的航向） */
 #define HOST_DRIVE_TRACE  3u   /* a = 基准速度刻度（0..7200，三级串级循迹）；b 忽略 */
 #define HOST_DRIVE_TRACE2 4u   /* a = 基准速度刻度（0..7200，★**直驱差速循迹**：误差直接改左右轮差速，不走角度环/陀螺仪，即老海信杯那套）；b 忽略 */
+#define HOST_DRIVE_HOLD   5u   /* ★2026-10-18：a = 基准速度刻度（0 = 原地转），b = **绝对目标航向 × 10**（±1800 即 ±180.0°）
+                                *
+                                * 为什么要它（三条审计结论）：
+                                *  1) BASE 的 b 是"相对进入基准的转角"，而固件在 HOST_BASE_REGRAB_MS(1s) 之后会重抓基准
+                                *     ⇒ 只要上位机发帧有 >1s 空档，目标就被反复累加（"阶梯式转不停"）。
+                                *  2) HOLD 的 b 是**绝对航向** ⇒ 天然幂等：连发 200 帧同值 == 发 1 帧 ⇒ 累加不可能发生，
+                                *     固件也不需要"基准航向"这个状态。
+                                *  3) 用户要"松手后车自己原地转到目标并锁住"：松手时上位机继续发 base=0 的 HOLD 帧，
+                                *     对固件来说只有"目标是多少"，没有"松没松手"，所以不会撒手。
+                                *  off 仍然只用于急停/切页（语义不变）。 */
 
+/* HOLD 模式：目标变化超过这个角度才真的重写目标。
+ * 为什么不能每帧都写：GyroControl_SetTargetAngle() 会清 gyro_pid.integral 和到位锁存 s_settled
+ * （gyro_control.c:441-448）⇒ 10Hz 下发时"到位锁存"永远攒不满 s_settle_ms ⇒ 到点后 corr 回不到 0、
+ * 电机会被反复点着微抖。 */
+#define HOST_HOLD_EPS_DEG   0.2f
+/* HOLD 模式下角度环"不在了"（陀螺失联保护 / 别人 Stop）连续这么久 ⇒ 失效退出（绝不自己恢复） */
+#define HOST_HOLD_DEAD_MS   200U
 /* 这么久没有收到任何合法帧 ⇒ 判定上位机/链路断了，立刻停车 */
 #define HOST_DRIVE_TIMEOUT_MS 500U
 /* 驾驶时的速度环斜坡（PWM/s）：要能立刻反向，不能用循迹那套 20000 软启动 */
@@ -68,6 +85,8 @@ void    HostExt_DriveStop(void);
 uint8_t HostExt_DriveMode(void);
 uint8_t HostExt_DriveEnabled(void);               /* 1 = 正在被上位机驾驶 */
 int     HostExt_DriveGet(int *a, int *b);         /* 取回当前驾驶指令（0 = 没在驾驶） */
+/* HOLD 模式状态（诊断/遥测）：0 = 没在保持，1 = 正在转，2 = 已到位锁存 */
+uint8_t HostExt_HoldState(void);
 uint8_t HostExt_DriveWatchdogTrips(void);         /* 因链路超时自动停车的次数（诊断） */
 
 /* -------------------------------------------------------------- 动作/舵机 */

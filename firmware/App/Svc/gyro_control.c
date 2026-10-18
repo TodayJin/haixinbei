@@ -1047,12 +1047,21 @@ void GyroControl_Task(void)
      * 循迹前馈期间必须让路：车是被线连续推着走的，角误差/角速度在转弯中途或过中线那一瞬
      * 很容易短暂落进停车带，一锁存就把前馈连同 correction 一起吃掉（车会"跟丢了不动"）。
      * 所以有前馈时每拍强制解锁，并跳过整个锁存块。 */
-    if (ff_rate != 0.0f) {
+    /* ★2026-10-18：**只要车在走，就绝不允许锁存**（这是"按 W 直行一路右偏"的根因）。
+     * 审计证据链：
+     *   · HOST_DRIVE_BASE 直行时 ff_rate == 0、base != 0；
+     *   · 按 W 瞬间目标 = 当前航向 ⇒ err≈0 ⇒ 150ms 后 s_settled=1、correction 被钉成 0；
+     *   · 解锁要 |err| > 1.5×settle_deg(≈2.25°)；
+     *   · 而起转助推要求 |v| < s_stuck_rate(2°/s)，车正以 ~7°/s 漂移时永远不点火
+     *   ⇒ 角度环事实上被关掉，车就一路往右偏（原地转没这问题，因为原地转本来就该锁死）。
+     * 锁存的语义是"原地转到点后别再微抖"，对**行进中**毫无意义 —— 行进中必须一直闭环。 */
+    if (ff_rate != 0.0f || base_speed_left != 0 || base_speed_right != 0) {
         s_settled    = 0;
         s_settle_cnt = 0U;
     }
 
-    if (s_law != 4U && ff_rate == 0.0f) {
+    if (s_law != 4U && ff_rate == 0.0f &&
+        base_speed_left == 0 && base_speed_right == 0) {
         float err_l = err_now;
 
         if (fabsf(err_l) < s_settle_deg * 2.0f && fabsf(s_rate_f) < s_settle_rate) {

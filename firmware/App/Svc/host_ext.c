@@ -54,6 +54,43 @@ static uint8_t  s_vbus_disarms;     /* 低压自动停机的次数（诊断） *
  * 烧录后可用 SWD 读 g_stop_src，或看 host_link 每秒发的文本。 */
 volatile uint32_t g_stop_src[4] = {0U, 0U, 0U, 0U};
 
+/* ★2026-10-18：HOLD 模式（绝对目标航向）的状态。
+ * 见 host_ext.h 里 HOST_DRIVE_HOLD 的说明。这里刻意**不保存任何"基准航向"** ——
+ * 那正是 BASE 分支重抓累加的根源。固件只记"目标是多少"，上位机负责算目标。 */
+static float    s_hold_target;      /* 锁存的绝对目标航向 °，(-180,180] */
+static uint8_t  s_hold_valid;       /* 1 = 目标有效 */
+static int      s_hold_base;        /* 最近一次下发的基准速度刻度（只用于诊断） */
+static uint32_t s_hold_dead_ms;     /* 角度环"不在了"的起始时刻（0 = 环正常） */
+static uint8_t  s_hold_reasserts;   /* 目标被别处改掉又补回来的次数（健康时应恒为 0） */
+
+/* 把角度归到 (-180, 180]（本文件自用，避免为一个取模去动 gyro_control 的内部函数） */
+static float hold_norm180(float a)
+{
+    while (a > 180.0f)  a -= 360.0f;
+    while (a <= -180.0f) a += 360.0f;
+    return a;
+}
+
+static void hold_clear(void)
+{
+    s_hold_valid   = 0U;
+    s_hold_target  = 0.0f;
+    s_hold_base    = 0;
+    s_hold_dead_ms = 0U;
+}
+
+/* 起环 + 写目标。顺序不能反：从别的模式切进来时 GyroControl_Start() 会把目标重置成当前航向。 */
+static void hold_push(int base, float target)
+{
+    Motion_SetSpeed(base);
+    Motion_SetMode(MOTION_GYRO);              /* 同模式幂等：不重开环、不重置目标 */
+    GyroControl_SetTargetAngle(target);       /* 绝对值：重复写不累加 */
+    s_hold_target  = hold_norm180(target);
+    s_hold_base    = base;
+    s_hold_valid   = 1U;
+    s_hold_dead_ms = 0U;
+}
+
 void HostExt_Init(void)
 {
     s_mode          = HOST_DRIVE_OFF;
@@ -72,6 +109,8 @@ void HostExt_Init(void)
     s_vbus_low_ms   = 0U;
     s_vbus_disarmed = 0U;
     s_vbus_disarms  = 0U;
+    hold_clear();
+    s_hold_reasserts = 0U;
 }
 
 /* ------------------------------------------------------------------ 驾驶 */
@@ -98,6 +137,24 @@ uint8_t HostExt_DriveWatchdogTrips(void)
     return s_trips;
 }
 
+/* ★2026-10-18：HOLD 状态 —— 0 = 没在保持，1 = 正在转，2 = 已到位锁存。
+ * "到位"沿用角度环自己的锁存（gyro_control.c 的 s_settled：|err|<settle_deg 且 |v|<settle_rate
+ * 持续 settle_ms ⇒ corr=0），这里按 |误差| 近似判断，够界面显示用。 */
+uint8_t HostExt_HoldState(void)
+{
+    if (s_mode != HOST_DRIVE_HOLD || s_hold_valid == 0U) {
+        return 0U;
+    }
+    if (GyroControl_IsEnabled() == 0U) {
+        return 0U;
+    }
+    {
+        float e = GyroControl_HeadingError();
+        if (e < 0.0f) e = -e;
+        return (e <= 1.5f) ? 2U : 1U;
+    }
+}
+
 void HostExt_DriveStop(void)
 {
     /* 用户 m29239：WHEELS 直给模式下 Motion 一直停在 IDLE，而 motion.c 的
@@ -109,6 +166,7 @@ void HostExt_DriveStop(void)
     s_mode = HOST_DRIVE_OFF;
     s_a    = 0;
     s_b    = 0;
+    hold_clear();          /* ★2026-10-18：真停车才清 HOLD 目标；松手不清（松手对固件不可见） */
 }
 
 /* ------------------------------------------------ 母线低压保护（用户 m29239） */
@@ -172,6 +230,41 @@ void HostExt_Task(uint32_t now_ms)
 {
     low_voltage_guard(now_ms);      /* 跟驾驶会话无关：没在驾驶时也要盯着电池 */
 
+    /* ★2026-10-18 HOLD 模式的存活检查（必须在 500ms 看门狗之前）：
+     *  HOLD 靠上位机继续发帧 + 桥的 200ms 保活维持，所以这里只关心环还在不在。
+     *  ① 任务解释器抢电机 ⇒ 主动让出（不然两边打架）
+     *  ② 环没了（陀螺失联保护 / 别人 Stop / Motion 掉出 GYRO）⇒ 失效即退出，**绝不自己恢复**
+     *     否则陀螺失联保护停完车，HOLD 会每拍把环重新拉起来 ⇒ 反复重启。
+     *  连续 HOST_HOLD_DEAD_MS 才判，躲开 TIM6 切换模式时的瞬时读。 */
+    if (s_mode == HOST_DRIVE_HOLD) {
+        float tgt_now = s_hold_target;
+        if (TaskRun_IsRunning() != 0U) {
+            g_stop_src[1]++;
+            HostExt_DriveStop();
+            return;
+        }
+        if (Motion_GetMode() == MOTION_GYRO && GyroControl_IsEnabled() != 0U &&
+            Motion_GetFault() == MOTION_FAULT_NONE) {
+            s_hold_dead_ms = 0U;
+            /* 目标被别处改掉（任务/循迹/别的模式）就补回来。健康时应恒为 0 次。 */
+            if (s_hold_valid != 0U) {
+                float d = hold_norm180(GyroControl_GetTargetAngle() - tgt_now);
+                if (d > 0.05f || d < -0.05f) {
+                    GyroControl_SetTargetAngle(tgt_now);
+                    s_hold_reasserts++;
+                }
+            }
+        } else {
+            if (s_hold_dead_ms == 0U) {
+                s_hold_dead_ms = (now_ms != 0U) ? now_ms : 1U;
+            } else if ((uint32_t)(now_ms - s_hold_dead_ms) >= HOST_HOLD_DEAD_MS) {
+                g_stop_src[1]++;
+                HostExt_DriveStop();
+                return;
+            }
+        }
+    }
+
     if (s_mode == HOST_DRIVE_OFF) {
         return;
     }
@@ -232,6 +325,30 @@ int HostExt_DriveSet(uint8_t mode, int a, int b)
         SpeedControl_SetTarget(a, b);             /* 每帧都更新目标（这样才跟得上）*/
         s_mode = HOST_DRIVE_WHEELS;
         return 0;
+
+    case HOST_DRIVE_HOLD: {
+        /* b = 绝对目标航向 × 10。范围检查在 host_link.c 也做了（协议层早退）。 */
+        float tgt = (float)b * 0.1f;
+        if (!(tgt >= -180.0f && tgt <= 180.0f)) {
+            return -1;                 /* 同时挡住 NaN */
+        }
+        tgt = hold_norm180(tgt);
+        {
+            float d = hold_norm180(tgt - s_hold_target);
+            /* ★只在 ①首帧 ②目标真变了 ③环被别处停了 时才写目标。
+             * 每帧无条件写会清积分和到位锁存 ⇒ 到点后微抖（见 host_ext.h 的 HOST_HOLD_EPS_DEG）。 */
+            if (s_mode != HOST_DRIVE_HOLD || s_hold_valid == 0U ||
+                d > HOST_HOLD_EPS_DEG || d < -HOST_HOLD_EPS_DEG ||
+                Motion_GetMode() != MOTION_GYRO || GyroControl_IsEnabled() == 0U) {
+                hold_push(a, tgt);
+            } else {
+                Motion_SetSpeed(a);        /* 只跟基准速度（纯赋值，不碰目标） */
+                s_hold_base = a;
+            }
+        }
+        s_mode = HOST_DRIVE_HOLD;
+        return 0;
+    }
 
     case HOST_DRIVE_BASE:
         Motion_SetSpeed(a);
@@ -411,8 +528,24 @@ void HostExt_GrayLevel(uint8_t out[8])
 
 float HostExt_TracePos(void)      { return PID_Tracing_TracePos(); }
 float HostExt_TracePid(void)      { return PID_Tracing_PidOutput(); }
-float HostExt_AngleErr(void)      { return GyroControl_HeadingError(); }
-float HostExt_AngleRateRef(void)  { return GyroControl_DebugRateRef(); }
-float HostExt_AngleCorr(void)     { return GyroControl_DebugCorr(); }
+/* ★2026-10-18：环没使能时一律报 0。
+ * 起因（子 Agent 审计）：`gyro_control.c` 的 target_angle 上电初值是 0.0f，而且**从来不会被
+ * 初始化成当前航向**（只有 GyroControl_Start() 才设），而 HeadingError() 里没有
+ * "未使能 ⇒ 0" 的门 ⇒ 上电后只要没进过角度环模式，遥测就是 err = 0 − 当前航向
+ * （车头 137° 就显示 −137.5°）⇒ 用户以为是"一进 IMU 页就有误差"。
+ * 同理 s_dbg_rate_ref / s_dbg_corr 只在使能时更新、Stop 也不清 ⇒ 未接管时冻结在上次的值。
+ * 这里只影响遥测（host_link.c 是唯一消费点），**不碰任何控制律**。 */
+float HostExt_AngleErr(void)
+{
+    return (GyroControl_IsEnabled() != 0U) ? GyroControl_HeadingError() : 0.0f;
+}
+float HostExt_AngleRateRef(void)
+{
+    return (GyroControl_IsEnabled() != 0U) ? GyroControl_DebugRateRef() : 0.0f;
+}
+float HostExt_AngleCorr(void)
+{
+    return (GyroControl_IsEnabled() != 0U) ? GyroControl_DebugCorr() : 0.0f;
+}
 int   HostExt_TraceCross(void)    { return (tracing_cross() != 0U) ? 1 : 0; }
 int   HostExt_TraceLost(void)     { return (tracing_lost() != 0U) ? 1 : 0; }

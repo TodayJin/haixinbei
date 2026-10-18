@@ -98,6 +98,14 @@
 #define HP_GYRO_RATE_MAX     0x010Du  /* 期望角速度上限 °/s */
 #define HP_GYRO_CORR_LIMIT   0x010Eu  /* 修正量限幅（PWM 刻度） */
 #define HP_GYRO_CORR_SLEW    0x010Fu  /* 修正量斜率限幅（PWM/s） */
+#define HP_STRAIGHT_TRIM     0x0118u  /* ★2026-10-18 直行差速补偿（PWM 刻度，±1000）。
+                                      * trim > 0 ⇒ 右轮多给、左轮少给，用来抵消"直行往右偏"。
+                                      * 为什么必须有：固件台架表（speed_control.c:47-53）自证同一 PWM 下
+                                      * 左右轮差 6~7%（左快），而 motion.c 直行时两轮给同一基准、参数表里
+                                      * 没有任何 trim ⇒ 约 7°/s 的恒定偏航扰动没人补。
+                                      * 实测：把 ang_kp/rate_kp 放大到 6/40 会直接失稳（原地 90° 超调 78%），
+                                      * 所以只能从源头补偿，不能靠加增益硬顶。
+                                      * 0 = 关（默认）；只在 |基准速度| ≥ 300 时生效，倒车自动反向。 */
 #define HP_GYRO_SETTLE_DEG   0x0110u  /* 停车带半宽 °（|err| 内认为到位） */
 #define HP_GYRO_SETTLE_MS    0x0111u  /* 待在停车带里多久算到位 ms */
 #define HP_GYRO_CORR_REF     0x0112u  /* 差速天花板随基准速度放大的参考刻度（0 = 关闭，退回旧行为） */
@@ -131,9 +139,10 @@
 #define HOST_CAP_FLASH       (1u << 5)
 #define HOST_CAP_WATCHDOG    (1u << 6)
 #define HOST_CAP_TASK        (1u << 7)   /* 上位机任务程序：T_TASK_*（0x60..0x69）+ Flash 三槽 */
+#define HOST_CAP_HOLD        (1u << 8)   /* ★2026-10-18：T_DRIVE 支持 mode=5（HOLD，绝对目标航向） */
 #define HOST_CAP_ALL         (HOST_CAP_TELEM2 | HOST_CAP_ACTIONS | HOST_CAP_SERVO | \
                               HOST_CAP_DRIVE | HOST_CAP_CAL | HOST_CAP_FLASH | HOST_CAP_WATCHDOG | \
-                              HOST_CAP_TASK)
+                              HOST_CAP_TASK | HOST_CAP_HOLD)
 
 #define HOST_PROTO_VERSION   2u      /* 协议版本：v2 加了扩展帧/动作表/驾驶/看门狗 */
 #define HOST_FW_VERSION      0x0003u /* 固件版本：HELLO 按"高字节.低字节.0"显示 ⇒ 0.3.0。
