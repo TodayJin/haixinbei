@@ -334,7 +334,64 @@ export function ImuPage() {
       <div className="grid gap-3 xl:grid-cols-2">
         <AngleLoopCard />
         <StatusCard />
+        <GyroBiasCard />
       </div>
     </div>
+  )
+}
+
+/**
+ * 陀螺零偏标定卡（2026-10-18 用户要求：放到上位机上）
+ * 调 /api/gyro/cal（固件 0xC1，静止采样 ms 毫秒求平均）=> 零偏写进参数 0x0119。
+ * 标定期间车必须静止；结果直接显示。
+ */
+function GyroBiasCard() {
+  const [bias, setBias] = React.useState<number | null>(null)
+  const [busy, setBusy] = React.useState(false)
+  const [msg, setMsg] = React.useState('')
+
+  const read = async () => {
+    try {
+      const r = await fetch('/api/gyro/bias').then((x) => x.json())
+      if (r && r.ok && typeof r.bias === 'number') setBias(r.bias)
+    } catch { /* 没连车时忽略 */ }
+  }
+
+  const cal = async (ms: number) => {
+    setBusy(true)
+    setMsg('标定中，请别动车…')
+    try {
+      const r = await fetch('/api/gyro/cal?ms=' + ms).then((x) => x.json())
+      if (r && r.ok) {
+        if (typeof r.bias === 'number') setBias(r.bias)
+        setMsg('完成：已用 ' + r.ms + ' ms 采样')
+      } else {
+        setMsg('失败：' + ((r && r.error) || '未知'))
+      }
+    } catch (e) {
+      setMsg('失败：' + String(e))
+    }
+    setBusy(false)
+  }
+
+  React.useEffect(() => { void read() }, [])
+
+  return (
+    <Card
+      title="陀螺零偏标定"
+      right={
+        <span className="num text-[12px] text-slate-300">
+          {bias === null ? '—' : bias.toFixed(3) + ' °/s'}
+        </span>
+      }
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <button className="btn-ghost" disabled={busy} onClick={() => void cal(2000)}>校准 2 秒</button>
+        <button className="btn-ghost" disabled={busy} onClick={() => void cal(3000)}>校准 3 秒</button>
+        <button className="btn-ghost" disabled={busy} onClick={() => void read()}>刷新</button>
+        <span className="text-[11px] text-slate-500">标定时车必须静止；结果写进 0x0119，断电不丢</span>
+      </div>
+      {msg && <div className="mt-2 text-[11px] text-slate-400">{msg}</div>}
+    </Card>
   )
 }
