@@ -103,6 +103,14 @@
                                        *   就锁存、correction=0，角度环不干预（车按机械不对称往右偏）；
                                        * 0 = 行进中不许锁存：角度环一直闭环去纠偏。
                                        * 现场用 0x011A 一条命令对比，不用重烧。 */
+#define HP_GYRO_CORR_DUTY    0x011Cu /* 2026-10-19 出力占空比 %（脉冲驱动），0~100。
+                                      * 100 = 关（默认，行为与以前逐位一致）。
+                                      * <100 = 每 100ms 周期内只在前 duty% 的拍给 corr，其余给 0。
+                                      * 为什么需要：corr 上限 = rate_kp*rate_max，而本车电机起转要≈3450、
+                                      * 维持只要≈1000 ⇒ 把 rate_max 压小会让环路推不动轮子、转动全靠起转助推
+                                      * bang-bang 地踢（实测角速度会超过 rate_max、曲线不线性、趟间差异巨大）。
+                                      * 正确做法：rate_max 保持够大（corr 能过起转阈值），再用占空比降低平均推力。
+                                      * 建议先试 40~70。 */
 #define HP_GYRO_APPROACH_ACC 0x011Bu /* 2026-10-19 刹车曲线（梯形速度规划）减速度 deg/s^2。
                                       * 0 = 关（纯比例 rate_ref = ang_kp*err，与以前逐位一致）。
                                       * >0 = rate_ref = sign(err)*min(rate_max, sqrt(2*a*|err|))

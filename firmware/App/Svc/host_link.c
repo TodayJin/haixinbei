@@ -164,6 +164,7 @@ static const param_spec_t SPECS[] = {
     { HP_STRAIGHT_TRIM, 0.0f, -1000.0f, 1000.0f }, /* 直行差速补偿：>0 = 右轮多给（补右偏） */
     { HP_GYRO_LATCH_MOVING, 0.0f, 0.0f, 1.0f },    /* 行进中是否允许到位锁存：1=允许(旧行为) 0=不允许 */
     { HP_GYRO_APPROACH_ACC, 0.0f, 0.0f, 2000.0f }, /* 刹车曲线减速度 deg/s^2：0=关(纯比例) 建议150~400 */
+    { HP_GYRO_CORR_DUTY, 100.0f, 0.0f, 100.0f },   /* 出力占空比 %：100=关(默认) 建议40~70 */
   /* ---- v2（用户 m13466 的新上位机）：控制环标定量全部进参数表 ----
    * 这几项原来只活在控制模块的 `volatile float` 全局里（台架靠 SWD 直接改），
    * 现在由各控制环每拍从参数表回读（见 gyro_control.c / pid.c / PID_tracing.c），

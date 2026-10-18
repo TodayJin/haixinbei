@@ -1137,6 +1137,26 @@ void GyroControl_Task(void)
     /* 最后一道安全网：把修正量夹到一个有限范围再转 int。
      * 任何一个参数被写坏成 NaN/Inf 都不会跑到 (int) 强转那里去。 */
     if (!(correction >= -1.0e6f && correction <= 1.0e6f)) correction = 0.0f;
+    /* ★2026-10-19 出力占空比（脉冲驱动，默认 100 = 关）：放在"输出到轮子之前"的最后一步。
+     * 每 100ms 周期内只在前 duty% 的拍给 corr，其余拍给 0 ⇒ 平均推力 = duty% × 全力。
+     *
+     * 为什么需要它（代码层面证明「压 rate_max」这条路走不通）：
+     *   corr = rate_kp × (rate_ref − v) ⇒ **corr 上限 = rate_kp × rate_max**。
+     *   现场 rate_kp=10、rate_max=100 ⇒ corr 最多 1000；
+     *   而本车电机**起转要 ≈3450、维持只要 ≈1000**（见 :904 附近的注释与实测）
+     *   ⇒ rate_max 一压小，环路就推不动轮子，转动全靠"起转助推" bang-bang 地踢
+     *     ⇒ 实测角速度会超过设定值、曲线不线性、趟间差异巨大（0%↔40% 超调）。
+     * 正确做法：rate_max 保持够大（corr 能过起转阈值），用占空比来"慢"。
+     * 详见 host_link.h 的 HP_GYRO_CORR_DUTY。 */
+    {
+        float duty = host_param_get(HP_GYRO_CORR_DUTY, 100.0f);
+        if (duty < 99.0f) {
+            uint32_t ph;
+            if (duty < 1.0f) duty = 1.0f;
+            ph = (uint32_t)(HAL_GetTick() % 100U);
+            if (ph >= (uint32_t)duty) correction = 0.0f;
+        }
+    }
     s_dbg_corr = correction;                  /* 只给遥测看 */
 
     // 根据PID输出调整左右轮速度
