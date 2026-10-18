@@ -181,6 +181,7 @@ volatile float s_settle_ms   = 150.0f; /* s_law=3 误差连续待在停车带里
                                         * 只看速率（|v| < s_settle_rate）会漏判（几拍就穿过去了），
                                         * 所以要"带内 + 慢"持续够久；带外一点点放宽 6 倍见下。 */
 /* 低通后的角速度（内环反馈用） */
+static float   s_bias_z    = 0.0f;   /* 2026-10-18 陀螺零偏（°/s），GyroControl_CalibrateBias() 标定 */
 static float s_rate_f    = 0.0f;
 /* 起转助推的最小间隔（ms）：助推一撤就进冷却，冷却期内不许再点火。
  * 没有它，车在死区边缘一停，助推又满幅点着，把车再射出去 ——
@@ -362,6 +363,35 @@ void GyroControl_Init(void)
 /**
  * @brief 启动陀螺仪控制：把"现在"的航向记成目标
  */
+/* 2026-10-18 用户要求：在"模块测试 → IMU"里做零偏标定。
+ * 车必须静止（校准期间不动）。采样 ms 毫秒的 Gyro_Z 求均值 => s_bias_z，
+ * 之后所有角速度都用 (Gyro_Z - s_bias_z)，消掉温漂/残余偏置造成的"自己转"。
+ * 返回标定到的偏置（°/s），0 表示失败（陀螺没数据）。 */
+float GyroControl_CalibrateBias(uint32_t ms)
+{
+    uint32_t t0 = HAL_GetTick();
+    double   sum = 0.0;
+    uint32_t n = 0U;
+    while ((HAL_GetTick() - t0) < ms) {
+        float g = Gyro_Z;
+        if (g == g && g > -4000.0f && g < 4000.0f) {   /* NaN 与明显异常跳过 */
+            sum += (double)g;
+            n++;
+        }
+        HAL_Delay(1);
+    }
+    if (n < 20U) return 0.0f;
+    s_bias_z = (float)(sum / (double)n);
+    if (s_bias_z > 5.0f)  s_bias_z =  5.0f;   /* 夹住，防止误标出一个巨大的偏置 */
+    if (s_bias_z < -5.0f) s_bias_z = -5.0f;
+    return s_bias_z;
+}
+
+float GyroControl_BiasZ(void)
+{
+    return s_bias_z;
+}
+
 void GyroControl_Start(void)
 {
     target_angle = NormalizeAngle(Yaw);
@@ -622,7 +652,7 @@ void GyroControl_Task(void)
      * 读数在 +65 和 −24 之间跳）。τ≈12ms，相对 5ms 的控制拍只引入很小的相位滞后。 */
     {
         float a = gyro_sane(s_rate_lpf);  /* NaN/±Inf 的系数会让 s_rate_f 永久变 NaN */
-        float g = gyro_sane(Gyro_Z);      /* 见 gyro_sane：挡住 NaN/±Inf */
+        float g = gyro_sane(Gyro_Z - s_bias_z);   /* 2026-10-18：减掉标定过的零偏 */
         if (a < 0.0f) a = 0.0f;
         if (a > 1.0f) a = 1.0f;
         s_rate_f += (g - s_rate_f) * a;

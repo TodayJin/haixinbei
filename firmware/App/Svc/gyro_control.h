@@ -14,7 +14,9 @@ float CalculateAngleError(float target, float actual);
 
 // 陀螺仪保持控制函数
 void GyroControl_Init(void);
-void GyroControl_Start(void);          /* 记当前航向为目标并开始保持 */
+void GyroControl_Start(void);
+float GyroControl_CalibrateBias(uint32_t ms);   /* 静止零偏标定，返回 °/s */
+float GyroControl_BiasZ(void);          /* 记当前航向为目标并开始保持 */
 void GyroControl_Stop(void);
 void GyroControl_SetBaseSpeed(int left, int right);
 void GyroControl_Task(void);

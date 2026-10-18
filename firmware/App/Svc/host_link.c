@@ -160,6 +160,7 @@ static const param_spec_t SPECS[] = {
   { HP_GYRO_BRAKE_GAIN,     2.0f,     1.0f,       10.0f },   /* ★刹车增强系数，见 host_link.h */
   { HP_GYRO_V_FLOOR,        0.0f,     0.0f,      120.0f },   /* ★逼近段最低转率，0=关 */
   { HP_GYRO_SETTLE_RATE,   30.0f,     0.0f,      300.0f },   /* ★到位锁存角速度阈值 */
+    { 0x0119, 0.0f, -10.0f, 10.0f },   /* 陀螺零偏 °/s（校准后写入） */
   /* ---- v2（用户 m13466 的新上位机）：控制环标定量全部进参数表 ----
    * 这几项原来只活在控制模块的 `volatile float` 全局里（台架靠 SWD 直接改），
    * 现在由各控制环每拍从参数表回读（见 gyro_control.c / pid.c / PID_tracing.c），
@@ -415,7 +416,7 @@ enum { ST_OK = 0x00, ST_UNKNOWN_TYPE = 0x02, ST_BAD_PARAM = 0x03,
 
 enum { CMD_STOP = 0x01, CMD_START_A = 0x02, CMD_START_B = 0x03, CMD_START_C = 0x04,
        CMD_CALIB_GYRO = 0x05, CMD_SAVE_PARAMS = 0x06, CMD_CLEAR_FAULT = 0x07,
-       CMD_SET_TELEM_HZ = 0x08, CMD_RESET = 0x09, CMD_SET_LOGGING = 0x0A,
+       CMD_SET_TELEM_HZ = 0x08, CMD_CAL_GYRO_BIAS = 0xC1, CMD_GET_GYRO_BIAS = 0xC2, CMD_RESET = 0x09, CMD_SET_LOGGING = 0x0A,
        CMD_SET_TELEM_MODE = 0x0F };
 
 /* v2：能力位（T_HELLO 末尾 u32）——上位机据此决定页面显示什么，不靠猜版本号 */
@@ -1206,6 +1207,17 @@ static void handle_frame(uint8_t type, uint8_t seq, const uint8_t *p, uint8_t le
       s_telem_mode = (uint8_t)arg;
       send_ack(seq, ST_OK);
       break;
+    case CMD_CAL_GYRO_BIAS: {
+      float b = GyroControl_CalibrateBias(500u);
+      host_param_set_local(0x0119u, b);
+      send_ack(seq, ST_OK);
+      break;
+    }
+    case CMD_GET_GYRO_BIAS: {
+      host_param_set_local(0x0119u, GyroControl_BiasZ());
+      send_ack(seq, ST_OK);
+      break;
+    }
     case CMD_RESET:       send_ack(seq, ST_OK); HAL_Delay(5); NVIC_SystemReset(); break;
     /* 下面几个还没实现，明确回"未就绪"，不假装成功 */
     case CMD_CALIB_GYRO:
