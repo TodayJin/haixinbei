@@ -237,15 +237,16 @@ describe('MAX_LEAD 领先保护（2026-10-07 真车实测：领先过 180° 车�
     return { rt, turns, maxLead, yaw }
   }
 
-  it('车跟不上（设 180°/s、车只有 80°/s）⇒ 目标贴着车走，领先恒 ≤ MAX_LEAD', () => {
-    const h = hold(60, 180, 80) // 6s：不保护的话目标早到 540°、领先 300°+
-    expect(h.maxLead).toBeLessThanOrEqual(MAX_LEAD + 1e-6)
+  it('★2026-10-19 新语义：按住时目标**一直涨**（不因车跟不上而拉回）', () => {
+    const h = hold(60, 180, 80) // 6s：按住不放
+    // 用户要求「按住时持续改变，松开保持不变」⇒ 按住期间领先可以超过 MAX_LEAD
+    expect(h.maxLead).toBeGreaterThan(MAX_LEAD)
     // 一直按到底：目标仍然顶到 HOLD_LIMIT（车转过 540° 就该停），只是"贴着车"走完的
     expect(h.rt.offset).toBe(HOLD_LIMIT)
     // hold 的绝对航向物理上在 (-180,180] ⇒ 540° 等价于 180°
     expect(h.turns.at(-1)).toBe(norm180(HOLD_LIMIT))
-    // 大部分拍都在发帧（目标前进或被拉回）；最后几拍目标饱和、车追上了才不发
-    expect(h.turns.length).toBeGreaterThan(40)
+    // 目标涨到 HOLD_LIMIT 就饱和，之后不再发新帧（不会像旧行为那样被反复拉回）
+    expect(h.turns.length).toBeGreaterThan(10)
     expect(h.turns.length).toBeLessThanOrEqual(60)
   })
 
@@ -255,9 +256,27 @@ describe('MAX_LEAD 领先保护（2026-10-07 真车实测：领先过 180° 车�
     expect(h.turns).toEqual([0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99, 108, 117, 126, 135, 144, 153, 162, 171])
   })
 
-  it('车被打滑/拽回转 40° ⇒ 领先被拉回 MAX_LEAD（不会推到 180° 的翻号线）', () => {
-    const h = hold(60, 180, 80, { at: 30, deg: -40 })
+  it('★松开时若车被外力带偏 ⇒ 仍拉回到 MAX_LEAD（防 180° 翻号倒拐）', () => {
+    // 注意：turnRate=0 = 没按转向键（松开）。此时车被拽着转，领先会超线 ⇒ 必须拉回。
+    const h = hold(60, 0, 80, { at: 30, deg: -40 })
     expect(h.maxLead).toBeLessThanOrEqual(MAX_LEAD + 1e-6)
+  })
+
+  it('★用户要求：按住持续改变、松开后保持不变', () => {
+    let rt: DriveRuntime = initDriveRuntime()
+    let yaw = 0
+    // 按住 A 转 10 拍（90°/s ⇒ 每拍 +9°）
+    for (let i = 0; i < 10; i++) {
+      rt = stepDrive(rt, intent({ turnRate: 90 }), i === 0 ? 0 : 100, yaw).rt
+      yaw = norm180(yaw + 9)
+    }
+    const held = rt.offset
+    expect(held).toBeCloseTo(81, 0)          // 按住期间一直在涨（首拍 dt=0 不计）✓
+    // 松开 10 拍（turnRate=0），车停住不动
+    for (let i = 0; i < 10; i++) {
+      rt = stepDrive(rt, intent({ turnRate: 0 }), 100, yaw).rt
+    }
+    expect(rt.offset).toBeCloseTo(held, 6)   // 松开后保持不变 ✓
   })
 
   it('不传航向（老调用）时保护不生效 —— 行为与以前逐位相同', () => {
