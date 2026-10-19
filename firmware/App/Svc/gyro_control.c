@@ -988,7 +988,14 @@ void GyroControl_Task(void)
                  * pivot 的超调从 0~19 度恶化到 55~67 度，而设 0 又会让循迹贴边推不动。
                  * ⇒ 两边要求的取值相反，只能按工况分开。加 ff_rate != 0 的判据后：
                  *   循迹（ff!=0）继续用 v_floor ✓  原地转（ff==0）不再受它影响 ✓ */
-                if (ff_rate != 0.0f && s_v_floor > 0.0f && fabsf(rate_ref) < s_v_floor) {
+                /* ★2026-10-19 修：门控条件从 ff_rate != 0 改成 base != 0（在行驶）。
+                 * 上一版用 ff_rate 判据，导致**直行（无循迹前馈）时 v_floor 被跳过** ——
+                 * 而 v_floor 正是"航向误差只有几度时也要给足推力、别被静摩擦卡住"的保底量。
+                 * 没有它 ⇒ 小误差时 corr 太小推不动电机 ⇒ 角度环等于不工作 ⇒ 车往右偏。
+                 * 正确的划分是：**原地转（base==0）不用 v_floor**（会过刹车/超调），
+                 * 而**循迹和直行（base!=0）都要用它**（贴边/微小偏差的保底推力）。 */
+                if ((base_speed_left != 0 || base_speed_right != 0) &&
+                    s_v_floor > 0.0f && fabsf(rate_ref) < s_v_floor) {
                     rate_ref = (rate_ref >= 0.0f) ? s_v_floor : -s_v_floor;
                 }
             }
