@@ -1137,6 +1137,18 @@ void GyroControl_Task(void)
     /* 最后一道安全网：把修正量夹到一个有限范围再转 int。
      * 任何一个参数被写坏成 NaN/Inf 都不会跑到 (int) 强转那里去。 */
     if (!(correction >= -1.0e6f && correction <= 1.0e6f)) correction = 0.0f;
+    /* ★2026-10-19 右转增益缩放（默认 100 = 不缩放）：只压「往右转」那一侧的增益。
+     * 见 host_link.h 的 HP_GYRO_RIGHT_SCALE 说明。判据用 s_dbg_rate_ref 的符号
+     * （law3 里已经写好本拍期望角速度），左转路径完全不受影响。 */
+    {
+        float rs = host_param_get(HP_GYRO_RIGHT_SCALE, 100.0f);
+        if (rs < 99.0f || rs > 101.0f) {
+            float ref_now = s_dbg_rate_ref;
+            if (ref_now < -0.5f) {
+                correction *= rs * 0.01f;   /* 往右转：按 % 缩放 */
+            }
+        }
+    }
     /* ★2026-10-19 出力占空比（脉冲驱动，默认 100 = 关）：放在"输出到轮子之前"的最后一步。
      * 每 100ms 周期内只在前 duty% 的拍给 corr，其余拍给 0 ⇒ 平均推力 = duty% × 全力。
      *
