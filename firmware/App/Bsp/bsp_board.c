@@ -260,10 +260,12 @@ void bsp_periodic_start(void)
      * 都是 5（数字越小越高）⇒ **5ms 的运动控制拍会被显示/传感器中断抢占**
      * ⇒ 控制周期抖动 ⇒ 角度环/速度环相位不稳 ⇒ 表现为"抖"。
      * motion.c 的 g_isr_over 一直在量这个现象（ISR 超时），只是没归因到优先级。
-     * 控制环必须最高优先级：6 -> 0。 */
-    HAL_NVIC_SetPriority(TIM6_DAC_IRQn, 0, 0);
+     * ⚠2026-10-19 实测回退：提到 0 之后原地转直接失去控制（峰值 300deg、末值随机）
+     *   ⇒ 推测 5ms 控制拍抢占 I2C/UART 事务中间态、撕坏传感器数据。
+     *   **保持 6**（与历史一致）；要提升时序也应该只提到 4（低于外设，但高于显示）。 */
+    HAL_NVIC_SetPriority(TIM6_DAC_IRQn, 6, 0);
     HAL_NVIC_EnableIRQ(TIM6_DAC_IRQn);
-    HAL_NVIC_SetPriority(TIM7_DAC_IRQn, 0, 0);   /* G4 上 TIM7 与 DAC2/4 共用这一条中断向量；同 B10 提到 0 */
+    HAL_NVIC_SetPriority(TIM7_DAC_IRQn, 6, 0);   /* G4 上 TIM7 与 DAC2/4 共用这一条中断向量；同 B10 提到 0 */
     HAL_NVIC_EnableIRQ(TIM7_DAC_IRQn);
 
     (void)HAL_TIM_Base_Start_IT(&htim6);
