@@ -1043,6 +1043,18 @@ void GyroControl_Task(void)
                                       * 试过"朝目标滑行就不刹"（err*v > 0 也松手，指望摩擦把最后
                                       * 1~2° 补上）：收尾误差没变小，反而多出 4.7° 的冲过头 ⇒ 否。 */
             }
+            /* ★2026-10-19 最小修正量（默认 0 = 关）：见 host_link.h 的 HP_GYRO_CORR_FLOOR。
+             * 插在"停车带清 0 之后、起转助推之前"：
+             *   收尾段误差只剩十几度 ⇒ 环路算出的 corr 只有 200 左右 ⇒ 低于起转阈值(≈1000~3450)
+             *   ⇒ 轮子卡住 ⇒ 助推踢一脚动一点又卡 ⇒ **反复踢 = 用户看到的震荡**（实测 corr 在 132~2868 之间跳）。
+             * 给下限后：有误差就一直有够用的推力 ⇒ 不再卡、不再踢 ⇒ 又平顺又快。
+             * **只在 pivot（ff_rate==0）生效**：循迹时 corr 由前馈主导，加下限会和循迹打架。 */
+            if (ff_rate == 0.0f) {
+                float cf = host_param_get(HP_GYRO_CORR_FLOOR, 0.0f);
+                if (cf > 0.0f && fabsf(err) > s_settle_deg && fabsf(correction) < cf) {
+                    correction = (err >= 0.0f) ? cf : -cf;
+                }
+            }
         }
 
         /* 起转助推：停车带外、车真的停住了、而比例量又推不动（起转要 ≈3450）时
