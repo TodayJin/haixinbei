@@ -1148,16 +1148,25 @@ void GyroControl_Task(void)
     /* 最后一道安全网：把修正量夹到一个有限范围再转 int。
      * 任何一个参数被写坏成 NaN/Inf 都不会跑到 (int) 强转那里去。 */
     if (!(correction >= -1.0e6f && correction <= 1.0e6f)) correction = 0.0f;
+    /* ★2026-10-19 左/右转增益缩放（默认 100 = 不缩放）：左右各一个，按本拍 rate_ref 的符号分派。
+     * 为什么需要：实测左右机械不对称（左快右慢 8~11%）⇒ 同一组 ang_kp/rate_kp 下
+     *   两侧的等效增益不同 ⇒ 一边零超调、另一边超调 12~22 度。
+     * 实测：0x011D=70% 把右转从 12~22 度压到 0.4~1.5 度 ✓
+     * ⇒ 再加一个对称的 0x011E 压左转。
+     * 判据互斥：ref > +0.5 走左、ref < -0.5 走右 ⇒ 不会重复相乘 ✓
+     * ★**只在 ff_rate == 0（pivot）时生效**：循迹时 rate_ref 由前馈主导，缩放它没有物理意义，
+     *   而且会让循迹的左右转向行为不可预测 ⇒ 循迹路径逐位不变。 */
     /* ★2026-10-19 右转增益缩放（默认 100 = 不缩放）：只压「往右转」那一侧的增益。
      * 见 host_link.h 的 HP_GYRO_RIGHT_SCALE 说明。判据用 s_dbg_rate_ref 的符号
      * （law3 里已经写好本拍期望角速度），左转路径完全不受影响。 */
-    {
-        float rs = host_param_get(HP_GYRO_RIGHT_SCALE, 100.0f);
-        if (rs < 99.0f || rs > 101.0f) {
-            float ref_now = s_dbg_rate_ref;
-            if (ref_now < -0.5f) {
-                correction *= rs * 0.01f;   /* 往右转：按 % 缩放 */
-            }
+    if (ff_rate == 0.0f) {                 /* 只作用于 pivot，循迹不受影响 */
+        float ref_now = s_dbg_rate_ref;
+        if (ref_now < -0.5f) {
+            float rs = host_param_get(HP_GYRO_RIGHT_SCALE, 100.0f);
+            if (rs < 99.0f || rs > 101.0f) correction *= rs * 0.01f;
+        } else if (ref_now > 0.5f) {
+            float ls = host_param_get(HP_GYRO_LEFT_SCALE, 100.0f);
+            if (ls < 99.0f || ls > 101.0f) correction *= ls * 0.01f;
         }
     }
     /* ★2026-10-19 出力占空比（脉冲驱动，默认 100 = 关）：放在"输出到轮子之前"的最后一步。
