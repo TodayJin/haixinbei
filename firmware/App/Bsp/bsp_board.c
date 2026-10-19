@@ -256,9 +256,14 @@ void bsp_periodic_start(void)
     htim2.Instance = TIM6;
     htim4.Instance = TIM7;
 
-    HAL_NVIC_SetPriority(TIM6_DAC_IRQn, 6, 0);
+    /* ★2026-10-19 修 B10：原来优先级 6，而 I2C1_EV/ER、DMA1_Ch1/2/3、USART3、LPUART1
+     * 都是 5（数字越小越高）⇒ **5ms 的运动控制拍会被显示/传感器中断抢占**
+     * ⇒ 控制周期抖动 ⇒ 角度环/速度环相位不稳 ⇒ 表现为"抖"。
+     * motion.c 的 g_isr_over 一直在量这个现象（ISR 超时），只是没归因到优先级。
+     * 控制环必须最高优先级：6 -> 0。 */
+    HAL_NVIC_SetPriority(TIM6_DAC_IRQn, 0, 0);
     HAL_NVIC_EnableIRQ(TIM6_DAC_IRQn);
-    HAL_NVIC_SetPriority(TIM7_DAC_IRQn, 6, 0);   /* G4 上 TIM7 与 DAC2/4 共用这一条中断向量 */
+    HAL_NVIC_SetPriority(TIM7_DAC_IRQn, 0, 0);   /* G4 上 TIM7 与 DAC2/4 共用这一条中断向量；同 B10 提到 0 */
     HAL_NVIC_EnableIRQ(TIM7_DAC_IRQn);
 
     (void)HAL_TIM_Base_Start_IT(&htim6);

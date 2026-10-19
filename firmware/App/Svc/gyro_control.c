@@ -982,8 +982,14 @@ void GyroControl_Task(void)
             } else {
                 if (rate_ref >  rmax) rate_ref =  rmax;
                 if (rate_ref < -rmax) rate_ref = -rmax;
-                if (s_v_floor > 0.0f && fabsf(rate_ref) < s_v_floor) {
-                    rate_ref = (rate_ref >= 0.0f) ? s_v_floor : -s_v_floor;  /* 可选下限，默认关 */
+                /* ★2026-10-19：v_floor（逼近段最低转率）**只在有循迹前馈时生效**。
+                 * 为什么：它是为"循迹时线贴边、误差小推不动电机"加的保底推力；
+                 * 但 pivot（原地转，ff_rate==0）也吃到了它 —— 实测 v_floor=20 时
+                 * pivot 的超调从 0~19 度恶化到 55~67 度，而设 0 又会让循迹贴边推不动。
+                 * ⇒ 两边要求的取值相反，只能按工况分开。加 ff_rate != 0 的判据后：
+                 *   循迹（ff!=0）继续用 v_floor ✓  原地转（ff==0）不再受它影响 ✓ */
+                if (ff_rate != 0.0f && s_v_floor > 0.0f && fabsf(rate_ref) < s_v_floor) {
+                    rate_ref = (rate_ref >= 0.0f) ? s_v_floor : -s_v_floor;
                 }
             }
             s_dbg_rate_ref = rate_ref;      /* 只给遥测看 */

@@ -110,6 +110,6 @@ void motor_tracing(int speed_zhi,int speed_cha)
         Set_Pwm(1, speed_zhi, speed_cha);
     }
     else {  // 无传感器信号，停止或直行
-        Set_Pwm(2, 290, 290);
+        Set_Pwm(5, 0, 0);   /* 2026-10-19 修 B05：原来 mode=2 是**倒车**（注释却写"停止或直行"） ⇒ 一丢线就倒车。另 Set_Pwm 形参是 uint16_t，传负数会静默变成满速正转。丢线最安全是停车。 */
     }
 }
