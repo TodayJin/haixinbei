@@ -1007,7 +1007,12 @@ void GyroControl_Task(void)
                  * 这也是"同一组参数有时 0% 有时 20~40%"的原因：滑行距离由摩擦力（电压/地面）决定。
                  * 正确判据：修正量是否**反着当前运动方向**出力 —— 用实际角速度 v，与 rate_ref 无关。
                  *   e_brake * v < 0  ⇔  correction 与 v 反号 ⇔ 这一拍是在"刹"，不是在"推"。 */
-                if (e_brake * v < 0.0f) e_brake *= s_brake_gain;
+                /* ★2026-10-19 回退：判据改回 rate_ref。
+                 * 曾经改成 _brake * v < 0，理由是"收尾段 rate_ref 被置 0 ⇒ 乘积恒 0 ⇒ 刹车不生效"。
+                 * 但实测代价太大：滑行段 e_brake*v = -v*v 恒为负 ⇒ **整个收尾滑行都被乘 brake_gain**
+                 * ⇒ 修正量大 1.5 倍 ⇒ 过刹车 ⇒ 冲过头 + 振荡（pivot 从 0~19 度恶化到峰值 150 度）。
+                 * 硬件已核实正常（陀螺静止 0.000 度/秒、手动转 90 度读数 90 度）⇒ 是这一行造成的。 */
+                if (e_brake * rate_ref < 0.0f) e_brake *= s_brake_gain;
                 correction = s_rate_kp * e_brake;
             }
             /* 速率微分阻尼（PD）：对"角速度正在变化"这件事加阻尼。
