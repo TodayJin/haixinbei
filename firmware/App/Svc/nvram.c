@@ -375,9 +375,9 @@ static void apply(const nvram_payload_t *p)
     apply_param_scaled(HP_STRAIGHT_TRIM,     p->straight_trim,         1.0f);
     /* ★v12：热调参数（断电不再丢） */
     apply_param_scaled(HP_GYRO_CORR_FLOOR,   (float)p->tune_corr_floor,   1.0f);
-    apply_param_scaled(HP_GYRO_BRAKE_GAIN,   (float)p->tune_brake_x100,   0.01f);
+    apply_param_scaled(HP_GYRO_BRAKE_GAIN,   (float)p->tune_brake_x100,   100.0f);  /* 注意：本函数是"除以 scale"（150/100=1.5）；写 0.01 会变成 15000 */
     apply_param_scaled(HP_GYRO_SETTLE_RATE,  (float)p->tune_settle_rate,  1.0f);
-    apply_param_scaled(0x0119u,       (float)p->tune_bias_x1000,   0.001f);
+    apply_param_scaled(0x0119u,       (float)p->tune_bias_x1000,   1000.0f); /* 同上：除以 1000 */
     apply_param_scaled(HP_GYRO_LATCH_MOVING, (float)p->tune_latch_moving, 1.0f);
     apply_param_scaled(HP_GYRO_APPROACH_ACC, (float)p->tune_approach_acc, 1.0f);
     apply_param_scaled(HP_GYRO_CORR_DUTY,    (float)p->tune_corr_duty,    1.0f);
