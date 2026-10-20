@@ -21,7 +21,7 @@
 #include <stddef.h>
 
 #define NVRAM_MAGIC      0x31425848UL   /* "HXB1"（小端存下来是 48 58 42 31） */
-#define NVRAM_VERSION    11U             /* v8：舵机动作表 14 → **20** 个（v7：直角转弯开关；v6：角度环差速天花板参考；
+#define NVRAM_VERSION    12U             /* v8：舵机动作表 14 → **20** 个（v7：直角转弯开关；v6：角度环差速天花板参考；
                                          * v5：控制环标定量 + 舵机动作表）。
                                          * ★铁律：**payload 长大就必须升这个版本号** —— 判据是
                                          *   `version == NVRAM_VERSION` 时要求 `length == sizeof(payload)`，
@@ -119,7 +119,21 @@ typedef struct {
     int32_t  straight_trim;         /* ★v11：0x0118 直行差速补偿（PWM 刻度，±1000）。
                                      * 为什么必须固化：它对应"这对电机"的物理不对称量（本车 370），
                                      * 断电丢了就白调了（用户实测：任务里又往右偏 = trim 回 0）。 */
-    uint8_t  pad10[20];             /* 24-4：加了上面的 int32，这里减 4 保持 payload 总长不变 */
+    /* ★v12（2026-10-20）：把「断电就丢」的热调参数固化进来。
+     * 用户反复踩坑：调好的值一断电就回默认（0x0115/0117/0119/011A/011B/011C/011D/011E 都不在表里）。
+     * 手法：**占原来的 pad10[20]，9 个 int16 + pad2 = 20 字节 ⇒ payload 总长度不变**
+     *       ⇒ 完全不碰 `nvram_record_size_must_be_8x` 那个断言（历史上被它坑过）。
+     * 缩放：brake ×100、bias ×1000、其余 ×1（都塞得进 int16）。 */
+    int16_t  tune_corr_floor;       /* 0x011F 最小修正量（实测无效，存着无害） */
+    int16_t  tune_brake_x100;       /* 0x0115 刹车增益 ×100 */
+    int16_t  tune_settle_rate;      /* 0x0117 锁存速率 */
+    int16_t  tune_bias_x1000;       /* 0x0119 陀螺零偏 ×1000 */
+    int16_t  tune_latch_moving;     /* 0x011A 行进中允许锁存 */
+    int16_t  tune_approach_acc;     /* 0x011B 刹车曲线减速度 */
+    int16_t  tune_corr_duty;        /* 0x011C 出力占空比 */
+    int16_t  tune_right_scale;      /* 0x011D 右转缩放 */
+    int16_t  tune_left_scale;       /* 0x011E 左转缩放 */
+    uint8_t  pad10b[2];             /* 9*2 + 2 = 20，与旧 pad10[20] 同尺寸 */
 
     uint8_t  pad7[7];                          /* ★必须凑满 8 字节：下面有编译期断言
                                                 *   `nvram_record_size_must_be_8x`，加 4 字节会当场编不过。 */
@@ -276,6 +290,16 @@ static void snapshot(nvram_payload_t *p)
     p->gyro_v_floor        = (int32_t)(snap_param_scaled(HP_GYRO_V_FLOOR,         1.0f) + 0.5f);
     p->speed_ramp          = (int32_t)(snap_param_scaled(0x0607u,                1.0f) + 0.5f);
     p->straight_trim       = (int32_t)(snap_param_scaled(HP_STRAIGHT_TRIM,         1.0f) + 0.5f);
+    /* ★v12：热调参数（断电不再丢） */
+    p->tune_corr_floor     = (int16_t)(int)(snap_param_scaled(HP_GYRO_CORR_FLOOR,    1.0f)    + 0.5f);
+    p->tune_brake_x100     = (int16_t)(int)(snap_param_scaled(HP_GYRO_BRAKE_GAIN,    100.0f)  + 0.5f);
+    p->tune_settle_rate    = (int16_t)(int)(snap_param_scaled(HP_GYRO_SETTLE_RATE,   1.0f)    + 0.5f);
+    p->tune_bias_x1000     = (int16_t)(snap_param_scaled(0x0119u,        1000.0f) + 0.5f);
+    p->tune_latch_moving   = (int16_t)(int)(snap_param_scaled(HP_GYRO_LATCH_MOVING,  1.0f)    + 0.5f);
+    p->tune_approach_acc   = (int16_t)(int)(snap_param_scaled(HP_GYRO_APPROACH_ACC,  1.0f)    + 0.5f);
+    p->tune_corr_duty      = (int16_t)(int)(snap_param_scaled(HP_GYRO_CORR_DUTY,     1.0f)    + 0.5f);
+    p->tune_right_scale    = (int16_t)(int)(snap_param_scaled(HP_GYRO_RIGHT_SCALE,   1.0f)    + 0.5f);
+    p->tune_left_scale     = (int16_t)(int)(snap_param_scaled(HP_GYRO_LEFT_SCALE,    1.0f)    + 0.5f);
 }
 
 static void apply(const nvram_payload_t *p)
@@ -349,6 +373,16 @@ static void apply(const nvram_payload_t *p)
     apply_param_scaled(HP_GYRO_V_FLOOR,      p->gyro_v_floor,          1.0f);
     apply_param_scaled(0x0607u,              p->speed_ramp,            1.0f);
     apply_param_scaled(HP_STRAIGHT_TRIM,     p->straight_trim,         1.0f);
+    /* ★v12：热调参数（断电不再丢） */
+    apply_param_scaled(HP_GYRO_CORR_FLOOR,   (float)p->tune_corr_floor,   1.0f);
+    apply_param_scaled(HP_GYRO_BRAKE_GAIN,   (float)p->tune_brake_x100,   0.01f);
+    apply_param_scaled(HP_GYRO_SETTLE_RATE,  (float)p->tune_settle_rate,  1.0f);
+    apply_param_scaled(0x0119u,       (float)p->tune_bias_x1000,   0.001f);
+    apply_param_scaled(HP_GYRO_LATCH_MOVING, (float)p->tune_latch_moving, 1.0f);
+    apply_param_scaled(HP_GYRO_APPROACH_ACC, (float)p->tune_approach_acc, 1.0f);
+    apply_param_scaled(HP_GYRO_CORR_DUTY,    (float)p->tune_corr_duty,    1.0f);
+    apply_param_scaled(HP_GYRO_RIGHT_SCALE,  (float)p->tune_right_scale,  1.0f);
+    apply_param_scaled(HP_GYRO_LEFT_SCALE,   (float)p->tune_left_scale,   1.0f);
 }
 
 /* ------------------------------------------------------------------ 写 */
