@@ -341,6 +341,15 @@ static int block_step(const task_block_t *b)
         if (!s_inited) {
             float heading;
             Motion_SetMode(MOTION_GYRO);
+            /* ★2026-10-21 关键修复（用户：「任务里站着转角度特别慢，IMU 里正常」）：
+             * 这里原来**没有把基准速度清 0** ⇒ 若任务前面 SET_SPEED 过（如 4600），
+             * 转弯就变成"边走边转"：left=4600-corr, right=4600+corr，
+             * 而 corr 上限 = rate_kp×rmax = 10×120 = 1200 ⇒ 差速只有 ±1200
+             * ⇒ 两侧 3400/5800 ⇒ 温和地拐 ⇒ **很慢**。
+             * 而上位机 IMU 页的 HOLD 是 base=0 的真原地转（left=-corr, right=+corr），
+             * 全部差速都用来转 ⇒ 快。两者口径不同，所以"IMU 正常、任务慢"。
+             * 修法：TURN_DEG 一开始就把基准速度清 0 ⇒ 与 IMU 页一致。 */
+            GyroControl_SetBaseSpeed(0, 0);
             /* 角度环自己的"当前航向" = 目标 - 误差（比直接读 IMU 全局更贴近环的真实口径） */
             heading = NormalizeAngle(GyroControl_GetTargetAngle() - GyroControl_HeadingError());
             s_turn_target = NormalizeAngle(heading + (float)b->p1);
