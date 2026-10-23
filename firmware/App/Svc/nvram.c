@@ -133,7 +133,9 @@ typedef struct {
     int16_t  tune_corr_duty;        /* 0x011C 出力占空比 */
     int16_t  tune_right_scale;      /* 0x011D 右转缩放 */
     int16_t  tune_left_scale;       /* 0x011E 左转缩放 */
-    uint8_t  pad10b[2];             /* 9*2 + 2 = 20，与旧 pad10[20] 同尺寸 */
+    uint8_t  tune_boost_gap;        /* 0x0113 起转助推冷却 ms（0~255） */
+    uint8_t  tune_boost_rate_k;     /* 0x0114 起转助推斜率 / 1000（实测 60~200） */
+    /* 9*2 + 2 = 20，与旧 pad10[20] 同尺寸 */
 
     uint8_t  pad7[7];                          /* ★必须凑满 8 字节：下面有编译期断言
                                                 *   `nvram_record_size_must_be_8x`，加 4 字节会当场编不过。 */
@@ -300,6 +302,8 @@ static void snapshot(nvram_payload_t *p)
     p->tune_corr_duty      = (int16_t)(int)(snap_param_scaled(HP_GYRO_CORR_DUTY,     1.0f)    + 0.5f);
     p->tune_right_scale    = (int16_t)(int)(snap_param_scaled(HP_GYRO_RIGHT_SCALE,   1.0f)    + 0.5f);
     p->tune_left_scale     = (int16_t)(int)(snap_param_scaled(HP_GYRO_LEFT_SCALE,    1.0f)    + 0.5f);
+    p->tune_boost_gap      = (uint8_t)(snap_param_scaled(HP_GYRO_BOOST_GAP_MS,  1.0f)    + 0.5f);
+    p->tune_boost_rate_k   = (uint8_t)(snap_param_scaled(HP_GYRO_BOOST_RATE,    0.001f)  + 0.5f);
 }
 
 static void apply(const nvram_payload_t *p)
@@ -383,6 +387,8 @@ static void apply(const nvram_payload_t *p)
     apply_param_scaled(HP_GYRO_CORR_DUTY,    (float)p->tune_corr_duty,    1.0f);
     apply_param_scaled(HP_GYRO_RIGHT_SCALE,  (float)p->tune_right_scale,  1.0f);
     apply_param_scaled(HP_GYRO_LEFT_SCALE,   (float)p->tune_left_scale,   1.0f);
+    apply_param_scaled(HP_GYRO_BOOST_GAP_MS, (float)p->tune_boost_gap,    1.0f);
+    apply_param_scaled(HP_GYRO_BOOST_RATE,   (float)p->tune_boost_rate_k, 0.001f);
 }
 
 /* ------------------------------------------------------------------ 写 */

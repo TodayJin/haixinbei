@@ -246,7 +246,7 @@ static const param_spec_t SPECS[] = {
   { HP_GYRO_ANG_KP,       1.5f,     1.0f,       20.0f },   /* 角度误差 → 期望角速度 (°/s)/°（2026-10-06 定 10，见上） */
   { HP_GYRO_RATE_KP,      10.0f,    10.0f,     2000.0f },   /* 速率环 P（2026-10-06 原地转圈定稿 40，见上） */
   { HP_GYRO_RATE_KD,       0.0f,     0.0f,      100.0f },   /* 速率环 D（默认关：D 项是抖动源） */
-  { HP_GYRO_RATE_MAX,    80.0f,    10.0f,      300.0f },   /* 期望角速度上限 °/s */
+  { HP_GYRO_RATE_MAX,    300.0f,    10.0f,      300.0f },   /* 期望角速度上限 °/s */
   /* ★2026-10-05 第 21 轮真车 A/B 定稿：**2000 → 3000**。
    * 本拍生效的上限是 `cap = limit × max(1, |base| / corr_ref)`（gyro_control.c:485-495），
    * 所以 base=7000 时：旧默认 2000/3000 ⇒ cap 只有 4666，新默认 3000/3000 ⇒ cap 7000。
@@ -286,8 +286,8 @@ static const param_spec_t SPECS[] = {
    * ⚠ 250ms 冷却**不能盲目调小**：它是为了防「撤了又点 ⇒ 来回射」（60° 台阶尾部
    *   ±2~4°、±50°/s 的来回穿梭）。要试小值就 push 着试，随时 push 回 250。
    * 单位与语义见 `gyro_control.c` 的 `s_boost_gap` / `s_boost_rate` 注释。 */
-  { HP_GYRO_BOOST_GAP_MS,  250.0f,     0.0f,     1000.0f },  /* 起转助推冷却 ms（0 = 不冷却，退回 2026-10 之前的行为）*/
-  { HP_GYRO_BOOST_RATE,  60000.0f, 10000.0f,   200000.0f },  /* 起转助推爬升斜率 PWM/s（60000 ⇒ 60ms 到 3600；10000 ⇒ 360ms）*/
+  { HP_GYRO_BOOST_GAP_MS,  60.0f,     0.0f,     1000.0f },  /* 起转助推冷却 ms（0 = 不冷却，退回 2026-10 之前的行为）*/
+  { HP_GYRO_BOOST_RATE,  200000.0f, 10000.0f,   200000.0f },  /* 起转助推爬升斜率 PWM/s（60000 ⇒ 60ms 到 3600；10000 ⇒ 360ms）*/
   { HP_TRACE_ANGLE_PER_UNIT, 12.0f,  0.5f,       60.0f },   /* 串级：重心误差 → 转率 (°/s)/格 */
                                                             /* 2026-10-05 定稿 30（第 20 轮 P 剂量-反应）：
                                                              * P=40/50 会把 rate_ref 顶到 `HP_GYRO_RATE_MAX`
