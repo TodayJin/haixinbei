@@ -204,6 +204,17 @@ static uint16_t s_bl_last_m = 0u;
  * 否则锁存会让任何 ≤200ms 的“需持续”直接失效（等于没要求）。 */
 static uint8_t  s_cond_latch_ok = 1u;
 
+/* ★2026-10-24 审计 F-06："这一路的判断可信吗"。
+ * 为什么需要：ch_black() 在"判不出来"（弱帧/没标定/这一路标定无效）时返回 0，
+ *   这对「等黑」是保守的（要求"确凿是黑"才算），
+ *   但对「等白」就是**反保守**：判不出来也被当成"不黑" ⇒ "全白"当场成立
+ *   ⇒ 弱帧/丢线/刚上电没标定时，状态机被瞬间推过去。
+ * 这里把"可信"单独暴露出来，让 CH_WHITE 要求"确凿是白"。 */
+static uint8_t ch_known(uint8_t i)
+{
+    return (trace_cal_channel(i) >= 0) ? 1u : 0u;
+}
+
 static int cond_ok(uint16_t c, int16_t thr)
 {
     uint8_t i;
@@ -294,8 +305,12 @@ static int cond_ok(uint16_t c, int16_t thr)
             return 0;
         }
         for (i = 0u; i < 8u; i++) {
-            if ((m & (uint16_t)(1u << i)) != 0u && ch_black(i) != 0u) {
-                return 0;                       /* 勾中的某一路压着黑线 ⇒ 不满足 */
+            if ((m & (uint16_t)(1u << i)) == 0u) {
+                continue;
+            }
+            /* 审计 F-06：必须是"**确凿**不黑"，判不出来（弱帧/未标定）不算白 */
+            if (ch_known(i) == 0u || ch_black(i) != 0u) {
+                return 0;
             }
         }
         return 1;
@@ -494,7 +509,11 @@ static int block_step(const task_block_t *b)
     }
 
     case TASK_OP_CROSS_CLEAR:
+        /* ★2026-10-24 审计 F-05：原来只清 tracing 那边的标志，**没清 s_cross_n**
+         * （条件 5「累计 N 次」用的就是它）=> "清计数 -> 累计 N 次" 永远提前满足。
+         * 现在两个一起清，语义才是用户以为的"从零开始数"。 */
         tracing_cross_clear();
+        s_cross_n = 0u;
         return 1;
 
     case TASK_OP_CAL_SET:                        /* ★切灰度标定套：0 = 普通 / 1 = 亚克力 */
