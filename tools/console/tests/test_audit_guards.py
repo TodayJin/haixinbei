@@ -140,7 +140,13 @@ def test_speed_full_counts_param_exists():
     sp = P.by_id_or_key("speed_full_counts")
     assert sp is not None, "HP_SPEED_FULL_COUNTS / speed_full_counts 没进参数表"
     assert sp.id == 0x0308
-    assert sp.default == 45.0        # 与固件 SPECS 一致（test_params.py 也会逐项核对）
+    # ★2026-10-24 改成 26（实测车上的值）：
+    #   测试原本期望 45 = 配 cpr=1456 的 MG513X 的物理正确值。
+    #   但现役车一直是 cpr=1456 + full_counts=26（26 是旧电机 JGB37 的值）这一对，
+    #   且**三个环的控制都是用"计数"做的、与 full_counts 无关**，所以控制不受影响。
+    #   唯一后果是 mm/s 遥测刻度偏约 45/26 = 1.73 倍（只影响显示）。
+    #   若改成 45，同样的 base 数字会让车快 1.73 倍 ⇒ 所有速度参数都得重调 ⇒ 不动。
+    assert sp.default == 26.0        # 与车上实测值一致
     assert sp.min == 1.0 and sp.max == 5000.0
 
     cpr = P.by_id_or_key("counts_per_rev")
