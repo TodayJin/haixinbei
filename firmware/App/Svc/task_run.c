@@ -196,6 +196,11 @@ static uint8_t ch_black(uint8_t i)
     return (trace_cal_level(i) >= 128u) ? 1u : 0u;
 }
 
+/* TASK_C_CH_BLACK 的"扫过即算"锁存（约 200ms，按任务 5ms/拍） */
+#define CH_BLACK_LATCH_TICKS 40u
+static uint16_t s_bl_latch = 0u;
+static uint16_t s_bl_last_m = 0u;
+
 static int cond_ok(uint16_t c, int16_t thr)
 {
     uint8_t i;
@@ -237,16 +242,41 @@ static int cond_ok(uint16_t c, int16_t thr)
          *   掩码 = 0 ⇒ **恒不满足**（显式定的语义）：0 路"全黑"是空真，会让这个条件永远立刻
          *   通过 —— 那是陷阱不是本意。掩码只取低 8 位（界面只给 0..255）。 */
         uint16_t m = (uint16_t)thr & 0xFFu;
+        uint8_t allblack = 1u;
 
         if (m == 0u) {
+            s_bl_last_m = 0u;
+            s_bl_latch = 0u;
             return 0;
+        }
+        /* 2026-10-24（用户："等扫到指定黑总是超级不稳定，有时候有有时候没"）：
+         * 根因在下游的滤波里，两条都会让"扫到了却没算到"：
+         *   1) trace_cal_level() 在弱帧(TRACE_FRAME_WEAK) 时直接返回 0
+         *      => 一帧被判弱帧，所有通道瞬间都"不黑" => 条件漏掉；
+         *   2) 好帧的 0/1 走 5 次多数表决(s_vote_lvl) => 车快速扫过一条线时
+         *      这一路只在 1~2 帧里是黑的 => 被表决滤掉 => 快扫不触发、慢扫才触发。
+         * 修法（不动 trace_cal 那套滤波，避免影响循迹）：这里加"扫过即算"的锁存 ——
+         *   任意一拍满足就锁存 CH_BLACK_LATCH_TICKS（约 200ms），期间一直算满足。
+         *   换掩码时自动清锁存，避免上一步的残留让下一步秒过。 */
+        if (m != s_bl_last_m) {
+            s_bl_last_m = m;
+            s_bl_latch = 0u;
         }
         for (i = 0u; i < 8u; i++) {
             if ((m & (uint16_t)(1u << i)) != 0u && ch_black(i) == 0u) {
-                return 0;                       /* 勾中的某一路没压黑线 ⇒ 不满足 */
+                allblack = 0u;
+                break;
             }
         }
-        return 1;
+        if (allblack != 0u) {
+            s_bl_latch = CH_BLACK_LATCH_TICKS;
+            return 1;
+        }
+        if (s_bl_latch > 0u) {
+            s_bl_latch--;
+            return 1;                       /* 锁存期：刚刚扫到过 => 算满足 */
+        }
+        return 0;
     }
     case TASK_C_CH_WHITE: {
         /* ★「指定哪几路是白的」= 上面那条件的镜像：同一个掩码，判据 = **勾中的那几路一路都不黑**
