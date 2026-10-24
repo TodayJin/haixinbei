@@ -211,7 +211,7 @@ describe('块摘要', () => {
   });
 });
 
-describe('「等条件」的「需持续」（flags 低 7 位 ×100ms；与「满足后跳转」共用同一个字节）', () => {
+describe('「等条件」的「需持续」（flags 低 7 位 ×10ms；与「满足后跳转」共用同一个字节）', () => {
   it('① 老任务（flags = 0）⇒ 需持续 = 0 = 「不要求持续」，写回也一个字节都不动', () => {
     const old = blk(OP.WAIT_COND, COND.CH_BLACK, 0xff, 8000, 5); // flags 默认 0（老镜像就长这样）
     expect(old.flags).toBe(0);
@@ -224,20 +224,20 @@ describe('「等条件」的「需持续」（flags 低 7 位 ×100ms；与「�
     expect(describeBlock(old, 15)).toContain('最多 8000ms');
   });
 
-  it('② 填 1000ms ⇒ flags = 10（口径 = 低 7 位 × 100ms，与固件 TASK_WAIT_COND_HOLD_MSK 一致）', () => {
+  it('② 填 1000ms ⇒ flags = 100（口径 = 低 7 位 × 10ms，与固件 TASK_WAIT_COND_HOLD_MSK 一致）', () => {
     const r = withWaitCondHoldMs(0, 1000);
-    expect(r).toMatchObject({ flags: 10, blocked: false, clamped: false, storedMs: 1000 });
+    expect(r).toMatchObject({ flags: 100, blocked: false, clamped: false, storedMs: 1000 });
     expect(waitCondHoldMs(r.flags)).toBe(1000);
-    expect(WAIT_COND_HOLD_UNIT_MS).toBe(100);
-    expect(describeBlock(blk(OP.WAIT_COND, COND.CH_BLACK, 0xff, 6000, 5, 10), 15)).toContain('需持续 1000ms');
+    expect(WAIT_COND_HOLD_UNIT_MS).toBe(10);
+    expect(describeBlock(blk(OP.WAIT_COND, COND.CH_BLACK, 0xff, 6000, 5, 100), 15)).toContain('需持续 1000ms');
   });
 
-  it('③ 填 13000ms（超范围）被拦：夹到 12700ms 并报 clamped = true（界面据此弹人话提示）', () => {
+  it('③ 填 13000ms（超范围）被拦：夹到 1270ms 并报 clamped = true（界面据此弹人话提示）', () => {
     const hi = withWaitCondHoldMs(0, 13000);
     expect(hi.clamped).toBe(true);
     expect(hi.storedMs).toBe(WAIT_COND_HOLD_MAX_MS);
     expect(hi.flags).toBe(127);
-    expect(waitCondHoldMs(hi.flags)).toBe(12700);
+    expect(waitCondHoldMs(hi.flags)).toBe(1270);
     // 负数同理（夹到 0）
     const lo = withWaitCondHoldMs(0, -100);
     expect(lo.clamped).toBe(true);
@@ -247,11 +247,11 @@ describe('「等条件」的「需持续」（flags 低 7 位 ×100ms；与「�
     expect(withWaitCondHoldMs(0, 0).clamped).toBe(false);
   });
 
-  it('按 100ms 一格取整（填 1050 存成 1100），且量化不等于超范围', () => {
-    expect(withWaitCondHoldMs(0, 1050).flags).toBe(11);
-    expect(withWaitCondHoldMs(0, 1050).storedMs).toBe(1100);
-    expect(withWaitCondHoldMs(0, 1050).clamped).toBe(false);
-    expect(waitCondHoldMs(withWaitCondHoldMs(0, 60).flags)).toBe(100);
+  it('按 10ms 一格取整（填 1055 存成 1060），且量化不等于超范围', () => {
+    expect(withWaitCondHoldMs(0, 1055).flags).toBe(106);
+    expect(withWaitCondHoldMs(0, 1055).storedMs).toBe(1060);
+    expect(withWaitCondHoldMs(0, 1055).clamped).toBe(false);
+    expect(waitCondHoldMs(withWaitCondHoldMs(0, 65).flags)).toBe(70);
   });
 
   it('★bit7（满足后跳转）与「需持续」互斥：占着就写不进（原样返回），腾出来就能写', () => {
@@ -265,10 +265,10 @@ describe('「等条件」的「需持续」（flags 低 7 位 ×100ms；与「�
     // 界面上把「满足后」选回「继续往下跑」⇒ 低 7 位腾出来，这一格就能填了
     const freed = withWaitCondJumpTarget(jumped, NO_STATE);
     expect(freed).toBe(0);
-    expect(withWaitCondHoldMs(freed, 1000).flags).toBe(10);
+    expect(withWaitCondHoldMs(freed, 1000).flags).toBe(100);
     // 反向：先写需持续、再选跳转 ⇒ 跳转接管低 7 位（一块上只有一处能留）
     const holdFirst = withWaitCondHoldMs(0, 1000).flags;
-    expect(holdFirst).toBe(10);
+    expect(holdFirst).toBe(100);
     expect(withWaitCondJumpTarget(holdFirst, 7)).toBe(0x87);
     expect(waitCondHoldMs(0x87)).toBe(0);
   });

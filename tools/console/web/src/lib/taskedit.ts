@@ -117,7 +117,9 @@ const speed = (key: FieldKey, label: string, hint: string): FieldSpec => ({ key,
      取值走 `waitCondHoldMs()`、写值走 `withWaitCondHoldMs()`；`flags.bit7 = 1`（已经用了
      「满足后跳转」）时那一格**禁用并说明原因**。摘要里也看得见（`describeBlock()` 会写
      「需持续 1000ms」）。 */
-export const WAIT_COND_HOLD_UNIT_MS = 100
+/* ★2026-10-24（用户要求）：单位从 100ms 改成 **10ms**（与固件 TASK_WAIT_COND_HOLD_UNIT_MS 一致）。
+ *   范围 0..1270ms，精度 10ms。 */
+export const WAIT_COND_HOLD_UNIT_MS = 10
 export const WAIT_COND_HOLD_MAX_MS = 127 * WAIT_COND_HOLD_UNIT_MS
 
 /** 「等条件」这一块的「需持续」是多少毫秒（0 = 不要求持续）。
