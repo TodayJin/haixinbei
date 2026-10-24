@@ -200,6 +200,9 @@ static uint8_t ch_black(uint8_t i)
 #define CH_BLACK_LATCH_TICKS 40u
 static uint16_t s_bl_latch = 0u;
 static uint16_t s_bl_last_m = 0u;
+/* ★审计 A-02 回归修正：只有“不要求持续”（hold_n==0）时才允许锁存。
+ * 否则锁存会让任何 ≤200ms 的“需持续”直接失效（等于没要求）。 */
+static uint8_t  s_cond_latch_ok = 1u;
 
 static int cond_ok(uint16_t c, int16_t thr)
 {
@@ -418,10 +421,13 @@ static int block_step(const task_block_t *b)
          *   计时口径：条件首次成立的那一拍记起始时刻（那一拍算已持续 0ms），此后每 5ms 一拍
          *   检查 now - from >= 需持续；**中途假一次就把这一轮作废**，下次成立重新记起点。
          *   全程不阻塞（本函数每拍被 TaskRun_Tick 调一次），也不影响"超时后跳 p3"那条出路。 */
-        uint8_t  ok     = (uint8_t)cond_ok(b->p0, b->p1);
         uint8_t  hold_n = ((b->flags & TASK_WAIT_COND_JUMP) != 0u)
                               ? 0u
                               : (uint8_t)(b->flags & TASK_WAIT_COND_HOLD_MSK);
+        uint8_t  ok;
+        /* 审计 A-02：只有"不要求持续"时才允许 ch_black 的锁存（见 s_cond_latch_ok） */
+        s_cond_latch_ok = (hold_n == 0u) ? 1u : 0u;
+        ok = (uint8_t)cond_ok(b->p0, b->p1);
         uint32_t need   = (uint32_t)hold_n * TASK_WAIT_COND_HOLD_UNIT_MS;
 
         if (ok == 0u) {

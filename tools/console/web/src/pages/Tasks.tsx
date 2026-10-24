@@ -808,6 +808,11 @@ export function TasksPage() {
       console.warn('[tasks] 烧写失败：', r.error)
       return
     }
+    // ★审计 A-03（2026-10-24）：烧完必须**先刷新目录**再回读校验。
+    //   state.task_get 用目录里的 len 判"回读完不完整"，而 self.tasks 只在 task_list() 时更新；
+    //   原来的顺序是 list(烧前) -> burn -> get(用烧前的 len) => 同名覆盖且长度变化时
+    //   **100% 误报"回读不完整"**，白重读 3 次还跳过逐字节比对。
+    await taskApi.list()
     const back = await taskApi.get(slot)
     setBusy('')
     if (!back.ok) {
