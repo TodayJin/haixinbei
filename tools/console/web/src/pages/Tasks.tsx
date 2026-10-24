@@ -153,9 +153,7 @@ function HoldField({ b, f, onChange }: { b: TaskBlock; f: FieldSpec; onChange: (
 
   return (
     <span className="inline-flex items-center gap-1" onClick={blocked ? blockedToast : undefined}>
-      <NumberField key={nonce} value={cur} min={f.lo}
-          step={WAIT_COND_HOLD_UNIT_MS}
-          onChange={apply} disabled={blocked} />
+      <NumberField key={nonce} value={cur} min={f.lo} onChange={apply} disabled={blocked} />
       {f.unit && <span className="text-[11px] text-slate-600">{f.unit}</span>}
     </span>
   )
