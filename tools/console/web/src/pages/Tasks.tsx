@@ -648,6 +648,9 @@ export function TasksPage() {
   const [status, setStatus] = React.useState<TaskStatus | null>(null)
   const [monitor, setMonitor] = React.useState(false)
   const [busy, setBusy] = React.useState('')
+  /* ★2026-10-25（用户要求）：**运行计时** —— 点开始起计时，一直走到点停止才定格。 */
+  const [runT0, setRunT0] = React.useState<number | null>(null)
+  const [runMs, setRunMs] = React.useState(0)
   /** 编辑器任务编号 → 刚烧进去的车上槽号（读完目录之前用它兜底，见 carSlotOf） */
   const [burned, setBurned] = React.useState<Record<number, number>>({})
   const fileRef = React.useRef<HTMLInputElement | null>(null)
@@ -843,6 +846,13 @@ export function TasksPage() {
    */
   const [fromDispatch, setFromDispatch] = React.useState(1)
 
+  /* 运行计时：每 100ms 刷一次；runT0=null 就停（点停止后定格在当前值） */
+  React.useEffect(() => {
+    if (runT0 === null) return
+    const id = window.setInterval(() => setRunMs(Date.now() - runT0), 100)
+    return () => window.clearInterval(id)
+  }, [runT0])
+
   const doRun = async () => {
     /* 跑的是**车上那个槽**，不是编辑器里的编号：名字对不上就成了"按了开始却跑了别的任务"。
        车上没有这条就直说，别去跑一个碰巧同号的槽。 */
@@ -867,6 +877,8 @@ export function TasksPage() {
     if (r.ok) {
       store.toast('ok', `已启动车上 #${slot}`)
       setMonitor(true)
+      setRunMs(0);
+      setRunT0(Date.now());          /* 运行计时开始 */
     } else {
       store.toast('err', `没启动起来：${humanizeTaskError(r.error)}`)
       console.warn('[tasks] 启动失败：', r.error)
@@ -881,6 +893,10 @@ export function TasksPage() {
       store.toast('ok', '已停车')
       setMonitor(false)
       setStatus(null)
+      setRunT0((t0) => {
+        if (t0 !== null) setRunMs(Date.now() - t0)   /* ★停表：定格在停车那一刻 */
+        return null
+      })
     } else store.toast('err', r.error)
   }
 
@@ -1198,6 +1214,16 @@ export function TasksPage() {
               <button className="btn-ghost !px-2 !py-0.5 text-[11px]" onClick={() => void doStop()} disabled={!!busy || !supported}>
                 <Square size={12} /> 停车
               </button>
+              {runT0 !== null && (
+                <span className="num text-[12px] text-emerald-300" title="点「开始」起计时，点「停车」定格">
+                  ⏱ {(runMs / 1000).toFixed(1)}s
+                </span>
+              )}
+              {runT0 === null && runMs > 0 && (
+                <span className="num text-[12px] text-slate-400" title="上一次运行的用时">
+                  ⏱ {(runMs / 1000).toFixed(1)}s
+                </span>
+              )}
               <Toggle on={monitor} onChange={setMonitor} label={<span className="text-[11px]">监视</span>} disabled={!supported} />
             </div>
           }
