@@ -939,6 +939,18 @@ class Console:
                         "error": f"数据块不连续（off={off}，已有 {len(buf)} B）"}
             buf += data
         info = next((it for it in self.tasks if it["id"] == tid), None)
+        # ★2026-10-24（用户："烧任务一直回读不一致（车上 2880 B / 本地 3027 B）"）：
+        #   上一个循环只在"中间有缺口"时重读；如果**最后几片根本没到**，
+        #   拼出来的 buffer 没有缺口 => 被当成成功返回**短镜像** => 误报不一致 ✗
+        #   3027 = 25×120+27，而 2880 = 24×120 => 正好少最后 2 片，就是这个 bug。
+        #   修法：拼完后用**目录里的应有长度**(decode_task_list_r 的 len) 对比，
+        #         短了/长了就整条重读（幂等），最多重读 2 次，仍不对就报错而不是假装成功。
+        want = (info or {}).get("len")
+        if isinstance(want, int) and want > 0 and len(buf) != want:
+            if _retry < 2:
+                return self.task_get(tid, timeout, _retry + 1)
+            return {"ok": False, "supported": True,
+                    "error": f"回读不完整：收到 {len(buf)} B，目录说 {want} B（差 {want - len(buf)}）—— 再试一次"}
         return {"ok": True, "supported": True, "id": got_id, "hex": bytes(buf).hex(),
                 "len": len(buf),
                 "crc": pr.crc16_ccitt(bytes(buf[12:])) if len(buf) >= 12 else 0,
