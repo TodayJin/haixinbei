@@ -272,10 +272,10 @@ static int cond_ok(uint16_t c, int16_t thr)
             }
         }
         if (allblack != 0u) {
-            s_bl_latch = CH_BLACK_LATCH_TICKS;
+            if (s_cond_latch_ok != 0u) s_bl_latch = CH_BLACK_LATCH_TICKS;
             return 1;
         }
-        if (s_bl_latch > 0u) {
+        if (s_cond_latch_ok != 0u && s_bl_latch > 0u) {
             s_bl_latch--;
             return 1;                       /* 锁存期：刚刚扫到过 => 算满足 */
         }
@@ -382,6 +382,11 @@ static int block_step(const task_block_t *b)
              * 而上位机 IMU 页的 HOLD 是 base=0 的真原地转（left=-corr, right=+corr），
              * 全部差速都用来转 ⇒ 快。两者口径不同，所以"IMU 正常、任务慢"。
              * 修法：TURN_DEG 一开始就把基准速度清 0 ⇒ 与 IMU 页一致。 */
+            /* ★2026-10-24 审计 D-06：上一版只调 GyroControl_SetBaseSpeed(0,0) **无效** ——
+             * motion.c:184 每 5ms 又用 s_base 覆盖回去了，而 TaskRun_Start 把 s_base
+             * 设成 HP_TASK_SPEED（默认 7000）=> 任务里的"原地转"实际仍是边走边转 => 很慢。
+             * 正确修法：连**任务层的基准速度**一起清 0（Motion_SetSpeed 才是 s_base 的主人）。 */
+            Motion_SetSpeed(0);
             GyroControl_SetBaseSpeed(0, 0);
             /* 角度环自己的"当前航向" = 目标 - 误差（比直接读 IMU 全局更贴近环的真实口径） */
             heading = NormalizeAngle(GyroControl_GetTargetAngle() - GyroControl_HeadingError());
@@ -652,6 +657,10 @@ int TaskRun_StartFrom(uint16_t id, uint8_t from_dispatch)
     s_inited    = 0u;
     s_turn_target = 0.0f;
     s_hold_run  = 0u;                            /* 「需持续」计时：新任务从零开始 */
+    /* 审计 F-02（P0）：锁存必须每进一块/每次起跑都清，
+     * 否则同掩码的下一块/重跑会继承上一块的锁存 => 误判「扫到了」。 */
+    s_bl_latch  = 0u;
+    s_bl_last_m = 0xFFFFu;
     s_hold_from = 0u;
     s_if_run    = 0u;                            /* ★「如果…就跳」的满足时间计时：同样从零开始 */
     s_if_from   = 0u;
@@ -751,9 +760,12 @@ void TaskRun_Tick(uint32_t now_ms)
             s_t0_block = now_ms;
             s_started  = 1u;
             s_inited   = 0u;
-            s_hold_run = 0u;                     /* ★换块了：「需持续」的连续计时必须重新开始
-                                                  *   （否则连着两块都成立的「等条件」会继承
-                                                  *    上一块的起点、第二块当场就算"持续够久"） */
+            /* ★换块了：「需持续」的连续计时必须重新开始 */
+            s_hold_run = 0u;
+            /* 审计 F-02（P0）：锁存也必须每进一块/每次起跑都清，
+             * 否则同掩码的下一块 / 重跑会继承上一块的锁存 => 误判「扫到了」。 */
+            s_bl_latch  = 0u;
+            s_bl_last_m = 0xFFFFu;
         }
         TaskProg_ReadBlock(s_prog, (uint32_t)s_off + (uint32_t)s_idx * TASK_BLOCK_LEN, &b);
 

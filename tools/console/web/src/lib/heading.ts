@@ -37,6 +37,11 @@ export const HOLD_LIMIT = 540
  * 碰不到，所以那些档位的行为与以前逐位相同。
  */
 export const MAX_LEAD = 140
+/** 硬上限：**任何情况**（含按住转向键）领先都不许超过它。
+ *  为什么必须 < 180：固件 HOLD 走"取模最近路"，领先一旦 >180° 误差就翻号
+ *  ⇒ 车会突然朝反方向甩头（审计 D-05，2026-10-24）。
+ *  170 留 10° 余量给一拍内的变化量。 */
+export const MAX_LEAD_HARD = 170
 /** 转向速度滑块的上限（°/s）—— 只是"键按着时航向每秒变多少"，不是轮速。 */
 export const TURN_RATE_LIMIT = 180
 /** 操控页把转向速度积分成目标角度的节拍（ms）。 */
@@ -217,6 +222,13 @@ export function stepDrive(
     //     · 没在按（松开）⇒ 航向保持不变；只有当"车被外力带偏"导致领先超线时才拉回，
     //       这一条必须保留：领先被推到 180° 以上时，车上"最短路径"会翻号 ⇒ 车倒拐
     //       （2026-10-07 实测：领先 150° 时车被拽回 40° ⇒ 190° ⇒ 倒拐）。
+    if (turning && Math.abs(lead) > MAX_LEAD_HARD) {
+      // 审计 D-05：按住转向键时允许"持续涨"，但**不许超过硬上限**
+      //（超过 180 固件取模会翻号 => 车突然反向甩头）
+      const excess = Math.abs(lead) - MAX_LEAD_HARD;
+      offset -= Math.sign(lead) * excess;
+      lead = Math.sign(lead) * MAX_LEAD_HARD;
+    }
     if (!turning && Math.abs(lead) > MAX_LEAD) {
       // 领先超线：把目标**朝车拉回来**（不是只"停拧"）。为什么必须拉：车被打滑/被线缆拽/
       // 被挡住时自己会往回转，只停拧的话领先仍会被推过 180°，车上的"最近路"照旧翻号
