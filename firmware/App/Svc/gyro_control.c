@@ -613,6 +613,15 @@ void GyroControl_SetBaseSpeed(int left, int right)
     base_speed_right = right;
 }
 
+
+/* 左右轮缩放的临时覆盖（0 =不覆盖） */
+static float s_scale_ovr = 0.0f;
+
+void GyroControl_SetScaleOverride(float pct)
+{
+    s_scale_ovr = (pct >= 1.0f) ? pct : 0.0f;
+}
+
 /**
  * @brief 本拍生效的修正量（差速）上限：`s_corr_limit` 按基准速度放大（见 s_corr_ref 的注释）
  *
@@ -1178,13 +1187,15 @@ void GyroControl_Task(void)
     /* ★2026-10-19 右转增益缩放（默认 100 = 不缩放）：只压「往右转」那一侧的增益。
      * 见 host_link.h 的 HP_GYRO_RIGHT_SCALE 说明。判据用 s_dbg_rate_ref 的符号
      * （law3 里已经写好本拍期望角速度），左转路径完全不受影响。 */
-    if (ff_rate == 0.0f) {                 /* 只作用于 pivot，循迹不受影响 */
+    /* ★2026-10-26：任务 TURN_DEG 块的左右轮缩放走**临时覆盖**；
+ * 盖着就不读参数表，这样任务结束/中途停车都不会把全局参数污染成块里的值。 */
+        if (ff_rate == 0.0f) {                 /* 只作用于 pivot，循迹不受影响 */
         float ref_now = s_dbg_rate_ref;
         if (ref_now < -0.5f) {
-            float rs = host_param_get(HP_GYRO_RIGHT_SCALE, 100.0f);
+            float rs = (s_scale_ovr > 0.0f) ? s_scale_ovr : host_param_get(HP_GYRO_RIGHT_SCALE, 100.0f);
             if (rs < 99.0f || rs > 101.0f) correction *= rs * 0.01f;
         } else if (ref_now > 0.5f) {
-            float ls = host_param_get(HP_GYRO_LEFT_SCALE, 100.0f);
+            float ls = (s_scale_ovr > 0.0f) ? s_scale_ovr : host_param_get(HP_GYRO_LEFT_SCALE, 100.0f);
             if (ls < 99.0f || ls > 101.0f) correction *= ls * 0.01f;
         }
     }

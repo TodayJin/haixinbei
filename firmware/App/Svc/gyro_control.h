@@ -19,6 +19,11 @@ float GyroControl_CalibrateBias(uint32_t ms);   /* 静止零偏标定，返回 �
 float GyroControl_BiasZ(void);          /* 记当前航向为目标并开始保持 */
 void GyroControl_Stop(void);
 void GyroControl_SetBaseSpeed(int left, int right);
+/* ★2026-10-26（用户发现：任务里填 110 结果全局也变成 110）：
+ * 左右轮缩放的**临时覆盖**（供 TURN_DEG 块用）。
+ * pct = 0 表示不覆盖（用参数表里的 0x011D/0x011E）。
+ * 为什么不直接改参数：改全局会被保存进 Flash，一次没恢复就永久变了。 */
+void GyroControl_SetScaleOverride(float pct);
 void GyroControl_Task(void);
 uint8_t GyroControl_IsEnabled(void);
 

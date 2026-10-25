@@ -201,8 +201,6 @@ static uint8_t ch_black(uint8_t i)
 static uint16_t s_bl_latch = 0u;
 /* ★2026-10-26（用户）：TURN_DEG 的“左右轮缩放”只作用于**这一块**。
  * p3 = 百分数（0 = 用全局值）；进块时临时改全局缩放，出块时恢复。 */
-static uint16_t s_turn_scale_save_r = 0xFFFFu;
-static uint16_t s_turn_scale_save_l = 0xFFFFu;
 static uint16_t s_bl_last_m = 0u;
 /* ★审计 A-02 回归修正：只有“不要求持续”（hold_n==0）时才允许锁存。
  * 否则锁存会让任何 ≤200ms 的“需持续”直接失效（等于没要求）。 */
@@ -410,12 +408,7 @@ static int block_step(const task_block_t *b)
         /* ★这一块专用的"左右轮缩放"（p3，%）：0 = 用全局值（不覆盖）。
          * 30..200 才认，避免写坏的值把轮子卡死。出块时（完成/超时）恢复全局值。 */
         if (b->p3 >= 30u && b->p3 <= 200u) {
-            if (s_turn_scale_save_r == 0xFFFFu) {
-                s_turn_scale_save_r = (uint16_t)host_param_get(HP_GYRO_RIGHT_SCALE, 70.0f);
-                s_turn_scale_save_l = (uint16_t)host_param_get(HP_GYRO_LEFT_SCALE,  70.0f);
-            }
-            host_param_set_local(HP_GYRO_RIGHT_SCALE, (float)b->p3);
-            host_param_set_local(HP_GYRO_LEFT_SCALE,  (float)b->p3);
+            GyroControl_SetScaleOverride((float)b->p3);   /* 只覆盖，不动全局参数 */
         }
             /* 角度环自己的"当前航向" = 目标 - 误差（比直接读 IMU 全局更贴近环的真实口径） */
             heading = NormalizeAngle(GyroControl_GetTargetAngle() - GyroControl_HeadingError());
@@ -424,21 +417,12 @@ static int block_step(const task_block_t *b)
             s_inited = 1u;
         }
         if (fabsf(GyroControl_HeadingError()) <= tol) {
-            /* 出块：恢复全局的左右轮缩放 */
-            if (s_turn_scale_save_r != 0xFFFFu) {
-                host_param_set_local(HP_GYRO_RIGHT_SCALE, (float)s_turn_scale_save_r);
-                host_param_set_local(HP_GYRO_LEFT_SCALE,  (float)s_turn_scale_save_l);
-                s_turn_scale_save_r = 0xFFFFu;
-            }
+            GyroControl_SetScaleOverride(0.0f);   /* 出块：撤掉覆盖（全局参数从未被改） */
             return 1;
         }
         if (b->p0 != 0u && (s_now - s_t0_block) >= (uint32_t)b->p0) {
             s_flags |= TASK_RUN_F_TIMEOUT;
-            if (s_turn_scale_save_r != 0xFFFFu) {   /* 超时出块也要恢复 */
-                host_param_set_local(HP_GYRO_RIGHT_SCALE, (float)s_turn_scale_save_r);
-                host_param_set_local(HP_GYRO_LEFT_SCALE,  (float)s_turn_scale_save_l);
-                s_turn_scale_save_r = 0xFFFFu;
-            }
+            GyroControl_SetScaleOverride(0.0f);   /* 超时出块也撤掉覆盖 */
             return 1;
         }
         return 0;
