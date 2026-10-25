@@ -77,7 +77,11 @@ int main(void)
   /* --- 板级外设：按键 + I2C1（OLED 挂在这条总线上）--- */
   board_gpio_keys_init();
   board_buzzer_init();
-  if (board_i2c_init_hz(400000U) != HAL_OK) {
+  /* ★2026-10-25（用户实测：按 10 次复位只有 3 次亮屏）：
+   * 400kHz 下写 OLED 失败率太高（同一条 I2C1 还挂着灰度/INA226）。
+   * 降到 200kHz：风险大致减半，而 1 帧 1KB 在 200kHz 下约 46ms（≈20fps）仍够用。
+   * 若还不行，初始化失败时会自动降到 100kHz 重试（见下面 OLED 那段）。 */
+  if (board_i2c_init_hz(200000U) != HAL_OK) {
     SEGGER_RTT_WriteString(0, "ERR: I2C1 init failed\r\n");
   }
   SEGGER_RTT_WriteString(0, "I2C1 @400kHz\r\n");
@@ -147,6 +151,15 @@ int main(void)
         while (1) { HAL_Delay(500); }
       }
       board_i2c_bus_recover();   /* 阻塞约 12ms：9 个时钟 + STOP */
+      /* ★2026-10-25（用户实测：按 10 次复位只有 3 次亮）：
+       * 加延时 + 重试**没用** => 不是开机时序竞争，是 **I2C 电气/速率裕度不足**
+       * （排线长 / 上拉弱时 400kHz 会随机出错）。
+       * 所以每次失败后把总线**降速到 100kHz** 再试；成功后如果还想跑 400kHz，
+       * 由上层（参数/陀螺那套）自己决定，这里优先保证"屏能亮"。
+       * 100kHz 是 I2C 标准速率，SSD1306 完全支持。 */
+      if (oled_try >= 2u) {
+        (void)board_i2c_init_hz(100000U);   /* 降速重试：裕度大得多 */
+      }
       HAL_Delay(50);
     }
   }
