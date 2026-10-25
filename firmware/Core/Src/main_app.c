@@ -77,11 +77,9 @@ int main(void)
   /* --- 板级外设：按键 + I2C1（OLED 挂在这条总线上）--- */
   board_gpio_keys_init();
   board_buzzer_init();
-  /* ★2026-10-25（用户实测：按 10 次复位只有 3 次亮屏）：
-   * 400kHz 下写 OLED 失败率太高（同一条 I2C1 还挂着灰度/INA226）。
-   * 降到 200kHz：风险大致减半，而 1 帧 1KB 在 200kHz 下约 46ms（≈20fps）仍够用。
-   * 若还不行，初始化失败时会自动降到 100kHz 重试（见下面 OLED 那段）。 */
-  if (board_i2c_init_hz(200000U) != HAL_OK) {
+  /* 正常运行保持 400kHz（**绝不为了屏幕拖慢循迹/灰度**）。
+   * 屏幕初始化那一段会临时降到 100kHz，成功后再恢复 400kHz —— 见下面 OLED 那段。 */
+  if (board_i2c_init_hz(400000U) != HAL_OK) {
     SEGGER_RTT_WriteString(0, "ERR: I2C1 init failed\r\n");
   }
   SEGGER_RTT_WriteString(0, "I2C1 @400kHz\r\n");
@@ -142,6 +140,9 @@ int main(void)
     /* ★上电后先等 150ms：SSD1306 类屏上电需要时间准备（VCC 稳定 + 内部复位），
      * 而**按复位不会重新给屏上电**（它早就好了）——这正好解释用户的
      * "冷启动不亮、多按几次复位就亮"。 */
+    /* ★2026-10-25（用户明确要求）：**不降速，全程 400kHz**。
+     * 屏幕初始化只靠"上电等 150ms + 失败就总线恢复 + 重试 10 次"，
+     * 绝不为屏幕牺牲总线速率（循迹/灰度优先）。 */
     HAL_Delay(150);
     while (OLED_Init() != OLED_OK) {
       oled_try++;

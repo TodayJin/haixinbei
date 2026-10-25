@@ -132,8 +132,6 @@ static const param_spec_t SPECS[] = {
   { HP_TURN_TOLERANCE,      2.0f,     0.1f,       20.0f },
   { HP_TURN_TIMEOUT,     1500.0f,   100.0f,    10000.0f },
   { HP_YAW_RATE_DAMP,       1.0f,     0.0f,       20.0f },
-  { HP_MARKER_HOLD,         3.0f,     1.0f,       50.0f },
-  { HP_MARKER_MIN_GAP,     50.0f,     0.0f,     5000.0f },
   /* ★2026-10-15：默认值改成**现役电机 MG513X** 的真值。
    * 旧值 1980 = 11(线) × 4(倍频) × 45(减速比)，是**上一代 JGB37-3865-520** 的。
    * MG513X 数据手册（用户提供）：13 线霍尔编码器、减速比 **1:28**、
@@ -143,7 +141,6 @@ static const param_spec_t SPECS[] = {
    * 速度环的控制刻度是 HP_SPEED_FULL_COUNTS（下面那条），两个要一起改。 */
   { HP_COUNTS_PER_REV,   1456.0f,     1.0f,   100000.0f },
   { HP_WHEEL_DIA,          65.0f,    10.0f,      300.0f },
-  { HP_WHEEL_BASE,        150.0f,    10.0f,      500.0f },
   /* 满 PWM(7200) 时每 5ms 的期望编码器计数：速度环的"PWM 刻度 ↔ 计数"换算刻度。
    * ★2026-10-15：改成 MG513X 的真值。
    *   空载 370 rpm ⇒ 370/60 = 6.167 圈/s ⇒ × 1456 计数/圈 = 8980 计数/s
@@ -153,10 +150,6 @@ static const param_spec_t SPECS[] = {
    * 旧值 25 是 JGB37-3865-520（11 线 / 45:1 / 空载 150rpm ⇒ 4950 计数/s = 24.75）的。
    * ⚠ 换电机后 counts_per_rev 与这一项**必须成对改**，否则遥测与环的量纲各差一个比例。 */
   { HP_SPEED_FULL_COUNTS,    26.0f,     1.0f,     5000.0f },
-  { HP_PWM_MAX,          7200.0f,   100.0f,     7200.0f },
-  { HP_VBAT_NOMINAL,    12000.0f,  3000.0f,    30000.0f },
-  { HP_STALL_CURRENT,    2500.0f,   100.0f,    20000.0f },
-  { HP_VBAT_LOW,        10500.0f,  3000.0f,    30000.0f },
   { HP_GYRO_BRAKE_GAIN,     1.5f,     1.0f,       10.0f },   /* ★刹车增强系数，见 host_link.h */
   { HP_GYRO_V_FLOOR,        20.0f,     0.0f,      120.0f },   /* ★逼近段最低转率，0=关 */
   { HP_GYRO_SETTLE_RATE,   30.0f,     0.0f,      300.0f },   /* ★到位锁存角速度阈值 */

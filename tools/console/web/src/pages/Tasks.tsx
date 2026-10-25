@@ -145,7 +145,7 @@ function HoldField({ b, f, onChange }: { b: TaskBlock; f: FieldSpec; onChange: (
       return
     }
     if (r.clamped) {
-      store.toast('err', `「需持续」最多 ${WAIT_COND_HOLD_MAX_MS}ms（12.7 秒）：${nv}ms 超范围，已按 ${r.storedMs}ms 收下。`)
+      store.toast('err', `「需持续」最多 ${WAIT_COND_HOLD_MAX_MS}ms（1.27 秒）：${nv}ms 超范围，已按 ${r.storedMs}ms 收下。`)
       bump()
     }
     onChange({ flags: r.flags })

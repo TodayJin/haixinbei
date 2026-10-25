@@ -129,9 +129,9 @@ export function waitCondHoldMs(flags: number): number {
   return (flags & WAIT_COND_TGT_MASK) * WAIT_COND_HOLD_UNIT_MS
 }
 
-/** 写回「需持续」（单位 ms，**按 100ms 量化**，夹到 0..12700；写 0 = 不要求持续）。
+/** 写回「需持续」（单位 ms，**按 10ms 量化**，夹到 0..1270；写 0 = 不要求持续）。
  *  `blocked = true` 表示"这一块已经设了满足后跳转（bit7 = 1），低 7 位腾不出来" ⇒ flags 原样返回。
- *  `clamped = true` 表示"用户填的数超出 0..12700" ⇒ 已夹到边界（界面据此弹人话提示；
+ *  `clamped = true` 表示"用户填的数超出 0..1270" ⇒ 已夹到边界（界面据此弹人话提示；
  *  `storedMs` 是**真正存下来**的那个毫秒数，便于提示里报准数字）。
  *  语义（界面上要写清的那句）：这段时间内条件必须**一直成立**，**断一次就重新计时**。 */
 export function withWaitCondHoldMs(flags: number, ms: number): { flags: number; blocked: boolean; clamped: boolean; storedMs: number } {
@@ -537,7 +537,7 @@ export function fieldHint(f: FieldSpec, b: TaskBlock): string {
     if (t !== NO_STATE) {
       return `这一格现在填不了：上面「满足后」已经选了要跳到 状态 ${t} —— 它和「需持续」共用同一处，一块上只能留一个。把「满足后」选回「继续往下跑」就能填；要"持续够久再跳走"，改成在这一块后面单独放一块「跳到状态」。`
     }
-    return `${f.hint}。按 100ms 一格取整（填 1050 会存成 1100）；现在 = ${waitCondHoldMs(b.flags)}ms。`
+    return `${f.hint}。按 10ms 一格取整（填 1055 会存成 1060）；现在 = ${waitCondHoldMs(b.flags)}ms。`
   }
   if (f.kind === 'condjump') {
     const t = waitCondJumpTarget(b[f.key])

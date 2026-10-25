@@ -121,7 +121,7 @@ enum {
  *   往后推 —— 能用但不是本意，别这么写。 */
 #define TASK_WAIT_COND_JUMP     0x80u  /* bit7 = 1：条件满足后跳到 TASK_WAIT_COND_TGT_MSK 那个状态 */
 #define TASK_WAIT_COND_TGT_MSK  0x7Fu  /* 低 7 位 = 目标状态号（状态最多 16 个，够用）—— 只在 bit7=1 时解释 */
-#define TASK_WAIT_COND_HOLD_MSK 0x7Fu  /* 低 7 位 = 需持续的 100ms 数（0..127 ⇒ 0..12.7s）—— 只在 bit7=0 时解释 */
+#define TASK_WAIT_COND_HOLD_MSK 0x7Fu  /* 低 7 位 = 需持续的 10ms 数（0..127 ⇒ 0..1.27s）—— 只在 bit7=0 时解释 */
 /* ★2026-10-24（用户要求）：单位从 100ms 改成 **10ms**（精度更高，范围 0..1270ms）。
  *   配套：上位机 taskedit.ts 的 WAIT_COND_HOLD_UNIT_MS 也要改成 10（两处必须一致）。 */
 #define TASK_WAIT_COND_HOLD_UNIT_MS 10u   /* 上面那 7 位的单位：一格 = 10ms（0..127 => 0..1270ms） */

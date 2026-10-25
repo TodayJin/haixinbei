@@ -273,7 +273,7 @@ describe('「等条件」的「需持续」（flags 低 7 位 ×10ms；与「满
     expect(waitCondHoldMs(0x87)).toBe(0);
   });
 
-  it('块库元数据：这一格是 kind = hold、0..12700ms，和「满足后」两行同时在字段表里', () => {
+  it('块库元数据：这一格是 kind = hold、0..1270ms，和「满足后」两行同时在字段表里', () => {
     const wait = OP_SPECS.find((s) => s.op === OP.WAIT_COND)!;
     const hold = wait.fields.find((f) => f.kind === 'hold')!;
     expect(hold.key).toBe('flags'); // 存的就是 flags（key 用 'flags'，页面里 b[f.key] 的类型才对得上）
