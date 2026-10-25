@@ -127,9 +127,28 @@ int main(void)
   SEGGER_RTT_WriteString(0, "JY61P (USART3) init OK\r\n");
 
   /* --- 显示：KK_OLED 初始化（应用负责），随后 KK_UI 接管整屏刷新 --- */
-  if (OLED_Init() != OLED_OK) {
-    SEGGER_RTT_WriteString(0, "ERR: OLED_Init failed\r\n");
-    while (1) { HAL_Delay(500); }
+  /* ★2026-10-25（用户：上电后屏幕经常不亮，多按几次复位才亮）：
+   * 原来 OLED_Init() 失败一次就 while(1) 死等 —— 上电时 I2C 时序偶尔不巧
+   * 就会失败一次，但固件从此卡死（屏幕黑 + 车也不工作）。
+   * 改成：**先做一次总线恢复（手动打 9 个时钟 + STOP，见 board_i2c_bus_recover），
+   * 再重试，最多 10 次**（每次 ~62ms，总计 ~0.6s）。仍失败才保留死循环
+   * （那时确实没救，且没有屏也没法用菜单）。 */
+  {
+    uint8_t oled_try = 0u;
+    /* ★上电后先等 150ms：SSD1306 类屏上电需要时间准备（VCC 稳定 + 内部复位），
+     * 而**按复位不会重新给屏上电**（它早就好了）——这正好解释用户的
+     * "冷启动不亮、多按几次复位就亮"。 */
+    HAL_Delay(150);
+    while (OLED_Init() != OLED_OK) {
+      oled_try++;
+      SEGGER_RTT_WriteString(0, "WARN: OLED_Init failed, recover+retry\r\n");
+      if (oled_try >= 10u) {
+        SEGGER_RTT_WriteString(0, "ERR: OLED_Init failed after 10 tries\r\n");
+        while (1) { HAL_Delay(500); }
+      }
+      board_i2c_bus_recover();   /* 阻塞约 12ms：9 个时钟 + STOP */
+      HAL_Delay(50);
+    }
   }
   app_ui_setup_display();       /* 按安装方向设置屏幕翻转（见 app_ui.h） */
   SEGGER_RTT_WriteString(0, "OLED init OK\r\n");
