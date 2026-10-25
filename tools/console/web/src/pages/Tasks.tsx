@@ -155,6 +155,17 @@ function HoldField({ b, f, onChange }: { b: TaskBlock; f: FieldSpec; onChange: (
     <span className="inline-flex items-center gap-1" onClick={blocked ? blockedToast : undefined}>
       <NumberField key={nonce} value={cur} min={f.lo} onChange={apply} disabled={blocked} />
       {f.unit && <span className="text-[11px] text-slate-600">{f.unit}</span>}
+      {/* ★2026-10-25（用户：「显示的都是毫秒，按正常的来」）：
+          输入/存储仍是毫秒（协议与固件都以 ms 为单位），但**旁边给人话提示**：
+          ≥1000ms 显示成 "1.00 秒"，0 显示"不要求持续"，方便一眼判断。
+          只加提示，不改数据。 */}
+      <span className="text-[11px] text-slate-500">
+        {cur === 0
+          ? String.fromCharCode(0xFF08) + String.fromCharCode(0x4E0D) + String.fromCharCode(0x8981) + String.fromCharCode(0x6C42) + String.fromCharCode(0x6301) + String.fromCharCode(0x7EED) + String.fromCharCode(0xFF09)
+          : cur >= 1000
+            ? String.fromCharCode(0xFF08) + (cur / 1000).toFixed(2) + String.fromCharCode(0x20) + String.fromCharCode(0x79D2) + String.fromCharCode(0xFF09)
+            : String.fromCharCode(0xFF08) + cur + String.fromCharCode(0x20) + String.fromCharCode(0x6BEB) + String.fromCharCode(0x79D2) + String.fromCharCode(0xFF09)}
+      </span>
     </span>
   )
 }
