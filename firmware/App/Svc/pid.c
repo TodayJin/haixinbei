@@ -113,7 +113,15 @@ float PID_Compute(float setpoint, float current_value)
     // 微分项：Kd * (error - last_error)
     //   第一次算（含每次 PID_Reset 之后）不做微分：否则 Kd×(误差-0) 会变成一个
     //   很大的瞬时冲击（Kd=360、误差 5 就是 1800 PWM），起步/重新上线那一下就甩头。
-    d_term = s_has_last ? (Kd * (error - s_last_error)) : 0.0f;
+    /* ★2026-10-27（车速 5000 求稳）：D 项一阶低通。
+     * 这个 PID 现在跑 200Hz（Motion_Task 5ms），而 Kd 当初按 10Hz 标，
+     * Δe 的噪声被放大 20 倍 ⇒ 微分输出拖着轮子抖。低通 0.35，延时约 2 拍（10ms）。 */
+    {
+        static float s_d_lpf = 0.0f;
+        float d_raw = s_has_last ? (error - s_last_error) : 0.0f;
+        s_d_lpf += (d_raw - s_d_lpf) * 0.35f;
+        d_term = Kd * s_d_lpf;
+    }
     output = Kp * error + Ki * s_integral + d_term;
 
     // 保存本次误差，为下次微分项计算做准备

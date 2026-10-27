@@ -442,6 +442,20 @@ void read_tracing_data_pid(void)
             on   = 0;   /* 均匀帧以前 on = 8，还会顺手误报"路口" */
         } else if (num > 0.0f) {
             float pos   = sum / num;   /* 加权重心：1..8 */
+        /* ★2026-10-27（追求在车速 5000 下稳）：上面那个重心用的 w[] 是
+         * „归一化 + 过半高‟的量，**两路都全黑时重心恒等于 4.5**（对横向位移不敏感）
+         * ⇒ 分辨率只有 0.3~、0.5 格 ⇒ kp 输出是阶梯的 ⇒ 极限环。
+         * 这里改用**原始柱高**（trace_cal_level 0..255，边路半亮也算贡献）再算一次重心，
+         * 分辨率能提到 ~0.05 格，而且**不引入任何滤波延时**。
+         * 总黑度不够时不采信（保持原来的落线/边缘逻辑不变）。 */
+        {
+            float num2 = 0.0f, sum2 = 0.0f;
+            for (i = 0; i < 8; i++) {
+                float v = (float)trace_cal_level((uint8_t)i) - 20.0f;   /* 噪声死区 */
+                if (v > 0.0f) { num2 += v; sum2 += v * (float)(i + 1); }
+            }
+            if (num2 > 40.0f) { pos = sum2 / num2; }
+        }
             float cover = 0.0f;
             float m;
 
