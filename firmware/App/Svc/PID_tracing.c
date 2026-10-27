@@ -507,6 +507,10 @@ void read_tracing_data_pid(void)
                 s_ph[1] = s_ph[0];
                 s_ph[0] = pos;
                 a = s_ph[0]; b = s_ph[1]; c = s_ph[2];
+                /* ★2026-10-27 实测：**不要去掉这个中值**。
+                 * 跳过它之后车速 5000 的 std 从 1.12 变成 1.32（更差）——
+                 * 说明亚通道重心（用原始柱高）本身噪声更大，3 帧中值正好在压它。
+                 * 20ms 的滞后不是主因。 */
                 m = (a < b) ? ((b < c) ? b : ((a < c) ? c : a))
                             : ((a < c) ? a : ((b < c) ? c : b));
             }
@@ -689,6 +693,16 @@ void motor_tracing_pid_speed(int base_speed)
     } else {
         if (s_dd_stop) { s_dd_stop = 0U; }   /* #3: 自愈，重新看到线就恢复 */
         pid_output    = PID_Compute(s_setpoint, data);
+        /* ★2026-10-27（车速 5000 求稳）：**陀螺角速度阻尼**。
+         * 差速直出路径只看灰度、**完全没有转动反馈** ⇒ 车身一摆就没人拉住。
+         * 这里减一项 K×Gyro_Z（偏航角速度 °/s）：转得越快，反向拉得越多
+         * ⇒ 活动阻尼，直接压摆动幅度。系数取自参数表（可在界面调/可关）。 */
+        {
+            float kdamp = host_param_get(0x0213u, 0.0f);   /* °/s -> PWM 刻度 */
+            if (kdamp > 0.0f) {
+                pid_output -= kdamp * Gyro_Z;
+            }
+        }
         last_pid_output = pid_output;
     }
 

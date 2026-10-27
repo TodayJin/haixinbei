@@ -169,6 +169,7 @@
                                        *   实现就在 PID_tracing.c 的直角那段（`trace_cal_channel` 半边 4 路检测
                                        *   + 一次转 100° + 原地对转 + 1.5s 防重触发）—— **一行没删**，只由这个
                                        *   参数挡住；在网页「设置/参数」页改成 1 再 push 即可打开。*/
+#define HP_DIFF_YAW_DAMP     0x0213u /* ★差速直出的陀螺角速度阻尼（PWM per °/s），0=关 */
 #define HP_PIVOT_KP          0x0207u  /* 原地 pivot（base=0）循迹 PID：比例 */
 #define HP_PIVOT_KI          0x0208u  /* 原地 pivot：积分（实测 0 最好，防 windup） */
 #define HP_PIVOT_KD          0x0209u  /* 原地 pivot：微分 */
