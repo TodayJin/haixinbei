@@ -26,6 +26,7 @@ import {
   planTaskSlot,
   store,
   useMeta,
+  useStore,
   type SlotPlan,
 } from '../lib/store'
 import { COND, MODE, OP, TASK_MAX_STATES, decodeTask, encodeTask, waitCondJumpTarget, withWaitCondJumpTarget, WAIT_COND_JUMP_ON, type TaskBlock, type TaskProgram } from '../lib/task'
@@ -650,6 +651,17 @@ function StateCard({
 /* ------------------------------------------------------------------ 页面 */
 
 export function TasksPage() {
+  /* ★2026-10-31（用户要求）：任务页直接能连串口，不用来回切页。 */
+  const { link } = useStore()
+  const [connBusy, setConnBusy] = React.useState(false)
+  const doConnect = async () => {
+    setConnBusy(true)
+    try {
+      await store.connect('serial', link?.port ?? undefined)
+    } finally {
+      setConnBusy(false)
+    }
+  }
   const [file, setFile] = React.useState<TaskFileJSON>(() => loadTaskFile(readStored()))
   const [selTask, setSelTask] = React.useState(0)
   const [selState, setSelState] = React.useState(0)
@@ -964,7 +976,7 @@ export function TasksPage() {
   const supported = remote?.supported ?? true
 
   return (
-    <div className="grid gap-3 xl:grid-cols-[270px_minmax(0,1fr)_280px]">
+      <div className="grid gap-3 xl:grid-cols-[270px_minmax(0,1fr)_280px]">
       {/* 左：任务列表 + 车上现有 */}
       <div className="grid content-start gap-3">
         <Card

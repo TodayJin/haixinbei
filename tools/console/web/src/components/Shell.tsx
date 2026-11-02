@@ -6,6 +6,8 @@ import {
   Gamepad2,
   Gauge,
   LineChart,
+  Plug,
+  Unplug,
   Radio,
   Settings as SettingsIcon,
   SlidersHorizontal,
@@ -42,6 +44,16 @@ function LinkBadge() {
   const { link, sse } = useMeta()
   const mode = useHotSelect((s) => s.telem?.mode ?? null)
   const taskId = useHotSelect((s) => s.telem?.task_id ?? null)
+  /* ★2026-10-31（用户）：顶部加「连接 / 重连」按钮。
+   * 已连时按钮不变灰，点一下 = 先断开再连（真正的重连）。 */
+  const [busy, setBusy] = React.useState(false)
+  const doConnect = async () => {
+    setBusy(true)
+    try {
+      if (link?.connected) await store.disconnect()
+      await store.connect('serial', link?.port ?? undefined)
+    } finally { setBusy(false) }
+  }
   const connected = !!link?.connected
   const tone = connected ? 'mint' : sse === 'open' ? 'slate' : 'rose'
   const text =
@@ -59,6 +71,24 @@ function LinkBadge() {
         <StatusDot on={connected} tone={connected ? 'mint' : sse === 'open' ? 'slate' : 'rose'} pulse={connected} />
         {text}
       </Badge>
+      <button
+        className="btn-ghost !px-2 !py-0.5 text-[11px]"
+        disabled={busy}
+        onClick={() => { void doConnect() }}
+        title={connected ? '重新连接串口（先断开再连）' : '连接串口（默认上次的口 / COM4 @ 921600）'}
+      >
+        <Plug size={12} /> {busy ? '连接中…' : (connected ? '重连' : '连接')}
+      </button>
+      {connected && (
+        <button
+          className="btn-ghost !px-2 !py-0.5 text-[11px]"
+          disabled={busy}
+          onClick={() => { void store.disconnect() }}
+          title="断开串口"
+        >
+          <Unplug size={12} /> 断开
+        </button>
+      )}
       {link && (
         <span
           className="num text-[12px] text-slate-400"

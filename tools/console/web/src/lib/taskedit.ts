@@ -327,8 +327,31 @@ export const OP_SPECS: OpSpec[] = [
   },
   { op: OP.GOTO, name: 'GOTO', label: '跳到状态', group: '流程', doc: '立刻跳到另一个状态，不等任何东西', fields: [{ key: 'p0', label: '目标', hint: '跳到哪个状态；新状态会从它的「进门」序列重新开始。这里只能选真实状态。', kind: 'state', lo: 0, hi: 0xfffe }] },
   { op: OP.END, name: 'END', label: '结束任务', group: '流程', doc: '停车，整个任务到此结束', fields: [] },
-]
 
+  {
+    op: OP.YAW_RECORD,
+    name: 'YAW_RECORD',
+    label: '记录当前角度',
+    group: '运动',
+    doc: '把**车现在的车头朝向**记到指定槽位。**有 4 个独立槽位**：再记录别的槽位不会把先前那个覆盖掉。',
+    fields: [
+      { key: 'p0', label: '存到第几格', hint: '0~3 四个独立槽位。「转到记录角度」里选同一格就能用它。', kind: 'int', lo: 0, hi: 3 },
+    ],
+  },
+  {
+    op: OP.YAW_GOTO,
+    name: 'YAW_GOTO',
+    label: '转到记录的角度',
+    group: '运动',
+    doc: '原地把车头转到指定槽位里存的那个朝向（位置不变，只转头）。',
+    fields: [
+      { key: 'p0', label: '用第几格', hint: '要转到哪个槽位里存的角度（0~3）。', kind: 'int', lo: 0, hi: 3 },
+      { key: 'p1', label: '超时', hint: '最多等这么久；到点还没转到位也往下走。', kind: 'int', lo: 0, hi: 60000 },
+      { key: 'p2', label: '容差', hint: '误差比它小就算转到位，单位 0.1°：填 10 = 允许差 1.0°。', kind: 'int', lo: 0, hi: 100 },
+      { key: 'p3', label: '左右轮缩放', hint: '这一块专用的转动力度（%）：100 = 全差速，越大越有劲；0 = 用全局设置。摩擦力大的地面往上加。', kind: 'int', lo: 0, hi: 200 },
+    ],
+  },
+]
 export const OP_BY_CODE = new Map<number, OpSpec>(OP_SPECS.map((s) => [s.op, s]))
 
 export interface CondSpec {

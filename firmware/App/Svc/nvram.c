@@ -137,7 +137,11 @@ typedef struct {
     uint8_t  tune_boost_rate_k;     /* 0x0114 起转助推斜率 / 1000（实测 60~200） */
     /* 9*2 + 2 = 20，与旧 pad10[20] 同尺寸 */
 
-    uint8_t  pad7[7];                          /* ★必须凑满 8 字节：下面有编译期断言
+    /* ★2026-10-30（用户：任务基准速度改了还会变回 7000）：
+     * 0x0304 task_speed 之前**不持久化**（不在 g_cfg/struct 里）⇒ 重启就回 7000。
+     * 手法同 v12：**占用 pad7 的 4 字节** ⇒ payload 总长不变，不碰 8 字节对齐断言。 */
+    int32_t  task_speed;                       /* 0x0304 任务基准速度（刻度） */
+    uint8_t  pad7[3];                          /* ★必须凑满 8 字节：下面有编译期断言
                                                 *   `nvram_record_size_must_be_8x`，加 4 字节会当场编不过。 */
 } nvram_payload_t;
 
@@ -287,6 +291,7 @@ static void snapshot(nvram_payload_t *p)
     p->trace_rate_max       = (int32_t)(snap_param_scaled(HP_TRACE_RATE_MAX,      1.0f) + 0.5f);
     p->speed_full_counts    = (int32_t)(snap_param_scaled(HP_SPEED_FULL_COUNTS,   1.0f) + 0.5f);
     p->trace_slow_gain_x100 = (int32_t)(snap_param_scaled(0x020Du,                1.0f) + 0.5f);
+    p->task_speed            = (int32_t)(snap_param_scaled(0x0304u, 1.0f) + 0.5f);
     p->trace_slow_min_speed = (int32_t)(snap_param_scaled(0x020Eu,                1.0f) + 0.5f);
     p->trace_line_ki_x100  = (int32_t)(snap_param_scaled(0x0210u,                100.0f) + 0.5f);
     p->gyro_v_floor        = (int32_t)(snap_param_scaled(HP_GYRO_V_FLOOR,         1.0f) + 0.5f);
@@ -372,6 +377,7 @@ static void apply(const nvram_payload_t *p)
     apply_param_scaled(HP_TRACE_RATE_MAX,       p->trace_rate_max,       1.0f);
     apply_param_scaled(HP_SPEED_FULL_COUNTS,    p->speed_full_counts,    1.0f);
     apply_param_scaled(0x020Du,               p->trace_slow_gain_x100, 1.0f);
+    apply_param_scaled(0x0304u,               p->task_speed,           1.0f);
     apply_param_scaled(0x020Eu,               p->trace_slow_min_speed, 1.0f);
     apply_param_scaled(0x0210u,              p->trace_line_ki_x100,  100.0f);
     apply_param_scaled(HP_GYRO_V_FLOOR,      p->gyro_v_floor,          1.0f);

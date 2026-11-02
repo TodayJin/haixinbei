@@ -114,7 +114,12 @@ void Motion_SetMode(Motion_Mode m)
 
     motor_tracing_reset_cascade();     /* 重新记基准航向（循迹环和串级都要） */
 
-    if (m == MOTION_GYRO || m == MOTION_TRACE_GYRO) {
+    /* ★2026-10-30（用户选 A：循迹 = 差速直出）：
+     * 模式 3（循迹）现在调 motor_tracing_pid_speed()，**不再用角度环**。
+     * 所以初始化必须按„循迹‟来：关陀螺环 + 软斜坡 20000。
+     * （原来这里给模式 3 的是 GyroControl_Start + SetRamp(100000)。
+     *  斜坡快 5 倍 ⇒ 差速直出的修正瞬间打到轮子上 ⇒ 车狂抖、看起来像„不循迹‟。） */
+    if (m == MOTION_GYRO) {
         GyroControl_Start();           /* 记录当前航向为目标 */
         /* 刚进模式时给 500ms 宽限：上电/刚插上陀螺仪时它可能还没开始发帧，
          * 不能一进模式就判失联。 */
@@ -190,7 +195,9 @@ void Motion_Task(void)
         break;
 
     case MOTION_TRACE_GYRO:
-        motor_tracing_cascade(s_base);        /* 循迹 -> 角度 -> 速度环目标 */
+        /* ★2026-10-30（用户选 A）：上位机选„循迹‟直接走**差速直出**。
+         * 配合上面初始化的修正（关陀螺环 + 软斜坡），两者必须一起改。 */
+        motor_tracing_pid_speed(s_base);      /* ★循迹模式 = 差速直出 */
         break;
 
     case MOTION_IDLE:

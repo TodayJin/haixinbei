@@ -47,6 +47,11 @@ static uint16_t s_idx;        /* 序列内块下标 */
 static uint16_t s_off;        /* 序列起始偏移 */
 static uint16_t s_cnt;        /* 序列块数 */
 static uint8_t  s_started;    /* 当前块是否已开始（决定"起始时刻"） */
+/* ★2026-10-31：「记录角度」存的航向（度）；上电 = 0 */
+/* ★2026-10-31（用户：再记录会把上一个覆盖）：**4 个独立槽位**。
+ * 块的 p0 = 槽位号 0..3 ⇒ 记录/转到各自独立，不会互相覆盖。 */
+static float    s_yaw_saved[4] = { 0.0f, 0.0f, 0.0f, 0.0f };
+static uint8_t  s_yaw_rec = 0u;   /* bit0..3 = 哪些槽位真的记录过（防止未记录就去转 0°） */
 static uint8_t  s_inited;     /* 当前块的"首拍动作"是否做过 */
 
 static uint32_t s_now;
@@ -411,8 +416,16 @@ static int block_step(const task_block_t *b)
             GyroControl_SetScaleOverride((float)b->p3);   /* 只覆盖，不动全局参数 */
         }
             /* 角度环自己的"当前航向" = 目标 - 误差（比直接读 IMU 全局更贴近环的真实口径） */
-            heading = NormalizeAngle(GyroControl_GetTargetAngle() - GyroControl_HeadingError());
-            s_turn_target = NormalizeAngle(heading + (float)b->p1);
+            /* ★2025-10-31（用户：转 85度实际转很多）：**直接读 IMU 原始 Yaw**。
+             * 旧写法用 GyroControl_GetTargetAngle()-HeadingError() 取„当前航向‟。
+             * 但进这一块之前车往往在**循迹**（差速模式，角度环没跑）
+             * ⇒ 那两个值是上一次的**残留** ⇒ 算出来的„当前航向‟是错的
+             * ⇒ 目标 = 错的航向 + 85° ⇒ 转到完全错误的方向。
+             * Yaw 一直由 IMU 更新，不受控制环状态影响。 */
+            heading = NormalizeAngle(Yaw);
+            /* ★2026-10-31（用户：设置转 85度实际转很多）：b->p1 是 **uint16**，
+             * 负角度（-85）会变成 65451 ⇒ 转几十圈。这里必须按**有符号**读。 */
+            s_turn_target = NormalizeAngle(heading + (float)(int16_t)b->p1);
             GyroControl_SetTargetAngle(s_turn_target);
             s_inited = 1u;
         }
@@ -421,6 +434,52 @@ static int block_step(const task_block_t *b)
             return 1;
         }
         if (b->p0 != 0u && (s_now - s_t0_block) >= (uint32_t)b->p0) {
+            s_flags |= TASK_RUN_F_TIMEOUT;
+            GyroControl_SetScaleOverride(0.0f);   /* 超时出块也撤掉覆盖 */
+            return 1;
+        }
+        return 0;
+    }
+
+    case TASK_OP_YAW_RECORD: {
+        /* p0 = 槽位 0..3（记录到哪一格） */
+        uint8_t slot = (uint8_t)(b->p0 & 3u);
+        /* ★2026-10-31（用户：转过去的角度不对）：**直接读 jy61p 的原始 Yaw**。
+         * 旧写法用 GyroControl_GetTargetAngle()-HeadingError()，那是**角度环内部**的量；
+         * 循迹时角度环根本没跑 ⇒ 那两个值是**上一次的残留** ⇒ 记下来的角度是错的。
+         * Yaw 一直由 IMU 更新，不受控制环状态影响。 */
+        s_yaw_saved[slot] = NormalizeAngle(Yaw);
+        s_yaw_rec |= (uint8_t)(1u << slot);          /* 标记这个槽位已记录 */
+        return 1;                      /* 占一拍就走 */
+    }
+
+    case TASK_OP_YAW_GOTO: {
+        /* p0 = 槽位 0..3；p1 = 超时 ms；p2 = 容差 0.1°（照 TURN_DEG 的机制） */
+        uint8_t slot = (uint8_t)(b->p0 & 3u);
+        float tol = angle_tol(b->p2);
+        /* ★2026-10-31（用户：转的不对）：**这个槽位没记录过 ⇒ 直接跳过本块**。
+         * 原来没记录时 s_yaw_saved[slot] = 0 ⇒ 车会朝„航向 0°‟转 ⇒ 看起来像„转了很多‟。 */
+        if ((s_yaw_rec & (uint8_t)(1u << slot)) == 0u) {
+            GyroControl_SetScaleOverride(0.0f);
+            return 1;
+        }
+        if (!s_inited) {
+            Motion_SetMode(MOTION_GYRO);
+            Motion_SetSpeed(0);
+            GyroControl_SetBaseSpeed(0, 0);
+            /* ★2026-10-31（用户）：和「转角度」一样支持 p3 = 左右轮缩放（%）。
+             * 0 或不在 30~200 ⇒ 用全局值；否则只覆盖本块。 */
+            if (b->p3 >= 30u && b->p3 <= 200u) {
+                GyroControl_SetScaleOverride((float)b->p3);
+            }
+            GyroControl_SetTargetAngle(s_yaw_saved[slot]);
+            s_inited = 1u;
+        }
+        if (fabsf(GyroControl_HeadingError()) <= tol) {
+            GyroControl_SetScaleOverride(0.0f);   /* 出块：撤掉覆盖 */
+            return 1;
+        }
+        if (b->p1 != 0u && (s_now - s_t0_block) >= (uint32_t)b->p1) {
             s_flags |= TASK_RUN_F_TIMEOUT;
             GyroControl_SetScaleOverride(0.0f);   /* 超时出块也撤掉覆盖 */
             return 1;

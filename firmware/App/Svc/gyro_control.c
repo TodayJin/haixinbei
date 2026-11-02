@@ -864,7 +864,12 @@ void GyroControl_Task(void)
          * 点着，20° 阶跃后半段变成 0.5s 周期的来回摆（实测 ±2~4° 抖不停）。
          * 梯度上升 + 见动就撤，两条缺一不可。 */
         if (s_boost_cool > 0.0f) s_boost_cool -= GYRO_DT * 1000.0f;
-        if (!s_settled && fabsf(err) > s_settle_deg &&
+        /* ★2026-10-29（用户：转到 90° 了还是抖）：**助推的门槛从 1×settle 改成 2×settle**。
+         * 原来 |err| > 1.5° 就允许点火 ⇒ 到位后只要微微超出 1.5° 就踢一脚 3600
+         * ⇒ 踢过头 ⇒ 刹车 ⇒ 又漂出 1.5° ⇒ 再踢 ⇒ **1.5° 边界上的极限环（就是那个抖）**。
+         * 改成 2× ⇒ 3° 内不再踢 ⇒ 最后那几度靠正常率环慢慢归位 ⇒ 不抖。
+         * 起步/大角度归位不受影响（那些情况误差远大于 3°）。 */
+        if (!s_settled && fabsf(err) > (s_settle_deg * 2.0f) &&
             fabsf(s_rate_f) < s_stuck_rate && s_boost_cool <= 0.0f) {
             s_boost_mag += s_boost_rate * GYRO_DT;
             if (s_boost_mag > s_corr_spin) s_boost_mag = s_corr_spin;
