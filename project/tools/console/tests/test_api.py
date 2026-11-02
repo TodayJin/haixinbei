@@ -1,0 +1,542 @@
+"""HTTP 契约测试：把 docs/API.md 里承诺的端点全部打一遍（跑在 --sim 上，不碰真车）。
+
+`live` fixture 起的是真 `Bridge(mode="sim")` + 真 `ThreadingHTTPServer`，所以这里
+覆盖的是"前端 → HTTP → 桥 → 链路 → 帧"整流。真车相关的部分（串口）由 `--serial`
+手工验证，自动化测试不允许碰电机/舵机。
+"""
+from __future__ import annotations
+
+import json
+import os
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+import pytest
+
+from bridge import params as P
+from bridge import protocol as pr
+
+
+def test_health_and_link(live):
+    base, bridge, con = live
+    code, j, _ = GET(base + "/api/health")
+    assert code == 200 and j["ok"] is True
+    assert j["sim"] is True and j["link_open"] is True
+    assert isinstance(j["uptime_ms"], int) and j["version"]
+    assert "web_built" in j and "telem_count" in j
+
+    # 契约 §3.1：/api/link 返回的就是 LinkInfo 本身（没有 link 外壳）
+    code, j, _ = GET(base + "/api/link")
+    assert code == 200 and j["ok"] is True
+    assert j["mode"] == "sim" and j["connected"] is True
+    # 921600：2026-10-05 定档后实机烧的 DL_BAUD（车上第二颗探针的 VCOM 能吃），桥的默认值必须跟着
+    assert j["baud"] == 921600 and isinstance(j["telem_hz"], (int, float))
+    assert set(j["stats"]) == {"rx", "tx", "crc", "resync", "drops"}
+    assert j["stats"]["rx"] >= 1, "仿真车已经在发遥测了"
+    assert j["last_rx_ms"] is None or j["last_rx_ms"] >= 0
+    assert j["fw"] is None or set(j["fw"]) == {"name", "version", "proto",
+                                               "param_crc", "telem_hz", "caps"}
+
+
+def test_hello(live):
+    base, _, _ = live
+    code, j, _ = POST(base + "/api/link/hello", {"timeout": 1.0})
+    assert code == 200 and j["ok"] is True
+    code, j, _ = GET(base + "/api/link")
+    assert j["fw"]["proto"] == 2 and j["fw"]["name"] == "quandi-car"
+    assert j["fw"]["caps"] == 0x7F | pr.CAP_TASK
+
+
+def test_ports_endpoint(live):
+    base, _, _ = live
+    code, j, _ = GET(base + "/api/ports")
+    assert code == 200 and isinstance(j["ports"], list)
+    assert "default" in j and "current" in j
+    for p in j["ports"]:
+        assert {"port", "desc"} <= set(p), "契约里端口项是 {port, desc}"
+
+
+def test_params_contract_fields(live):
+    base, _, _ = live
+    code, j, _ = GET(base + "/api/params")
+    assert code == 200 and len(j["items"]) == len(P.PARAMS)
+    assert j["source"] in ("fw", "local") and isinstance(j["param_crc"], int)
+    fields = {"id", "key", "label", "group", "unit", "value", "default", "min", "max",
+              "decimals", "step", "dirty", "note"}
+    for it in j["items"]:
+        assert fields <= set(it), fields - set(it)
+        assert it["group"] in P.GROUPS
+    assert j["meta"]["groups"] == P.GROUPS
+    code, j, _ = GET(base + "/api/params/meta")
+    assert code == 200 and j["ok"] is True and len(j["items"]) == len(P.PARAMS)
+
+
+def test_param_set_push_reload_defaults(live):
+    base, _, con = live
+    # 1) set 只改桥这边的缓存，不自动下发（契约 §2：点了「下发」才到车）
+    code, j, _ = POST(base + "/api/params/set", {"key": "pivot_kp", "value": 1200})
+    assert code == 200 and j["ok"] is True and j["pushed"] is False
+    item = next(i for i in GET(base + "/api/params")[1]["items"] if i["key"] == "pivot_kp")
+    assert item["value"] == pytest.approx(1200.0)
+    assert item["dirty"] is True, "改了还没下发就是脏"
+
+    code, j, _ = POST(base + "/api/params/set", {"id": 0x0207, "value": 1200})
+    assert j["ok"] is True, "id 形式和 key 形式都要收"
+    code, j, _ = POST(base + "/api/params/set", {"key": "pivot_kp", "value": 99999})
+    assert j["ok"] is False, "越界必须被桥挡住"
+    code, j, _ = POST(base + "/api/params/set", {"key": "没有这个键", "value": 1})
+    assert j["ok"] is False
+
+    # 2) push 才真的到车；车一认下来就不脏了
+    code, j, _ = POST(base + "/api/params/push", {})
+    assert code == 200 and j["ok"] is True and j["sent"] == j["of"] >= 1
+    item = next(i for i in GET(base + "/api/params")[1]["items"] if i["key"] == "pivot_kp")
+    assert item["value"] == pytest.approx(1200.0) and item["dirty"] is False
+
+    # 3) defaults 只改本机表并标脏（等 push）；reload 从车读回 = 刚才下发的值
+    code, j, _ = POST(base + "/api/params/defaults", {"keys": ["pivot_kp"]})
+    assert j["ok"] is True and j["pushed"] is False and j["keys"] == ["pivot_kp"]
+    item = next(i for i in GET(base + "/api/params")[1]["items"] if i["key"] == "pivot_kp")
+    assert item["value"] == pytest.approx(item["default"]) and item["dirty"] is True
+
+    code, j, _ = POST(base + "/api/params/reload", {})
+    assert j["ok"] is True and j["read"] >= 1
+    item = next(i for i in GET(base + "/api/params")[1]["items"] if i["key"] == "pivot_kp")
+    assert item["value"] == pytest.approx(1200.0), "reload 之后要回到车上的值"
+    assert item["dirty"] is False
+
+    code, j, _ = POST(base + "/api/params/save", {})
+    assert j["ok"] is True
+
+
+def test_preset_apply_reaches_the_car(live):
+    """预设里的参数必须真的下发到车（不是只改桥这边的表）。"""
+    base, _, _ = live
+    POST(base + "/api/params/set", {"key": "pivot_kd", "value": 111})
+    code, j, _ = POST(base + "/api/params/push", {"keys": ["pivot_kd"]})
+    assert j["ok"] is True and j["sent"] == 1
+    code, j, _ = POST(base + "/api/presets", {"name": "__t_preset__", "kind": "params"})
+    assert j["ok"] is True
+    POST(base + "/api/params/set", {"key": "pivot_kd", "value": 222})
+    POST(base + "/api/params/push", {"keys": ["pivot_kd"]})
+    code, j, _ = POST(base + "/api/presets/apply",
+                      {"name": "__t_preset__", "targets": ["params"]})
+    assert code == 200 and j["ok"] is True and j["sent"] >= 1
+    code, j, _ = POST(base + "/api/params/reload", {})
+    item = next(i for i in GET(base + "/api/params")[1]["items"] if i["key"] == "pivot_kd")
+    assert item["value"] == pytest.approx(111.0), "应用预设后车上应该是预设里的值"
+    assert item["dirty"] is False
+    assert DELETE(base + "/api/presets?name=__t_preset__")[1]["ok"] is True
+
+
+def test_actions_endpoints(live):
+    base, _, _ = live
+    code, j, _ = GET(base + "/api/actions")
+    assert code == 200 and len(j["items"]) == pr.ACTION_COUNT
+    fields = {"n", "name", "a1", "a2", "preset_a1", "preset_a2", "dirty", "compound", "steps"}
+    for it in j["items"]:
+        assert fields <= set(it), fields - set(it)
+    assert j["items"][0]["n"] == 1
+
+    code, j, _ = POST(base + "/api/actions/set", {"n": 3, "a1": 100, "a2": 20})
+    assert code == 200 and j["ok"] is True
+    acts = GET(base + "/api/actions")[1]["items"]
+    assert (acts[2]["a1"], acts[2]["a2"]) == (100, 20) and acts[2]["dirty"] is True
+    code, j, _ = POST(base + "/api/actions/set", {"n": 99, "a1": 10, "a2": 10})
+    assert j["ok"] is False
+    assert POST(base + "/api/actions/play", {"n": 3})[1]["ok"] is True
+    assert POST(base + "/api/actions/play", {"n": 0})[1]["ok"] is True
+    assert POST(base + "/api/actions/save", {})[1]["ok"] is True
+    assert POST(base + "/api/actions/refresh", {})[1]["ok"] is True
+
+
+def test_servo_endpoints(live):
+    base, _, _ = live
+    code, j, _ = GET(base + "/api/servo")
+    assert code == 200 and {"s1_us", "s2_us", "s1_deg", "s2_deg"} <= set(j)
+    assert POST(base + "/api/servo/set", {"ch": 1, "deg": 45})[1]["ok"] is True
+    assert POST(base + "/api/servo/set", {"ch": 3, "deg": 45})[1]["ok"] is False
+    assert POST(base + "/api/servo/set", {"ch": 1, "deg": 200})[1]["ok"] is False
+    # ★审计 #18：这里原来用的就是错误的键名 `us`，所以那个 500 一直"测试通过"。
+    #   契约与前端都是 dev_us，测试必须按契约写。
+    assert POST(base + "/api/servo/deviation", {"ch": 1, "dev_us": 30})[1]["ok"] is True
+    assert POST(base + "/api/servo/deviation", {"ch": 1, "dev_us": 9999})[1]["ok"] is False
+    assert POST(base + "/api/servo/center", {})[1]["ok"] is True
+
+
+def test_drive_endpoints(live):
+    base, _, con = live
+    code, j, _ = POST(base + "/api/drive", {"mode": "wheels", "vl": 300, "vr": -300})
+    assert code == 200 and j["ok"] is True, j
+    code, j, _ = GET(base + "/api/drive")
+    assert j["drive"]["mode"] == 1 and j["drive"]["enabled"] is True
+    assert j["drive"].get("a") == 300 and j["drive"].get("b") == -300
+
+    code, j, _ = POST(base + "/api/drive", {"mode": "base_turn", "base": 4000, "turn": 30})
+    assert j["ok"] is True
+    code, j, _ = POST(base + "/api/drive", {"mode": "trace", "base": 2500})
+    assert j["ok"] is True
+    assert POST(base + "/api/drive", {"mode": "乱写的"})[1]["ok"] is False
+    assert POST(base + "/api/drive/stop", {})[1]["ok"] is True
+    assert GET(base + "/api/drive")[1]["drive"]["enabled"] is False
+
+
+def test_drive_refused_by_running_task_says_what_to_do(live):
+    """用户 m24215：「每次操控就会弹出一个后端报错，什么 HTTP002。200。每次都是」。
+
+    那条提示的根子：桥的语义性失败一律回 HTTP 200，而后端**没带 error 字符串**
+    ⇒ 前端 api.ts 的兜底把状态码当成了错误信息（「请求失败（HTTP 200）」）。
+    真实的触发路径就在这条用例里：任务在跑 ⇒ 固件回 ST_NOT_READY（host_ext.c 的
+    `rc = -2`）⇒ 驾驶被拒。要求：200 + ok:false + 一句人话，并且告诉用户下一步。
+    """
+    from test_task import golden, golden_image
+
+    base, _bridge, _con = live
+    img, g = golden_image(), golden()
+    tid = 2
+
+    off = 0
+    while off < len(img):
+        chunk = img[off:off + 120]
+        code, j, _ = POST(base + "/api/tasks/put", {"id": tid, "offset": off, "hex": chunk.hex()})
+        assert code == 200 and j["ok"] is True, f"put off={off} 失败：{j}"
+        off += len(chunk)
+    assert POST(base + "/api/tasks/commit",
+                {"id": tid, "len": len(img), "crc": g["crc16"], "name": "操控拒绝用例"})[1]["ok"] is True
+    assert POST(base + "/api/tasks/run", {"id": tid})[1]["ok"] is True
+
+    code, j, _ = POST(base + "/api/drive", {"mode": "base_turn", "base": 0, "turn": 0})
+    assert code == 200, "语义性失败必须是 200（前端靠 ok:false 判断，不当 HTTP 错误）"
+    assert j["ok"] is False and j["status"] == pr.ST_NOT_READY, j
+    err = j.get("error") or ""
+    assert err, f"失败必须带 error（否则前端兜底又会打出 HTTP 状态码）：{j}"
+    assert "HTTP" not in err, f"不许再把 HTTP 状态码当错误信息：{err!r}"
+    assert "任务" in err and "停" in err, f"要说清下一步干什么：{err!r}"
+
+    assert POST(base + "/api/tasks/stop", {})[1]["ok"] is True
+    assert POST(base + "/api/tasks/delete", {"id": tid})[1]["ok"] is True
+    # 停掉任务之后操控要立刻恢复（别把"任务在跑"变成永久拒绝）
+    assert POST(base + "/api/drive", {"mode": "base_turn", "base": 0, "turn": 0})[1]["ok"] is True
+
+
+def test_send_wait_timeout_and_refusal_carry_a_human_error(live):
+    """`send_wait` 的两种失败都要带人话 —— 前端只在**没有 error** 时才兜底成
+    「请求失败（HTTP xxx）」，而桥对语义性失败一律回 200，所以漏一次就是一句废话。
+    """
+    _base, _bridge, con = live
+    orig = con.runner.send
+
+    # ① 发出去没人回（链路断/车忙不过来）⇒ 超时
+    con.runner.send = lambda data: None
+    try:
+        r = con.send_wait(pr.T_DRIVE, bytes([0]) + pr.pack_i16(0) + pr.pack_i16(0),
+                          timeout=0.05, req="drive")
+    finally:
+        con.runner.send = orig
+    assert r["ok"] is False and r["answered"] is False
+    assert "没应答" in r["error"] and "超时" in r["error"], r
+
+    # ② 车回了 ACK，但状态码不是 OK。
+    # 帧是 `send_wait` 内部自己组、自己发出去的 ⇒ 这里替换 `runner.send`，
+    # 从发出去的整帧里取 seq（`A5 5A type seq len …`），照真车的样子把 ACK 投进 replies。
+    def refusing_send(data: bytes) -> None:
+        assert data[0] == pr.SOF0 and data[1] == pr.SOF1
+        seq = data[3]
+        with con.cv:
+            con.replies[seq] = [pr.Frame(pr.T_ACK, seq, bytes([seq, pr.ST_BAD_PARAM]))]
+            con.cv.notify_all()
+
+    con.runner.send = refusing_send
+    try:
+        r = con.send_wait(pr.T_DRIVE, bytes([0]) + pr.pack_i16(0) + pr.pack_i16(0),
+                          timeout=0.05, req="drive")
+    finally:
+        con.runner.send = orig
+    assert r["ok"] is False and r["answered"] is True, r
+    assert r["status"] == pr.ST_BAD_PARAM
+    assert "拒绝" in r["error"] and "参数错" in r["error"], r
+    # 这两种失败都要能被 /api/log 看见，方便用户复现时直接把日志发过来
+    assert any("drive" in it["text"] for it in list(con.logs)), list(con.logs)[-3:]
+
+
+def test_cmd_endpoint(live):
+    base, _, con = live
+    assert POST(base + "/api/cmd", {"cmd": "stop"})[1]["ok"] is True
+    assert POST(base + "/api/cmd", {"cmd": "clear_fault"})[1]["ok"] is True
+    assert POST(base + "/api/cmd", {"cmd": "set_telem_hz", "arg": 20})[1]["ok"] is True
+    assert POST(base + "/api/cmd", {"cmd": "开始跑"})[1]["ok"] is False
+    # 仿真里没实现的命令要老实回"未就绪"，不能假装成功
+    r = POST(base + "/api/cmd", {"cmd": "reset"})[1]
+    assert r["ok"] is False
+
+
+def test_set_telem_hz_actually_reaches_the_car(live):
+    """回归（2026-10-04 真车踩过）：T_CMD 的 arg 必须发满 4 字节，不能只发 1 字节。
+
+    固件是 `if (len >= 5u) { arg = p[1..4] 小端 }`（`firmware/App/Svc/host_link.c:776`），
+    老桥只发 cmd + 1 字节 arg ⇒ arg 恒为 0 ⇒ `CMD_SET_TELEM_HZ` 被 `arg<1 → 1` 钳到
+    1Hz，车上的遥测从 75 帧/s 掉到 1 帧/s，网页一拖"遥测频率"滑块链路就哑了。
+    所以这里断言"车那边的 hz 真的变了"，而不是"桥自己以为改了"。
+    """
+    base, _, con = live
+    assert POST(base + "/api/cmd", {"cmd": "set_telem_hz", "arg": 200})[1]["ok"] is True
+    assert con.runner.link.car.hz == 200, "arg 没到车上（多半是载荷少于 5 字节）"
+    assert GET(base + "/api/link")[1]["telem_hz"] == 200
+    # 固件把 arg 钳在 1..200（host_link.c:800-803）：桥本地这份也必须同口径，
+    # 否则 /api/link 会报一个车没在跑的速率（请求 300、车跑 200、网页显示 300）
+    assert POST(base + "/api/cmd", {"cmd": "set_telem_hz", "arg": 300})[1]["ok"] is True
+    assert con.runner.link.car.hz == 200
+    assert GET(base + "/api/link")[1]["telem_hz"] == 200
+    # 收尾：把速率还原成仿真车默认的 50Hz，别让后面用 live 的用例跟着一起变
+    assert POST(base + "/api/cmd", {"cmd": "set_telem_hz", "arg": 50})[1]["ok"] is True
+    assert con.runner.link.car.hz == 50
+
+
+def test_stats_hz_is_measured_not_setpoint(live):
+    """回归（2026-10-05 用户 m30228）：`stats` 事件里的帧率必须是**实测**值。
+
+    桥原来把 1s 窗口数出来的实测帧率算进一个本地 dict 就丢掉，`stats` 事件回的是车上固件
+    报的**设定值** ⇒ 用户把遥测频率调到 200Hz，网页（设置页/总览/IMU）显示的永远是设定值，
+    "调了没反应"根本看不出来。这里故意把设定值和实测值掰成两个不同的数字钉住这个区分。
+    """
+    base, _, con = live
+    with con.lock:
+        con.hz = 137              # 车上报的设定值（hello / cmd ack 那条路）
+        con.measured_hz = 42      # 1s 窗口数出来的实测值
+        con.measured_tx_hz = 7
+        con._rate_t = time.time()  # 把统计窗口推后 1s，免得后台 tick 在这几毫秒里改写实测值
+    # 契约：`/api/link` 的 telem_hz 仍是**设定值**（"遥测频率"滑块的初值读它）
+    assert GET(base + "/api/link")[1]["telem_hz"] == 137
+    snap = con.stats_payload()
+    assert snap["telem_hz"] == 42, "stats 事件的 telem_hz 必须是实测值"
+    assert snap["telem_hz_set"] == 137
+    assert snap["telem_tx_hz"] == 7
+    assert "loop_us" in snap and "busy_pct" in snap
+    # 收尾：设定值还回仿真车默认的 50Hz（live 是 session 级夹具，状态会漏给后面的用例）
+    assert POST(base + "/api/cmd", {"cmd": "set_telem_hz", "arg": 50})[1]["ok"] is True
+    assert GET(base + "/api/link")[1]["telem_hz"] == 50
+
+
+def test_cal_endpoint(live):
+    base, _, _ = live
+    code, j, _ = GET(base + "/api/cal?refresh=1")
+    assert code == 200 and j["ok"] is True, j
+    assert len(j["ch"]) == 8
+    for ch in j["ch"]:
+        assert {"i", "blk", "wht", "thr", "jitter", "pol", "ok", "reason",
+                "level", "thr_level"} <= set(ch)
+    # ★2026-10-11：`decode_cal` 只解 T_CAL_REPORT 那一帧（单帧**不带**当前套号）⇒ 她返回 None，
+    #   而不是写死 0（写死 0 = 把谎话钉成契约）。
+    # ★2026-10-14（审计 #27）：套号的真值来自**第二帧** `T_CAL_REPORT_B`（`[当前套号 u8][另一套]`）。
+    #   模拟器原来只发前一帧 ⇒ 这里永远是 None、传感器页"两套对比"永远只有一半；
+    #   现在模拟器补发了 B 帧 ⇒ 这一条要**同时接受两种**：
+    #     · None ⇒ 只收到 A 帧（老固件 / 那一帧丢了）—— 保持原来的诚实语义；
+    #     · 0/1  ⇒ 收到 B 帧、车真的报了"当前用第几套"。
+    #   不许再钉死成某一个值，否则要么骗人、要么把修复判成回归。
+    assert j["active_set"] in (None, 0, 1) and 0 <= j["quality"] <= 8, j
+
+
+def test_state_and_log_endpoints(live):
+    base, _, _ = live
+    code, j, _ = GET(base + "/api/state")
+    assert code == 200 and j["ok"] is True
+    assert "names" in j and "mode" in j["names"]
+    code, j, _ = GET(base + "/api/log?limit=10")
+    assert code == 200 and isinstance(j["items"], list)
+    assert POST(base + "/api/log/clear", {})[1]["ok"] is True
+    assert GET(base + "/api/log")[1]["items"] == []
+
+
+def test_presets_roundtrip(live):
+    base, _, _ = live
+    code, j, _ = POST(base + "/api/presets", {"name": "测试预设", "targets": ["params"],
+                                              "note": "pytest"})
+    assert code == 200 and j["ok"] is True
+    names = [p["name"] for p in GET(base + "/api/presets")[1]["items"]]
+    assert "测试预设" in names
+    # 不带 targets（前端「保存当前」）：keys 要写出这份预设装了哪几类，否则列表显示不全
+    code, j, _ = POST(base + "/api/presets", {"name": "全部预设", "note": "pytest"})
+    assert code == 200 and j["ok"] is True
+    full = next(p for p in GET(base + "/api/presets")[1]["items"] if p["name"] == "全部预设")
+    assert set(full["keys"]) == {"params", "actions", "servo"}, full["keys"]
+    assert http_get(base + "/api/presets?name=" + urllib.parse.quote("全部预设"),
+                    method="DELETE")[1]["ok"] is True
+    assert POST(base + "/api/presets", {"name": ""})[1]["ok"] is False
+    code, j, _ = POST(base + "/api/presets/apply", {"name": "测试预设"})
+    assert code == 200, j
+    code, j, _ = POST(base + "/api/presets/apply", {"name": "不存在"})
+    assert j["ok"] is False
+    # DELETE /api/presets?name=…（契约里有，前端「删除预设」用它）
+    assert http_get(base + "/api/presets?name=" + urllib.parse.quote("测试预设"),
+                    method="DELETE")[1]["ok"] is True
+    assert "测试预设" not in [p["name"] for p in GET(base + "/api/presets")[1]["items"]]
+
+
+def test_action_table_archive_is_listed_as_a_preset(live):
+    """回归（用户 2026-10-03 报的「舵机界面空的,设置页面也是空的」）。
+
+    预设目录里除了 `preset_save()` 写的预设，还住着动作表存档 `actions.json`
+    （形状 `{"actions":[[a1,a2]…]}`，**没有 kind/keys**）。以前 `preset_list()`
+    原样吐给前端 ⇒ 页面读 `p.keys.length` 抛 TypeError ⇒ React 卸掉整棵树、整页空白。
+    这里钉死：列出来必须是契约形状（kind/keys 齐），并且「应用预设」真能下发动作。
+    """
+    base, bridge, _ = live
+    path = os.path.join(bridge.preset_dir, "actions.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({"actions": [[0, 0], [60, 120]], "updated_ms": 1790990454087}, fh)
+    try:
+        code, j, _ = GET(base + "/api/presets")
+        assert code == 200
+        item = next(p for p in j["items"] if p["name"] == "actions")
+        for key in ("name", "kind", "updated_ms", "keys"):
+            assert key in item, f"预设项缺 {key}：{item}"
+        assert item["kind"] == "actions", item
+        assert item["keys"] == ["actions"], item
+        # 顶层 actions 列表要被归一成 values.actions，应用预设才会真下发
+        code, j2, _ = POST(base + "/api/presets/apply", {"name": "actions"})
+        assert code == 200 and j2["kind"] == "actions", j2
+        assert len(j2["results"]) == 2, j2
+        assert j2["ok"] is True, j2
+        # 旧版 preset_save() 不带 targets 时存出来的 keys 是空数组 ⇒ 界面显示「0 项」。
+        # 空 keys 也要按内容补，否则用户看到「0 项」的预设里其实躺着一整张参数表。
+        stale = os.path.join(bridge.preset_dir, "stale.json")
+        with open(stale, "w", encoding="utf-8") as fh:
+            json.dump({"name": "stale", "keys": [], "values": {"params": {"line_kp": 1.0}}}, fh)
+        code, j3, _ = GET(base + "/api/presets")
+        assert code == 200
+        it3 = next(p for p in j3["items"] if p["name"] == "stale")
+        assert it3["kind"] == "params", it3
+        assert it3["keys"] == ["params"], it3
+        os.remove(stale)
+    finally:
+        os.remove(path)
+
+
+def test_serial_port_name_is_rejected(live):
+    """串口名必须长得像串口号：不像的（比如一个文件名）被当成"串口"发过来时要明确拒掉，
+    并且**原来那条链路照旧在跑** —— 这就是用户报的"突然操控不了车、遥测不动"那条事故。
+    """
+    base, _, _ = live
+    code, j, _ = POST(base + "/api/link/connect", {"mode": "serial", "port": "rec_20261003_021035.jsonl"})
+    assert code == 200 and j["ok"] is False and "串口号" in j["error"], j
+    code, j, _ = GET(base + "/api/link")
+    assert j["mode"] == "sim" and j["connected"] is True, "被拒的串口名不许把旧链路弄断"
+    assert j["port"] != "rec_20261003_021035.jsonl", "被拒的口名不许写进 link.port"
+
+
+def test_unknown_endpoint_and_cors(live):
+    base, _, _ = live
+    code, j, raw = GET(base + "/api/nope")
+    assert code == 404 and j["ok"] is False
+    assert "没有这个端点" in j["error"]
+
+
+def test_static_index_or_hint(live):
+    """dist 没构建时要给中文提示而不是 404 白屏。"""
+    base, _, _ = live
+    req = urllib.request.Request(base + "/", method="GET")
+    with urllib.request.urlopen(req, timeout=5) as r:
+        body = r.read()
+        assert r.status == 200
+    assert b"npm run build" in body or b"<!doctype html" in body.lower()
+
+
+def test_sse_first_event_is_state(live):
+    base, _, _ = live
+    req = urllib.request.Request(base + "/api/stream", headers={"Accept": "text/event-stream"})
+    with urllib.request.urlopen(req, timeout=5) as r:
+        assert r.headers.get("Content-Type", "").startswith("text/event-stream")
+        buf = b""
+        t0 = time.time()
+        while time.time() - t0 < 4 and b"\n\n" not in buf:
+            buf += r.read1(4096) if hasattr(r, "read1") else r.read(1024)
+        text = buf.decode("utf-8", "replace")
+    assert "event: state" in text
+    payload = text.split("data:", 1)[1].split("\n", 1)[0]
+    j = json.loads(payload)
+    # 契约 §4：state 事件 = {link, params, actions, presets, cal}，data 就是载荷本身
+    for key in ("link", "params", "actions", "presets", "cal"):
+        assert key in j, f"state 事件缺 {key}"
+    assert j["link"]["mode"] == "sim"
+    assert isinstance(j["params"]["items"], list) and j["params"]["items"]
+    assert isinstance(j["actions"]["items"], list) and j["actions"]["items"]
+    assert isinstance(j["presets"], list)
+
+
+# --------------------------------------------------------------------- 小工具
+def GET(url: str):
+    return http_get(url)
+
+
+def POST(url: str, body: dict):
+    return http_get(url, method="POST", body=body)
+
+
+def DELETE(url: str):
+    return http_get(url, method="DELETE")
+
+
+def http_get(url: str, method: str = "GET", body: dict | None = None):
+    data = None if body is None else json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers={"Content-Type": "application/json"} if data else {})
+    try:
+        with urllib.request.urlopen(req, timeout=6) as r:
+            raw = r.read()
+            return r.status, json.loads(raw.decode("utf-8")), raw
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try:
+            return e.code, json.loads(raw.decode("utf-8")), raw
+        except Exception:
+            return e.code, None, raw
+
+
+# --------------------------------------------------- 任务存储：跑着的时候不许擦页
+def test_task_write_refused_while_running(live):
+    """解释器在跑时 COMMIT / DELETE / RUN 必须回"忙"，仿真车要和真固件同一条铁律。
+
+    固件侧判据是 `TaskRun_IsRunning()`（`host_link.c` 的三个守卫）：擦一页会把 CPU 按住
+    几十毫秒，正在跑的控制环直接失控。2026-10-03 这条检查逮到假车曾经"悄悄把任务停掉
+    再写/删"——那比拒绝更坏，操作员会以为删的是个死任务。分片 PUT 只写 RAM 暂存，
+    车在动也允许。
+    """
+    base, _bridge, _con = live
+    with open(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "fixtures", "task.golden.json"), encoding="utf-8") as f:
+        g = json.load(f)
+    img = bytes.fromhex(g["hex"])
+    tid = 7
+
+    POST(base + "/api/tasks/stop", {})
+    POST(base + "/api/tasks/delete", {"id": tid})
+    for off in range(0, len(img), 120):                      # 页面按 120B 一片（协议上限 124）
+        code, j, _ = POST(base + "/api/tasks/put",
+                          {"id": tid, "offset": off, "hex": img[off:off + 120].hex()})
+        assert code == 200 and j["ok"] is True, j
+    code, j, _ = POST(base + "/api/tasks/commit",
+                      {"id": tid, "len": g["len"], "crc": g["crc16"], "name": "守卫", "flags": 0})
+    assert j["ok"] is True, j
+    code, j, _ = POST(base + "/api/tasks/run", {"id": tid})
+    assert j["ok"] is True, j
+    code, j, _ = GET(base + "/api/tasks/status")
+    assert j["status"]["running"] is True, j
+
+    code, j, _ = POST(base + "/api/tasks/delete", {"id": tid})
+    assert j["ok"] is False, f"跑着时删除必须被拒：{j}"
+    code, j, _ = POST(base + "/api/tasks/commit",
+                      {"id": tid, "len": g["len"], "crc": g["crc16"], "flags": 0})
+    assert j["ok"] is False, f"跑着时提交必须被拒：{j}"
+    code, j, _ = POST(base + "/api/tasks/run", {"id": tid})
+    assert j["ok"] is False, f"已经有一个任务在跑时再启动必须被拒：{j}"
+    code, j, _ = GET(base + "/api/tasks")
+    assert any(it["id"] == tid for it in j["items"]), "被拒的 DELETE 不许真把任务删掉"
+
+    code, j, _ = POST(base + "/api/tasks/stop", {})
+    assert j["ok"] is True, j
+    code, j, _ = POST(base + "/api/tasks/delete", {"id": tid})
+    assert j["ok"] is True, j
+    code, j, _ = GET(base + "/api/tasks")
+    assert all(it["id"] != tid for it in j["items"]), "停下来以后就能删了"

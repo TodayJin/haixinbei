@@ -1,0 +1,1242 @@
+/**
+ * @file  PID_tracing.c
+ * @brief 循迹环：8 路灰度 -> 位置误差 -> （差速直出 | 目标航向）
+ *
+ * 数据口径（沿用旧板，不改）：
+ *   data = 压线通道的加权重心，范围 1..8，车在正中间时 = 4.5；
+ *   丢线时保持上一次的值（all_sensors_lost），避免突然打到满舵。
+ *
+ * 两种用法：
+ *   1) motor_tracing_pid_speed(base)：PID 输出直接当左右轮差速（旧板思路，不用陀螺仪）
+ *   2) motor_tracing_cascade(base)：PID 输出变成"目标航向偏移"，
+ *      交给角度环（gyro_control.c）算左右轮速度，再交给速度环（speed_control.c）
+ */
+#include "PID_tracing.h"
+
+#include "motor.h"
+#include "pid.h"
+#include "jy61p.h"
+#include "tracing.h"
+#include "trace_cal.h"     /* 单帧自适应：trace_cal_frame() / TRACE_FRAME_xxx */
+#include "speed_control.h"
+#include "gyro_control.h"
+#include "host_link.h"
+#include "bsp_board.h"
+#include <math.h>
+
+#define TRACE_SETPOINT       4.5f    /* 车在线上正中时的重心值 */
+/* ★2026-10-16（用户要求："4000 高速下也必须稳"）：**按偏差自动减速** ——
+ * 直道（|误差| 小）保持发车速度；进弯（|误差| 大）按比例降速，出弯自动回速。
+ * 依据（真车实测）：4000 速度下轮速约 320mm/s，车能提供的最大航向角速度约 185°/s
+ *   ⇒ 最小转弯半径约 99mm；把速度降到 ~2500（200mm/s）时最小半径降到约 62mm ⇒ 急弯能过。
+ * 所以"直道快、弯道慢"是唯一能在 4000 目标下咬住急弯的办法。
+ * 关闭：把 TRACE_SLOW_ERR_GAIN 设成 0.0f ⇒ 逐位回到旧行为。 */
+#define TRACE_SLOW_ERR_GAIN   (host_param_get(0x020Du, 450.0f) / 1000.0f)    /* ★2026-10-16(E.3) 暂时关闭: 审计指出它把差速软上限一起压低 25%（误差越大→减速越多→转向权限越小，正反馈耦合），实测也无改善。修好 E.1/E.2 后再重新标定开启。 */   /* 减速强度：k = 1/(1+GAIN*(|e|-FREE))；0=关闭 */
+#define TRACE_SLOW_ERR_FREE   1.00f   /* 死区（格）：|误差| ≤ 这个值不减速 */
+#define TRACE_SLOW_MIN_SPEED  ((int)(host_param_get(0x020Eu, 2800.0f) + 0.5f))    /* 减速下限（速度刻度，和发车速度同量纲）*/
+/* ★2026-10-16（用户："丢线了就按丢线之前的误差继续往那边拐，别来回抽"）：
+ * 现场逐帧定位到"来回抽"= **假抓线** —— 地面结构/阴影通过了 L411 的均匀性闸门，被当成线；
+ * 抓一帧就反向抽一次，抽完又丢。物理约束：灰度 20ms 一帧，车再快也不可能让重心一帧跳 >2.5 格。
+ * 于是加一道**跳变闸门**：新重心与上一次有效重心差 > TRACE_POS_JUMP_MAX 格时，本帧判"无效"
+ * （data 保持旧值、lost 保持 1、方向不变 ⇒ 车继续按丢线前的方向拐）；
+ * 只有连续 TRACE_POS_JUMP_CONFIRM 帧都指向新位置，才认定"真的拐过去了"并采信 ✓。
+ * 想关掉就把它设成 0（= 旧行为，逐位一致）。 */
+#define TRACE_POS_JUMP_MAX     2.5f    /* 单帧允许的重心最大跳变（格）；0 = 关 */
+#define TRACE_POS_JUMP_CONFIRM 3U      /* 连续几帧一致才采信新位置 */
+#define TRACE_ANGLE_PER_UNIT_DEFAULT 30.0f  /* 重心每偏 1 格 -> 要求 30°/s 转率（出厂值，2026-10-05 定稿） */
+#define TRACE_ANGLE_MAX_DEFAULT      35.0f  /* 目标航向相对**当前**航向的最大前置量（度）（出厂值） */
+#define TRACE_ANGLE_PER_UNIT_MIN      0.5f  /* 台架/上位机写坏值时的兜底夹子 */
+#define TRACE_ANGLE_PER_UNIT_MAX     60.0f
+#define TRACE_ANGLE_MAX_LIMIT_MIN     1.0f
+#define TRACE_ANGLE_MAX_LIMIT_MAX    90.0f
+
+/* 串级外环（重心误差 -> 修改全局目标航向）的两个标定量：**真值在 host_link 的参数表里**
+ * （HP_TRACE_ANGLE_PER_UNIT / HP_TRACE_ANGLE_MAX），上位机「调参 → 串级」页能改、
+ * 能固化进 Flash；下面的 DEFAULT 只是出厂值/坏值兜底。
+ *
+ * ★2026-10-05 用户 m32880 把外环从"基准航向 + 有上限的偏移"改成"实时修改全局目标航向"
+ * （见下面那段注释），两者的量纲不一样了：
+ *   · per_unit 从「°/格」变成 **「(°/s)/格」**（重心偏 1 格要求多少转率）；
+ *   · aim_max 从「偏移上限」变成 **「目标航向相对当前航向的前置量上限」**（防积分饱和）。
+ * 第十轮受控阶梯实测（4/6/8/10/12/15/20，见 docs/自主优化记录.md 第 16 节）的"10 最好"
+ * 是**老量纲**下的结论，新量纲下必须重新整定（见第 17 节）。出厂默认先沿用同一个数字。 */
+#define TRACE_CROSS_MIN      4       /* ≥4 路同时压线 = 路口（说明书第七章，按线宽可改） */
+#define TRACE_LOST_MS        300U    /* 丢线超过这么久就减速找线 */
+#define TRACE_LOST_DECAY_MS  500U    /* 丢线超时后，再把"保持的满舵"线性收到 0 的时间 */
+
+/* 外环每拍往目标航向上叠加的角度 = 转率 × 控制周期。控制周期 = Motion_Task() 的 TIM6
+ * 5ms（firmware/App/Svc/motion.c:136），motor_tracing_cascade() 就是这个周期被调的。 */
+#define TRACE_CASCADE_DT_S   0.005f
+#define TRACE_RATE_MAX_DEFAULT 110.0f /* 陀螺环的期望角速度上限读不到时的兜底（°/s）*/
+
+/* 外环为什么必须有微分项（用户 m33254："我是故意摆得斜的来检验你这个能力的?你肯定不可能
+ * 直指循迹直线吧"）。
+ *
+ * 只有 P 项时外环要求 ω = per_unit × e，而"车沿线"的横向运动学是 ė = −v × ψ、ψ̇ = ω
+ * ⇒ **ë = −v × per_unit × e，一个零阻尼简谐振荡**：ω_n = √(v × K_p)。
+ * 代入实测 v ≈ 0.35 m/s、per_unit = 60（K_p ≈ 123 rad/m，1 格 ≈ 8.5mm）
+ * ⇒ ω_n ≈ 6.6 rad/s ⇒ **周期 0.95s** —— 与 w 组真车日志里重心在 2.4↔6.0 格之间以 ~1s
+ * 周期来回穿完全吻合（out/_drv_7000_w1_pu60_kd10.txt）。
+ *
+ * 零阻尼的后果是"摆多少就永远摆多少"：斜着摆车（初始航向偏差 θ0）给出的位置振幅
+ * ∝ θ0 × √(v/K_p)，**per_unit 越小振幅越大**（x1/pu25 摆到 6.34 格、pu60 只到 1~2 格；
+ * base 6000 时 pu30 丢线 10% 而 pu60 只 1.3%）⇒ 调增益治不好，必须加阻尼项：
+ * 让要求的转率也吃"重心变化率"（微分），而不是只吃位置误差。
+ *
+ *     Δ = clamp(−(per_unit × e + pos_kd × ė), ±rate_max) × dt
+ *
+ * 二阶特征方程 s² + v·K_d·s + v·K_p = 0，阻尼比 ζ = (K_d/2)·√(v/K_p)：
+ * pos_kd = 13 时 ζ ≈ 0.7 @per_unit=60、ζ ≈ 1.0 @per_unit=30（单位 = °/s per (格/s)）——
+ * 斜摆/歪着进弯的初值会像二阶欠阻尼那样**衰减**，而不是一直摆。
+ * ė 只在**新的一帧**（50Hz，用 trace_pos_frames 当探针）上算，且一阶低通压噪。*/
+#define TRACE_POS_RATE_LPF   0.5f     /* 重心变化率的一阶低通系数（每个新帧一次）*/
+#define TRACE_FRAME_HZ      200.0f    /* ★灰度"新样本"率（Hz）. 2026-10-16 修正: 主用 I2C 灰度源是 5ms/200Hz（trace_cal.c:TRACE_READ_PERIOD_I2C_MS=5），原来写 50 导致 D 项只有真值 1/4（等效 kd=9 而非 36）⇒ 外环零阻尼振荡. 若改用 20ms 数字/串口源，这里要跟着改（或用实测 dt）. */
+#define TRACE_POS_KD_DEFAULT 12.0f    /* 外环微分项出厂值（°/s per (格/s)），2026-10-05 定稿 */
+#define TRACE_POS_KD_MAX     1000.0f  /* 参数表里是坏值时的兜底夹子 */
+
+/* 转率前馈通道自己的低通 + 死区（2026-10-05 第 8 轮，修用户 ≈m33762「加了以后感觉比之前
+ * 还差了, 晃来晃去的」）。详见文件头「前馈为什么要自己滤一道」。
+ *   · TRACE_FF_LPF：每个新灰度帧一次的一阶低通，α=0.25 @50Hz ⇒ 截止 ≈2Hz，
+ *     10~25Hz 的帧级抖动衰减 4~7 倍；
+ *   · TRACE_FF_MIN：|前馈| 低于这个值 (°/s) 就输出精确 0 —— gyro_control.c 里
+ *     "误差小就把转率要求清零"和"到位锁存"都靠 ff_rate == 0.0f 判定，低通是渐近的、
+ *     永远不等于 0，不清零的话那些保护就再也回不来了。 */
+#define TRACE_FF_LPF     0.25f
+#define TRACE_FF_MIN     1.0f
+
+/* 循迹外环怎么改"全局目标航向"（用户 m32880 定案，2026-10-05）。
+ *
+ * 老写法：`目标航向 = s_base_yaw + clamp(-per_unit × err, ±aim_max)`，s_base_yaw 是
+ * "进串级那一刻"的航向（只在 |err| < TRACE_BASE_BAND 0.15 格时才重记）。⇒ 在一条弯道上
+ * 目标航向最多只能相对进模式时的航向推进 ±aim_max，一顶死就退化成开环直冲：真车
+ * base=3000、车上残留的 per_unit=6 / aim_max=12 时 4s 丢线 29.9%（out/_drv_c1.txt）。
+ *
+ * 新写法：目标航向是一份**全局的、每拍都被修改**的量，只存在 gyro_control.c 的
+ * `target_angle` 里（发车时 GyroControl_Start() 把它定成当前航向），循迹环往里叠加增量，
+ * 并且**把同一个转率直接前馈给内环速率环**（2026-10-05 第 6 轮，用户 m33454「你继续就行」）：
+ *
+ *     rate = clamp(-(per_unit × err + pos_kd × ė), ±rate_max)          [°/s，>0 = 向左]
+ *     GyroControl_SetTraceRate(rate)        ← 主渠道：直接进内环速率环（低滞后）
+ *     GyroControl_AimRelative(rate × dt)    ← 副渠道：积分成目标航向（航向记忆/找线回正）
+ *
+ *   · per_unit 量纲 = (°/s)/格：误差 1 格 = 要求 10°/s 转率；
+ *   · pos_kd 是外环的**微分（阻尼）项**（文件头「为什么外环必须有微分项」），量纲 =
+ *     °/s per (格/s)，真值在 HP_LINE_KD；没有它这个环就是零阻尼振荡（斜着摆车永远摆下去）;
+ *   · rate_max 借用陀螺环自己的期望角速度上限 s_rate_max(HP_GYRO_RATE_MAX, 110°/s)，
+ *     保证"外环要求的转率"不超过"内环跟得上的转率"；
+ *   · 防积分饱和只留一条夹子：|目标 − 当前实际航向| ≤ aim_max。车在弯道上时当前航向
+ *     跟着目标一起走，所以这条夹子**不会**像老基准那样把弯道能力锁死成 ±十几度；
+ *   · 丢线时（data 是冻住的旧值）不用这个误差叠加，免得拿着过期误差把目标角推到天上；
+ *     改为按最后看到线的方向持续转（找线，见 TRACE_SEARCH_DELAY_MS），找线同样走前馈。
+ *
+ * ★为什么要前馈（第 6 轮的实测结论，别退回去）：只把转率积成目标航向时，"外环给转率 →
+ * 内环角度环 → 车身真的转"这条链是 τ ≈ 1/ang_kp ≈ 285ms 的一阶滞后（rate_ref = ang_kp×err），
+ * 而外环自己的 ω_n = √(v·per_unit) ≈ 5.9 rad/s（周期 1.07s）⇒ **内环滞后正好压在 ω_n 上、
+ * 外环几乎没有相位裕度**，实测就是那个 ~1s 的等幅大摆（line_kd 0/13/25 三轮 |e| 0.97/0.78/0.47，
+ * 有一点用但远不是"阻尼旋钮"）。极点分析（out\_poles.py）证明外环微分项救不了：
+ * Routh 门槛 line_kd > τ·per_unit ≈ 17，过了门槛 ω_n 被推高、阻尼比反而趋近 0.01。
+ *
+ * ★前馈为什么要自己滤一道（2026-10-05 第 8 轮，用户 ≈m33762「加了以后还感觉比之前还差了,
+ * 晃来晃去的」）：上面公式里的 pos_kd × ė 是**对 50Hz 灰重心做差分**算出来的，噪声增益很高。
+ * 老结构（只把转率积成目标航向）里这个噪声先变成"目标航向每拍抖 0.3°"，再被内环角度环
+ * (ang_kp=3.5) 衰减，落到内环转率要求上只剩 0.8~2.1 °/s；改成前馈后同一个噪声**直接**进
+ * 速率环，实测 rate_ref 的帧级抖动 29.5~31.9 °/s（out\_noise.py 的 pstdev，差 15~40 倍），
+ * 而 rate_kp=250 × 30°/s = 7500 > corr_limit 7000 ⇒ **光噪声就把修正量打满**，两个轮子
+ * 每帧被反向猛拽 = 肉眼看得到的"晃来晃去"。所以前馈这条路必须自己滤：
+ *   · 一阶低通 TRACE_FF_LPF（α=0.25 @50Hz ≈ 2Hz 截止）：10~25Hz 抖动衰减 4~7 倍，
+ *     而外环真正要用的控制信号（~1Hz 的摆、起步那一下）相位滞后只有十几度；
+ *   · 1°/s 死区 TRACE_FF_MIN：小到可以忽略时输出精确 0，把内环那些"ff_rate == 0"的保护
+ *     还给 gyro_control.c；
+ *   · 副渠道 GyroControl_AimRelative 仍吃**未滤**的 rate_cmd —— 那条路本质是积分，
+ *     噪声自己会被抹平，而它的滞后正是外环需要的（积分 = 航向记忆）。
+ * 前馈把"期望转率→实际转率"变成低滞后通道，外环退化成干净二阶
+ * ë = −v(per_unit·e + line_kd·ė) ⇒ ζ = (line_kd/2)√(v/per_unit)，line_kd=13 时 ζ≈0.7。
+ * 前馈是**消费式**的（gyro_control 每拍读走即清），所以每拍都要重新给，本函数开头先给 0。
+ *
+ * 符号约定（与 gyro_angles 一致）：偏航角**增大 = 向左转**。
+ * 线偏到车的右侧（data > 4.5）要向右转 -> 目标航向要减小 -> Δ < 0 ✓。 */
+
+/* 「这帧到底有没有线」的对比度门（用户 m29852）。
+ * 单帧自适应把本帧最黑那一路归一化到满量程，所以一片均匀表面（车被支起来、探头底下
+ * 没线、地面反光或本来就是黑地面）也会变成"8 路都挺黑"，加权重心正好落在 4.5 = 正中
+ * ⇒ err ≈ 0、lost = 0，车就"以为线在正中"直着走。2026-10-05 真车+RAM 实测：探头底下
+ * 无线（车支起来）时 8 路读数 200~251、重心 4.68、RAM 里 state 仍是 TRACE_FRAME_OK、
+ * whiteish = 0 ⇒ 就是这个 bug。判据：最亮那一路也得有最黑那一路的 TRACE_UNIFORM_MIN
+ * 倍以上，才算"有明暗结构 = 有线"；真线必然至少一侧明显比黑带亮。 */
+#define TRACE_UNIFORM_MIN    0.75f
+#define TRACE_LOST_STOP_MS   2500U   /* 连续丢线超过这么久：停车，不再闷头直冲（用户 m29239/m29852）
+                                      * ★2026-10-06：1000 → 2500。直角扫回来本来就要时间，
+                                      * 1s 太紧 —— 真车实测 c2/c5 就是"扫到一半被自己停掉"
+                                      * （末帧 pwm≈0、车趴在弯口）。*/
+
+/* 丢线找线（用户 m33109：直角弯"拐不过去"）。
+ * 老行为：线一丢，目标航向就冻住 -> 车按丢线那一刻的航向**直着冲**，弯越急冲出去越快；
+ * 真车 base=7000 实测（out/_drv_7000_v0_pu60_kd4.txt）3.6s 在弯口丢线，之后就一路直行
+ * 开出了白色赛道（8 路灰度全黑）。
+ * 新行为：先按原航向走 TRACE_SEARCH_DELAY_MS（容忍个别弱帧/过缝），还在丢就朝
+ * **最后看到线的方向**持续转（TRACE_SEARCH_RATE ≈ 内环能跟的满转率），一路扫到
+ * TRACE_LOST_STOP_MS 还没找到才停车。方向取最后一次有效帧的 err 符号。*/
+#define TRACE_SEARCH_DELAY_MS 120U    /* 丢线先保持航向这么久（ms）*/
+#define TRACE_SEARCH_RATE     100.0f  /* ★2026-10-30：170 -> 100，扫线不再„猛地转‟ */  /* 找线时的转率（°/s），会被期望角速度上限夹住。
+                                       * ★2026-10-06：110 → 170。直角实测扫不回来（转速不够，
+                                       * 90° 里只转进去 40~60°），而内环现在给得起
+                                       * （trace_rate_max=300、corr_ref=1500 ⇒ corr cap 14000）。*/
+/* ★2026-10-06 找线方向的鲁棒化。原来那句是
+ *     if (err > 0.05f) s_search_dir = ±1;
+ * 用的是**最后一帧的符号**，死区只有 0.05 格 = 灰度重心的噪声量级 ⇒ 车在轻微摆动时丢线，
+ * 方向基本是随机的。真车证据（第 32 轮 c1 vs c6：同一套参数、摆位几乎一样、Δyaw 0° vs 9.2°）：
+ *     yaw 整趟变化 +60.6° vs −58.3° —— **朝相反方向拐**，参数不可能让同一配置变号。
+ * 现在先过一道短 EMA（τ≈80ms@50Hz）再带 0.3 格死区取符号：反映"最近约百毫秒线持续偏在哪
+ * 一侧"，单帧噪声翻不动它；丢线期间不更新（这个块只在真的看到线时执行）⇒ 方向被冻住。 */
+#define TRACE_SEARCH_DIR_LPF   0.25f  /* err 的短 EMA 系数（每个有效灰度帧一次） */
+#define TRACE_SEARCH_DIR_DEAD  0.30f  /* 死区（格）—— 0.05 太小，会被重心噪声翻向 */
+
+/* ★2026-10-06 看见线时的转率上限（与"找线转率"必须分开）。
+ * 为什么：直角修好之后用户 m 报「拐回来之后，它一直震荡在直线上」。查 out/_drv_7000_fix3.txt：
+ * 拐过弯那段 corr 在两个方向之间打到 **±14000**、车速跟着在 20~250mm/s 抽、pos 以 ~750ms 周期
+ * 在 1.9↔6.8 之间扫 —— **继电器极限环**，正是 memory 里「cap 越大『最小一次补力矩』越粗」
+ * 那条（第 21 轮 cap>7200 的代价）。
+ * 机理：`rate_ref` 被 s_trace_rate_max(300) 夹住 + rate_kp=40 ⇒ corr 最大能到 12000，
+ * 而 `corr = rate_kp×(rate_ref − v)`：v 只要反向一点，corr 就跳到全尺度 ⇒ bang-bang。
+ * ⇒ 看见线时把**需求**夹回 120（corr ≤ 40×120 = 4800，落在实测"cap 3000~7000 不起振"
+ * 的范围里）；**找线时仍走 TRACE_SEARCH_RATE(170)** —— 找线本来就是一次粗扫，那里"粗"是需要的。
+ * ★2026-10-07 试过抬到 170 想让"回中更快"：**干净 A/B（只看起跑后 1.5s、0% 丢线）显示无效**
+ *   —— 峰值偏移 2.03→2.22 格、末段 |e| 0.99→0.97 格（都在噪声内）⇒ 瓶颈不是这个上限，**改回 120**。
+ *   （真正的"看起来没回到中间"是**零点偏了约 1 格**：车收敛到 |e|≈1 格就不动了，见灰度标定。） */
+#define TRACE_RATE_MAX_VISIBLE 120.0f
+
+/* ★2026-10-06 基准速度的斜坡。三个工况（看见线 7000 / 路口 3500 / 找线 0）之间原来是**硬切**，
+ * 而循迹模式下轮速环的斜坡被特意放成 100000 PWM/s（motion.c:121 —— 为了让角度环的修正能
+ * 立刻反向，那里不能动）⇒ **基准一跳，左右轮目标就跟着跳**，出弯那一刻等于给车一个加速度
+ * 阶跃，实测就是用户 m 说的「拐回来之后在直线上轻微摆」。
+ * 这里只给**基准**加一道一阶跟随（修正量那条路一点不动，仍然瞬时反向）。
+ * 副作用是发车也变成软启动（基准从 0 爬上去），与速度环自带的软启动叠加，符合预期。 */
+#define TRACE_BASE_TAU_S   0.10f   /* 基准一阶时间常数（s）：7000→0 约 0.3s 走到 95% */
+
+/* ★2026-10-06 找线 = **方向锁存 + 确定性来回扫**，掉头判据用**实际转角**（不是时间）。
+ *
+ * 为什么不能"猜一个方向赌到底"：实测 8s×3 趟逐段分析，5 次"丢线后转向"里 **4 次与"线往哪边跑"相反**，
+ * 错时幅度 −152.6°/−143.2°/+79.9° ⇒ 一猜反就整趟冲出赛道（用户原话"明明是左转，他右转"）。
+ * 为什么必须锁存：弯中车会反复瞥见原来那条腿 ⇒ 不锁的话方向被翻来翻去（实测 corr 换向 18 次/趟）。
+ * 为什么必须用**转角**而不是时间：原地对转实测只能到 ~121°/s（差速 6000），600ms 只等于 73°，
+ * **根本够不到 90° 外那条线** ⇒ 永远在 ±73° 里来回摆、线一直在全白区。用户 m 的原话正是这个：
+ * 「好几次过弯还没完全转到线上…全是白的，然后它就开始扫线，还是扫不到 —— 转弯可以设成 100°」。
+ * ⇒ 转够 TRACE_SWEEP_DEG 才掉头：不受电机/电压/摩擦快慢影响。110° 略大于 90°，留一点余量。
+ * 第一猜仍用"线最后偏在哪一侧"（短 EMA，抗噪 —— §4g 钉的就是这件事；**不要**用"丢线前的需求"：
+ * 那个量被 D 项主宰 ——36×25 格/s = 900 而 P 项才 30——它自己就是抖的，会把方向带歪）。*/
+#define TRACE_SWEEP_DEG  110.0f  /* 掉头判据：累计转角（°），见上 */
+#define TRACE_REACQ_MS   200U    /* 连续看见线多久才算"真的找回来了" */
+#define TRACE_SWEEP_MS   600U    /* 【已不用】旧的按时间掉头；保留只为说明为什么弃用 */
+
+/* ★2026-10-06 丢线后的**保持阶段**（用户 m 定案，方案 B）：丢线以后先**照上一拍走** —— 不原地对转、
+ * 不马上扫线，而是**保持丢线前的转向需求并继续推进目标航向** ⇒ 车**前进着持续转**。
+ * 为什么：原地对转时探头只在原地画个小圈，线稍远就永远进不了视场（用户实测"全是白的、扫不到"）；
+ * 而"前进着转"会让探头**扫过一段弧线**，自然压到新那条线（用户原话：「它还是前进着左转，所以这样
+ * 就容易找到线」）。速度时间线：前 TRACE_HOLD_FULL_MS 全速（保住动量和转弯半径），之后到
+ * TRACE_HOLD_MS 半速；**超过 TRACE_HOLD_MS 才进"找线扫描"**（原地对转 + 按转角掉头），再超时保护停车。
+ * ★累计转角夹子 TRACE_HOLD_MAX_DEG：用户 m 的例子——"0° 一直往前走、突然一个 180° 的大弯，
+ *   这个最多只能拐到 150°" ⇒ 到了就只保持转率、不再推进目标航向（否则会把 180° 也拐过去）。*/
+#define TRACE_CORNER_DEG       120.0f  /* 直角弯一次转多少度（用户 m 2026-10-06：100 → **120**）*/
+#define TRACE_CORNER_ENABLE      0     /* ★暂时**关掉**直角主动转弯（2026-10-06 真车实测否掉第一版判据）：
+                                        *   ① "半边 4 路"在本赛道上**到处都是**（一趟原始触发 10~20 次；线宽 3.8cm、
+                                        *      每路跨 ~8.6mm ⇒ 4 路 = 3.4cm，普通斜着的宽线就够）；
+                                        *   ② 而且**一转就把自己又触发一次**：原地对转时线在探头下扫过 ⇒ 又是
+                                        *      "半边 4 路" ⇒ 车在原地打转（cz2：丢线 0.0% 却只走 0.1 圈、触发 20 次）。
+                                        *   关掉 = 回到实测最好那版（final：0/26 真反向、2.2/2.4 圈）。
+                                        *   ★重开的前提：拿到"真直角 vs 普通弯"的**可分辨**特征 —— 下一步把
+                                        *   左右半边压线路数（和 `cross`）记进遥测/日志，用真车数据找判据，
+                                        *   别再拍脑袋定阈值。*/
+#define TRACE_CORNER_HALF_MIN    5U    /* **半边**要压满几路才算直角（用户 m 2026-10-07 再试 5 路）。
+                                        *   ★我的离线统计（按日志灰度 >128）说 ≥5 一次都没有；但固件用的是
+                                        *   `trace_cal_channel()` = **标定阈值**判定，两者不一定等价 ⇒ 以真车为准，
+                                        *   跑两趟看它实际触发几次。*/
+#define TRACE_CORNER_REFRACT_MS 1500U  /* 两次直角之间的最小间隔（离线统计：不加它时一次直角被当成 11 次，
+                                        * 误触发最小间隔只有 77ms ⇒ 车一直在转圈）*/
+#define TRACE_CORNER_MIN_DEG    60.0f  /* 至少转过这么多度之后，才允许"线回中间就停"（否则那一脚会被立刻取消）*/
+#define TRACE_CORNER_TIMEOUT_MS 2000U  /* 直角转弯兜底超时（转不到就放弃，交回普通循迹）*/
+#define TRACE_CORNER_DONE_BAND   0.5f  /* |err| 小于它就认为线回到中间了（结束转弯）—— 用户 m：0.8 → **0.5** */
+
+/* ★2026-10-06 直角弯规格（用户 m 口述，取代"丢了线再扫"那套补救）：
+ *   ①**检测**：探头**半边 4 路压线**（= 现有 `s_cross`：≥4 路同时压线、连续 2 帧；遥测里有 `cross`）
+ *     ⇒ 认成直角。**方向不用另加通道**：半边压线时灰度重心必然偏向那一侧 ⇒ `err` 的符号就是方向。
+ *   ②**动作**：**一次把目标航向转过 ±100°**，让角度环自己转过去（它本来就是"转速伺服"）。
+ *   ③**退出**：转的过程中**线一回到中间**（|err| < TRACE_CORNER_DONE_BAND）或又丢了 ⇒ 立刻停转、
+ *     target = 当前车头、恢复普通循迹（用户原话："转的过程中，如果终点检测到线了，就直接停止，
+ *     然后以当前状态继续普通循迹"）。
+ *   ★必须同时绕过末尾那道 `aim_max = 35°` 的领先夹子：否则这一脚 100° 会被砍成 35°（这就是
+ *     "直接一次转过去"以前没生效的原因）。*/
+
+#define TRACE_LOST_HOLD_MS  600U   /* ★2026-10-30（用户：丢线后不要猛转）：150 -> 600。
+                                    * 原来丢线 250ms 就进„原地扫线‟，而过弯/压线就会丢这么久
+                                    * ⇒ 动不动就地打转。现在：丢线 250~600ms 先**半速保持**，
+                                    * 600ms 以上才原地扫线（直角弯仍能扫到，只是晚一点）。
+                                    * 顺带修好了原来„半速档‟的死代码（250>150 时那档永远进不来）。 */   /* 保持阶段总时长（★换名：trace_cal.h 已有一个 TRACE_HOLD_MS，
+                                    * 原来重名会吃一条编译警告）。★2026-10-06 从 1000ms 砍到 150ms：
+                                    *   真车日志取证（146 事件、按版本）表明"保持 = 继承丢线前那一拍的转向需求"
+                                    *   正是新版方向判错的主要来源 —— 旧版 sx（≈120ms 就交给确定性扫描）
+                                    *   真反向 0/13，而带 1000ms 保持的 hold/comp/dir 是 16.7%/18.8%/20.8%，
+                                    *   且 14 次真反向里 12 次"丢线第一拍 rate_ref 已是负的"（方向判错）。
+                                    *   保持还把长丢线占比从 7% 抬到 21% ⇒ 错就错满一秒。
+                                    *   ⇒ 只留很短一段（150ms），马上让扫描接管方向。*/
+#define TRACE_HOLD_FULL_MS  250U   /* 保持阶段里"全速"的那一段。★**不要再改成 150**：2026-10-06
+                                    *   把它从 250 改成 150（= 与保持总时长相等）后，真车两趟变成
+                                    *   **8/12 真反向（66.7%）+ 0.4/1.6 圈**，而改之前那版是 **0/26 + 2.2/2.4 圈**。
+                                    *   机理未完全查清（全速窗缩到 150ms ⇒ 进扫描那一刻速度更低、姿态更歪），
+                                    *   但**实测好就是好**，先锁回 250。*/
+#define TRACE_HOLD_MAX_DEG  150.0f /* 保持阶段累计最多转这么多度 */
+
+/* ★2026-10-06 方向判据的补偿常数（见下面"最后一个已知缺口"整段）。
+ * 量纲 = 格/(°·s)：探头杆在旋转中心前方 d≈60mm、8 路跨 ~60mm ⇒ ~8.6mm/格
+ * ⇒ 力臂 ≈ (60/8.6)×(π/180) ≈ **0.12**。车左转时线相对杆往右扫，所以要从 ė 里**减掉** ω×它。 */
+#define TRACE_SENSOR_LEVER  0.19f
+/* ★2026-10-06 最后一个已知缺口：**丢线那一刻的方向选错**（用户 m："容易找不到这个弯、拐错了，
+ *   这个概率还很大"）。现在方向取 `s_err_dir`（err 的短 EMA）= "**线最后偏在哪一侧**"，可是在直角处
+ *   这一条**不等于转弯方向**：
+ *     · 车压在弯口上丢线时，探头底下可能还压着**来路那条腿** ⇒ "最后偏在哪侧"指向的是**旧腿**，
+ *       而真正的弯在另一侧 ⇒ 一拐就反（实测 5 次里 4 次与"线往哪边跑"相反）；
+ *     · 用"线的横向速度 ė"也不行：ė 里混着**车自己转动**造成的表观运动（探头杆在前方，车一转它就横移）。
+ *   ⇒ 下一个该试的办法（**尚未实现**）：把 ė 里"车自己转"那一份**减掉**再取方向 ——
+ *       `comp = ė_测 + ω_陀螺 × 探头杆到旋转中心的力臂(格/°)`，`comp` 才是"线在世界系里往哪边跑"，
+ *       而那条线拐弯时是往弯里跑的。力臂那个常数要现场标一次（当前未知）。*/
+
+/* ★2026-10-06 "找线后压速"（实测：进弯 350mm/s 会冲过弯口出界）：只要**刚丢过线**，
+ *   接下来 TRACE_SLOW_AFTER_LOST_MS 内基准减半 —— 这样即使弯中零星瞥见线，也是慢慢把车头带回，
+ *   不会全速冲过弯口。（真正找线那段仍是 base=0 原地对转，不受影响。）
+ *   ★两个都试过的坏写法，别再走：
+ *     ① **不压速** ⇒ 进弯 350mm/s、线瞬到探头最右、猛打也拉不住 ⇒ 整趟丢线 2.6s 停在线外；
+ *     ② **绑到 `s_sweep_dir`（锁存）压 1/3** ⇒ 丢线率反而从 19~22% 涨到 34.7%/45.0%：
+ *        压速 ⇒ 车慢 ⇒ **横向纠偏 ∝ v×ω 跟着掉** ⇒ 回不了线 ⇒ 又丢线 ⇒ 压速还在 = **正反馈**
+ *        （而弯中"零星看见"根本凑不满 REACQ 的 200ms ⇒ 锁存一直不解除）。
+ *     ⇒ 所以必须**按计时**、且**温和**（当前 200ms / 减半）。 */
+#define TRACE_SLOW_AFTER_LOST_MS 200U
+
+#define TRACE_EDGE_SAT       0.9f    /* 最外一路黑度 ≥ 0.9×最黑 = 黑带被阵边界切掉（外推的唯一入口）*/
+#define TRACE_BARW_INIT      3.0f    /* 黑带宽度初值（格=传感器间距），前面几帧就会自己收敛 */
+#define TRACE_BARW_TAU       0.02f   /* 宽度跟踪系数（50Hz -> 约 1s 时间常数）*/
+#define TRACE_POS_MED_N      3U      /* 位置中值窗（帧）：丢单帧脉冲，只滞后 1 帧 = 20ms */
+
+static float   s_setpoint = TRACE_SETPOINT;
+static float   data       = TRACE_SETPOINT;   /* 当前重心 */
+static float   last_data  = TRACE_SETPOINT;
+static uint8_t all_sensors_lost = 0;
+static uint8_t s_lost_stop       = 0;   /* 丢线停车已经执行过（每次丢线只执行一次）*/
+static int8_t  s_search_dir      = 0;   /* 最后一次看到线时它偏在哪一侧：+1 右 / -1 左（丢线找线用）*/
+static float   s_err_i     = 0.0f;   /* 2026-10-18 外环积分器（格·秒），消摩擦稳态偏移 */
+static float   s_err_dir         = 0.0f;/* err 的短 EMA（τ≈80ms@50Hz）：丢线找线判方向用，见 TRACE_SEARCH_DIR_LPF */
+static float   s_base_f          = 0.0f;/* 基准速度的一阶平滑值（PWM 刻度），见 TRACE_BASE_TAU_S */
+static int8_t  s_sweep_dir       = 0;   /* 找线扫描方向 ±1；0 = 没在扫（见 TRACE_SWEEP_DEG 注释） */
+static float   s_sweep_yaw0      = 0.0f;/* 本次扫描方向起点的偏航角 —— 掉头按**累计转角**判，不按时间 */
+static float   s_hold_rate       = 0.0f;/* 丢线瞬间"上一拍"的转向需求（°/s，>0=向左）—— 保持阶段用它 */
+static float   s_hold_yaw0       = 0.0f;/* 丢线瞬间的偏航角（TRACE_HOLD_MAX_DEG 的参照） */
+static float   s_yaw_rate        = 0.0f;/* 车自己的偏航角速度（°/s，直接用 Gyro_Z）—— comp 补偿要用 */
+static float   s_hold_dir        = 0.0f;/* ★丢线那一拍**锁死**的转向符号（−1=向右 / +1=向左）*/
+static uint8_t s_corner_on       = 0U;  /* ★直角转弯进行中（见 TRACE_CORNER_DEG 那段规格）*/
+static float   s_corner_yaw      = 0.0f;/* ★直角转弯**钉住的目标航向**（起始 ±100°）*/
+static float   s_corner_yaw0     = 0.0f;/* ★直角转弯**起始车头**（用来算"已经转过多少度"）*/
+static uint32_t s_corner_at      = 0U;  /* ★直角转弯开始时刻（超时兜底）*/
+static uint8_t s_hold_on         = 0U;  /* 是否在"保持阶段"（丢线后先照上一拍走，见 TRACE_HOLD_MS） */
+static uint32_t s_see_since      = 0;   /* 连续看见线的起点；0 = 没在连续看见（用于 TRACE_REACQ_MS） */
+static float   last_pid_output  = 0.0f;
+
+/* 外环微分项（阻尼）的状态：重心变化率 ė（格/s），只在新的灰度帧上更新 */
+static float    s_pos_rate    = 0.0f;   /* ė 的一阶低通值 */
+static float    s_prev_data_f = TRACE_SETPOINT;
+static uint32_t s_rate_frame  = 0U;     /* 上次算微分时的 trace_pos_frames */
+static uint8_t  s_rate_valid  = 0U;     /* 已经有过一帧（第一帧不产生微分冲击）*/
+static uint8_t  s_rate_resync = 1U;     /* 上一帧是丢线帧：重新压线那一下 data 会跳变，微分项重新起步 */
+static float    s_ff_lp       = 0.0f;   /* 转率前馈的一阶低通值（只在新的一帧上更新，≈2Hz）*/
+
+/* 边缘外推（用户 m07972 第 1 条）*/
+static float   s_bar_w    = TRACE_BARW_INIT;
+static uint8_t s_bw_valid = 0U;
+
+/* 位置中值滤波 + 抖动统计（用户 m07972 第 4 条）*/
+static float   s_ph[TRACE_POS_MED_N];
+static uint8_t s_ph_n      = 0U;
+static float   s_prev_raw  = 0.0f;
+static float   s_prev_filt = 0.0f;
+
+/* 可见状态（给台架/真车读，不参与控制；声明在 PID_tracing.h）*/
+float    trace_bar_w        = TRACE_BARW_INIT;  /* 跟踪到的黑带宽度（格）*/
+float    trace_pos_jit_raw  = 0.0f;             /* Σ|重心 - 上帧重心|（滤波前）*/
+float    trace_pos_jit_filt = 0.0f;             /* 同上，滤波后 */
+uint32_t trace_pos_frames   = 0U;               /* 统计帧数（均值 = 上面两个 / 它）*/
+uint32_t trace_edge_cnt     = 0U;               /* 累计触发外推的帧数 */
+uint8_t  trace_edge_extrap  = 0U;               /* 本帧是否触发外推 */
+
+/* 消抖：连续 2 次一样才认（每 5ms 采一次 -> 10ms 消抖） */
+static uint8_t s_stable_raw = 0;
+static uint8_t s_pend_raw   = 0;
+static uint8_t s_pend_n     = 0;
+
+/* 路口 */
+static uint8_t  s_cross       = 0;
+static uint32_t s_cross_at    = 0;
+static uint8_t  s_cross_cnt   = 0;
+static uint32_t s_lost_since  = 0;
+
+/* 串级：本环"发车"了没有。0 = 下一拍把全局目标航向钉成当前航向
+ * （用户 m32880：发车时目标角度 = 当前角度），之后每拍只往那个目标上叠增量。 */
+static uint8_t s_base_valid = 0;
+
+static void apply_speeds(float left, float right)
+{
+    int li = (int)left;
+    int ri = (int)right;
+
+    if (li >  MOTOR_PWM_MAX) li =  MOTOR_PWM_MAX;
+    if (li <  MOTOR_PWM_MIN) li =  MOTOR_PWM_MIN;
+    if (ri >  MOTOR_PWM_MAX) ri =  MOTOR_PWM_MAX;
+    if (ri <  MOTOR_PWM_MIN) ri =  MOTOR_PWM_MIN;
+
+    if (SpeedControl_IsEnabled()) {
+        SpeedControl_SetTarget(li, ri);     /* 交给速度环（编码器闭环） */
+    } else {
+        Load(li, ri);                       /* 速度环没开就直接写 PWM */
+    }
+}
+
+/**
+ * @brief 读 8 路灰度 -> 加权重心 data / all_sensors_lost / 路口
+ *
+ * 两条路（判线口径 2026-10-05 用户 m31902 整改后，详见 trace_cal.h「判线口径」）：
+ *   ① 标定阈值 + 离阈值的距离（trace_cal_frame 回的 8 路权重：0 = 没越过阈值、1 = 到标定
+ *      黑值）：权重直接当重心权重（1..8，正中 4.5），过本帧半高算这一路压线；阈值是标定
+ *      出来的，白侧权重恒 0，所以整片路面变亮/变暗不会把重心往中间拽。
+ *      "整片一个样"（离地/全黑地面）由下面的 TRACE_UNIFORM_MIN 明暗结构判据兜（见 ⓪）。
+ *   ② 老的中点阈值二值法（没标定 / 没模拟量 / trace_adapt_enable = 0）：消抖 + 8 个 0/1 取平均。
+ */
+void read_tracing_data_pid(void)
+{
+    /* ★2026-10-16 跳变闸门状态（见文件顶部 TRACE_POS_JUMP_MAX 注释） */
+    static float    s_jump_last = 4.5f;
+    static float    s_jump_cand = 4.5f;
+    static uint8_t  s_jump_cnt  = 0U;
+    static uint32_t s_jump_rej  = 0U;
+    float   w[TRACE_CAL_CH];
+    trace_frame_t fr = trace_cal_frame(w);
+    float   num = 0.0f, sum = 0.0f, wmax = 0.0f, wmin = 0.0f;
+    uint8_t raw = 0;
+    int     i, on;
+    uint32_t now = HAL_GetTick();
+    uint8_t lost;
+
+    if (fr == TRACE_FRAME_OK) {
+        /* ---- ① 连续加权重心（L1..L4 = 1..4，R1..R4 = 5..8） ---- */
+        for (i = 0; i < 8; i++) {
+            if (w[i] > wmax) wmax = w[i];
+            if (i == 0 || w[i] < wmin) wmin = w[i];
+        }
+        on  = 0;
+        num = 0.0f;
+        sum = 0.0f;
+        for (i = 0; i < 8; i++) {
+            /* 过本帧半高 = 这一路算压线：和柱子上的那条分界线、界面底部的 0/1 完全一致 */
+            if (w[i] * 2.0f > wmax) on++;
+            num += w[i];
+            sum += w[i] * (float)(i + 1);
+        }
+        /* ---- ⓪ 先判"这帧到底有没有线"（用户 m29852）----
+         * 均匀表面（探头底下没线 / 车被拿走 / 整片一色）也会有一套稳定的权重，
+         * 重心可能正好落在 4.5 = 正中 ⇒ 车"以为线在正中"直着走。最亮那一路也得
+         * 暗不到最黑那一路的 TRACE_UNIFORM_MIN 倍以上，才算有明暗结构 = 有线；
+         * 否则判丢线。权重本身已经按标定阈值折算过，这里只看"有没有结构"。 */
+        if (wmax <= 0.0f || wmin > TRACE_UNIFORM_MIN * wmax) {
+            lost = 1U;
+            on   = 0;   /* 均匀帧以前 on = 8，还会顺手误报"路口" */
+        } else if (num > 0.0f) {
+            /* ★2026-10-29（用户：用最简单的加权重心）：pos 直接用 **0~255 原始柱高**。
+             * pos = Σ(v[i]×(i+1)) / Σv[i]，i=0 ⇒ 第 1 路（最左），结果 1~8。
+             * 不过 w[] 归一化、不减死区、不再被别的块覆盖。 */
+            float pos = 4.5f;
+            {
+                float rnum = 0.0f, rsum = 0.0f;
+                int   k;
+                for (k = 0; k < 8; k++) {
+                    float v = (float)trace_cal_level((uint8_t)k);
+                    rnum += v;
+                    rsum += v * (float)(k + 1);
+                }
+                if (rnum > 1.0f) pos = rsum / rnum;
+            }
+            float cover = 0.0f;
+            float m;
+
+            for (i = 0; i < 8; i++) cover += w[i];   /* w[] 已归一化，Σ = 可见覆盖长度（格）*/
+
+            /* ---- ①.5 边缘外推（用户 m07972 第 1 条）----
+             * 线跑出阵外时，可见的那部分把重心顶在 1（或 8），误差封顶 -> aim 也就顶在 ±35°。
+             * 用黑带宽度把线心推回阵外：可见覆盖长度 cover = Σ 归一化黑度，
+             *     右边界被切：线心 = 0.5 + cover - 黑带宽度/2
+             *     左边界被切：线心 = 8.5 - cover + 黑带宽度/2
+             * 只在"最外那一路黑度 ≥ 0.9×最黑"时启用 —— 这恰好等价于"黑带的外边界已经越过
+             * 阵边界"（那一路全被盖住）；没被切时最外路必然盖不满，重心本身就是准的，
+             * 一个计数都不动。用户说线基本跑不出阵，所以平时这条永不生效（trace_edge_cnt 可查）。
+             * 黑带宽度用慢速 EMA 学，且只用没被切的帧更新（被切的帧量不到完整宽度）。*/
+            trace_edge_extrap = 0U;
+            if (wmax > 0.0f) {
+                uint8_t cut_l = (w[0] >= TRACE_EDGE_SAT * wmax) ? 1U : 0U;
+                uint8_t cut_r = (w[7] >= TRACE_EDGE_SAT * wmax) ? 1U : 0U;
+
+                if (!cut_l && !cut_r) {
+                    if (!s_bw_valid) { s_bar_w = cover; s_bw_valid = 1U; }
+                    else             { s_bar_w += (cover - s_bar_w) * TRACE_BARW_TAU; }
+                }
+                if (s_bar_w < 1.0f) s_bar_w = 1.0f;
+                if (s_bar_w > 6.5f) s_bar_w = 6.5f;
+                trace_bar_w = s_bar_w;
+
+                if (cut_l) {
+                    float p = 0.5f + cover - s_bar_w * 0.5f;
+                    if (p < pos) { pos = p; trace_edge_extrap = 1U; }
+                } else if (cut_r) {
+                    float p = 8.5f - cover + s_bar_w * 0.5f;
+                    if (p > pos) { pos = p; trace_edge_extrap = 1U; }
+                }
+                if (trace_edge_extrap) trace_edge_cnt++;
+                if (pos < -2.0f) pos = -2.0f;
+                if (pos > 11.0f) pos = 11.0f;
+            }
+
+            /* ---- ①.6 位置 3 帧中值（用户 m07972 第 4 条）----
+             * 要求"滤一下波但别那么滞后"：中值只滞后 1 帧（20ms），单帧脉冲直接丢掉，
+             * 斜坡信号不像低通那样越滤越迟。抖动统计把它和滤波前都累起来（除以帧数得均值）。*/
+            if (s_ph_n < TRACE_POS_MED_N) {
+                s_ph[s_ph_n++] = pos;
+                m = pos;
+            } else {
+                float a, b, c;
+                s_ph[2] = s_ph[1];
+                s_ph[1] = s_ph[0];
+                s_ph[0] = pos;
+                a = s_ph[0]; b = s_ph[1]; c = s_ph[2];
+                /* ★2026-10-27 实测：**不要去掉这个中值**。
+                 * 跳过它之后车速 5000 的 std 从 1.12 变成 1.32（更差）——
+                 * 说明亚通道重心（用原始柱高）本身噪声更大，3 帧中值正好在压它。
+                 * 20ms 的滞后不是主因。 */
+                m = (a < b) ? ((b < c) ? b : ((a < c) ? c : a))
+                            : ((a < c) ? a : ((b < c) ? c : b));
+            }
+
+            if (trace_pos_frames > 0U) {
+                trace_pos_jit_raw  += fabsf(pos - s_prev_raw);
+                trace_pos_jit_filt += fabsf(m   - s_prev_filt);
+            }
+            s_prev_raw  = pos;
+            s_prev_filt = m;
+            trace_pos_frames++;
+
+            /* ★2026-10-16 跳变闸门（见文件顶部常量注释）：挡掉"假抓线" */
+            if (TRACE_POS_JUMP_MAX > 0.0f) {
+                if (fabsf(m - s_jump_last) <= TRACE_POS_JUMP_MAX) {
+                    s_jump_last = m;      /* 正常帧：直接采信 */
+                    s_jump_cnt  = 0U;
+                } else if (s_jump_cnt == 0U || fabsf(m - s_jump_cand) <= 1.0f) {
+                    s_jump_cand = m;      /* 新位置：累计确认 */
+                    if (s_jump_cnt < 250U) s_jump_cnt++;
+                    if (s_jump_cnt < TRACE_POS_JUMP_CONFIRM) {
+                        /* 还没确认 ⇒ 当丢线处理：data 保持旧值、方向不变 */
+                        s_jump_rej++;
+                        lost = 1U;
+                        goto jump_done;   /* #2: 走统一丢线处理，别绕过状态机 */
+                    }
+                    s_jump_last = m;      /* 连续多帧一致 ⇒ 真的拐过去了，采信 */
+                    s_jump_cnt  = 0U;
+                } else {
+                    s_jump_cand = m;      /* 又跳到别处 ⇒ 重新计数 */
+                    s_jump_cnt  = 1U;
+                    s_jump_rej++;
+                    lost = 1U;
+                    goto jump_done;   /* #2: 走统一丢线处理，别绕过状态机 */
+                }
+            }
+            data      = m;
+            last_data = data;
+            lost      = 0U;
+        } else {
+            /* 8 路权重全是 0：本帧一个位置信息都没有，别再假装"线在正中" */
+            lost = 1U;
+        }
+    } else if (fr == TRACE_FRAME_WEAK) {
+        /* 模拟量在，但这帧对比度不够（没信息）：当丢线，data 保持上一帧 */
+        on   = 0;
+        lost = 1U;
+    } else if (trace_cal_mode == TRACE_MODE_DIGITAL) {
+        /* ---- ② 老的固定阈值 + 消抖（只有用户显式把「灰度接口」设成数字量时才拿
+         *      裸 PA0~PA7 当真值，见 trace_cal.h:130-138 的设计）---- */
+        for (i = 0; i < 8; i++) {
+            if (trace_read_channel((uint8_t)i)) raw |= (uint8_t)(1U << i);
+        }
+        if (raw == s_stable_raw) {
+            s_pend_n = 0;
+        } else {
+            if (raw == s_pend_raw) {
+                if (s_pend_n < 2U) s_pend_n++;
+            } else {
+                s_pend_raw = raw;
+                s_pend_n   = 1U;
+            }
+            if (s_pend_n >= 2U) {
+                s_stable_raw = raw;
+                s_pend_n     = 0U;
+            }
+        }
+        raw = s_stable_raw;
+
+        on  = 0;
+        num = 0.0f;
+        sum = 0.0f;
+        for (i = 0; i < 8; i++) {
+            if (raw & (uint8_t)(1U << i)) {
+                num += 1.0f;
+                sum += (float)(i + 1);
+                on++;
+            }
+        }
+        if (num > 0.0f) {
+            data      = sum / num;
+            last_data = data;
+        }
+        lost = (on == 0) ? 1U : 0U;
+    } else {
+        /* ---- ③ 没有模拟量、又不是用户显式选的数字口：判丢线 ----
+         * 裸 PA0~PA7 在这台车上恒为高（模拟量模式下模块根本不驱动它们），当掩码读只会
+         * 得到 0xFF ⇒ 重心 4.5 + lost = 0 = "以为线在正中"直着走 —— 用户 m29852 现场
+         * 那 236 个样本全是这个状态。data 保持上一帧，丢过头由串级停车。 */
+        on   = 0;
+        lost = 1U;
+    }
+jump_done:   /* ★2026-10-16(#2)：跳变闸门判无效时跳到这里 —— 跳过 data 更新，但让下面丢线状态机照常跑（原来直接 return 会把 all_sensors_lost/s_lost_since/PID_Reset 全跳过）*/
+    /* 丢线时 data 保持不变（= 上一次的重心），方向就不会突然反打 */
+    all_sensors_lost = lost;
+
+    if (all_sensors_lost) {
+        if (s_lost_since == 0U) s_lost_since = now;
+    } else {
+        /* 刚重新找到线：把循迹 PID 清一次。丢线期间 data 保持不变、误差也不变，
+         * 积分照样在累；不清的话重新压线那一拍会把攒下的积分一次性放出来，
+         * 表现为"找回线就猛打一下方向"。 */
+        if (s_lost_since != 0U) PID_Reset();
+        s_lost_since = 0U;
+    }
+
+    /* 路口：≥TRACE_CROSS_MIN 路同时压线，连续 2 次才认，认完 200ms 内不重复报 */
+    if (on >= TRACE_CROSS_MIN) {
+        if (s_cross_cnt < 2U) s_cross_cnt++;
+        if (s_cross_cnt >= 2U && !s_cross && (uint32_t)(now - s_cross_at) > 200U) {
+            s_cross    = 1U;
+            s_cross_at = now;
+        }
+    } else {
+        s_cross_cnt = 0U;
+        if (on <= TRACE_CROSS_MIN - 2) s_cross = 0U;
+    }
+}
+
+uint8_t tracing_cross(void)
+{
+    return s_cross;
+}
+
+/* 给遥测用：算法自己判的丢线（不是 PA0~PA7 裸脚那个永远失真的"丢线"）。 */
+uint8_t tracing_lost(void)
+{
+    return all_sensors_lost;
+}
+
+void tracing_cross_clear(void)
+{
+    s_cross = 0U;
+}
+
+void show_tracing_data_pid(void)
+{
+    /* 显示交给 KK_UI */
+}
+
+/**
+ * @brief 循迹环 + 速度环（差速直出，不用陀螺仪）
+ */
+void motor_tracing_pid_speed(int base_speed)
+{
+    float pid_output, l, r;
+    static uint8_t s_dd_stop = 0U;   /* #3: 直驱差速丢线超时已停车标志（重新看到线自愈） */
+
+    read_tracing_data_pid();
+
+    /* base=0 就是"原地对转"（pivot）：左右轮反向、车不前进。这时被控对象和
+     * 前进循迹完全不同，用 pid.c 里实测标出来的 pivot 那组增益；非 0 还是走
+     * 参数表里的前进增益。模式切换时 PID_SetPivot() 内部会清积分/微分历史。 */
+    PID_SetPivot(base_speed == 0);
+
+    if (all_sensors_lost) {
+        /* 丢线分两段：短时间保持上一次的转向（等它扫回来）；超过 TRACE_LOST_MS 之后
+         * 必须把"保持的转向"收掉 —— last_pid_output 是丢线前那一刻的值，如果那次正好是
+         * 满舵（追大偏差时就是 7200），一直保持就会变成"原地打转停不下来"。
+         * 实测（2026-10-02 台架）：设定值从 4.5 切到 2.0 时线甩出探头，reqL 卡在 7200
+         * 转了 4 秒以上、yaw 绕了 360°+。这里按 TRACE_LOST_DECAY_MS 线性收到 0。 */
+        uint32_t lost_ms = (s_lost_since != 0U) ? (uint32_t)(HAL_GetTick() - s_lost_since) : 0U;
+
+        if (lost_ms > TRACE_LOST_MS) {
+            uint32_t over = lost_ms - TRACE_LOST_MS;
+            float k = (over >= TRACE_LOST_DECAY_MS)
+                        ? 0.0f
+                        : (1.0f - (float)over / (float)TRACE_LOST_DECAY_MS);
+            pid_output = last_pid_output * k;
+            base_speed = base_speed / 2;              /* 丢太久：减速找线 */
+            if (lost_ms > TRACE_LOST_STOP_MS) {
+                /* #3 审计: 直驱原来只减半速、一路开出赛道，没有停车兜底 */
+                s_dd_stop = 1U;
+                apply_speeds(0.0f, 0.0f);
+                return;
+            }
+        } else {
+            pid_output = last_pid_output;             /* 短暂丢线：保持上一次的转向 */
+        }
+    } else {
+        if (s_dd_stop) { s_dd_stop = 0U; }   /* #3: 自愈，重新看到线就恢复 */
+        pid_output    = PID_Compute(s_setpoint, data);
+        /* ★2026-10-27（车速 5000 求稳）：**陀螺角速度阻尼**。
+         * 差速直出路径只看灰度、**完全没有转动反馈** ⇒ 车身一摆就没人拉住。
+         * 这里减一项 K×Gyro_Z（偏航角速度 °/s）：转得越快，反向拉得越多
+         * ⇒ 活动阻尼，直接压摆动幅度。系数取自参数表（可在界面调/可关）。 */
+        {
+            float kdamp = host_param_get(0x0213u, 0.0f);   /* °/s -> PWM 刻度 */
+            if (kdamp > 0.0f) {
+                pid_output -= kdamp * Gyro_Z;
+            }
+        }
+        last_pid_output = pid_output;
+    }
+
+    l = (float)base_speed - pid_output;
+    r = (float)base_speed + pid_output;
+
+    apply_speeds(l, r);
+}
+
+/**
+ * @brief 设置三级串级的外环标定量（重心误差 -> 转率 / 目标航向相对当前航向的前置量上限）
+ *
+ * 这两个量的真值现在放在 host_link 的参数表里（HP_TRACE_ANGLE_PER_UNIT / _MAX），
+ * 所以这个 setter 就是"写参数表"；超范围的写不进（参数表自己带上下限）。
+ * 量纲见文件头那段「循迹外环怎么改全局目标航向」：per_unit = (°/s)/格、
+ * aim_max = 前置量上限(°)。出厂兜底 10.0f / 35.0f。
+ */
+void PID_Tracing_SetCascadeGains(float deg_per_unit, float aim_max_deg)
+{
+    if (deg_per_unit >= TRACE_ANGLE_PER_UNIT_MIN && deg_per_unit <= TRACE_ANGLE_PER_UNIT_MAX) {
+        host_param_set_local(HP_TRACE_ANGLE_PER_UNIT, deg_per_unit);
+    }
+    if (aim_max_deg >= TRACE_ANGLE_MAX_LIMIT_MIN && aim_max_deg <= TRACE_ANGLE_MAX_LIMIT_MAX) {
+        host_param_set_local(HP_TRACE_ANGLE_MAX, aim_max_deg);
+    }
+}
+
+/* 读值时兜一层：参数表里是 0/NaN/巨大值时用出厂值，绝不把车带飞 */
+static float cascade_per_unit(void)
+{
+    float v = host_param_get(HP_TRACE_ANGLE_PER_UNIT, TRACE_ANGLE_PER_UNIT_DEFAULT);
+    if (!(v >= TRACE_ANGLE_PER_UNIT_MIN && v <= TRACE_ANGLE_PER_UNIT_MAX)) {
+        v = TRACE_ANGLE_PER_UNIT_DEFAULT;
+    }
+    return v;
+}
+
+static float cascade_aim_max(void)
+{
+    float v = host_param_get(HP_TRACE_ANGLE_MAX, TRACE_ANGLE_MAX_DEFAULT);
+    if (!(v >= TRACE_ANGLE_MAX_LIMIT_MIN && v <= TRACE_ANGLE_MAX_LIMIT_MAX)) {
+        v = TRACE_ANGLE_MAX_DEFAULT;
+    }
+    return v;
+}
+
+/* 外环微分项增益（°/s per (格/s)）。参数表里复用了 HP_LINE_KD —— 老 mode-2 循迹 PID
+ * （motor_tracing_pid_speed）在现在的固件里没有任何调用者，那套 Kp/Ki/Kd 是死的；
+ * 但"循迹 D 项"这个名字与量纲正好是这里要的，所以 2026-10-05 起它归串级外环用（用户 m33254）。*/
+static float cascade_pos_kd(void)
+{
+    float v = host_param_get(HP_LINE_KD, TRACE_POS_KD_DEFAULT);
+    if (!(v >= 0.0f && v <= TRACE_POS_KD_MAX)) {
+        v = TRACE_POS_KD_DEFAULT;
+    }
+    return v;
+}
+
+void PID_Tracing_GetCascadeGains(float *deg_per_unit, float *aim_max_deg)
+{
+    if (deg_per_unit != 0) { *deg_per_unit = cascade_per_unit(); }
+    if (aim_max_deg  != 0) { *aim_max_deg  = cascade_aim_max(); }
+}
+/**
+ * @brief 三层串级：灰度误差 -> 修改全局目标航向 -> 角度环 -> 左右轮目标速度 -> 速度环
+ *
+ * 目标航向只有一份，归角度环持有（gyro_control.c 的 target_angle，发车时被
+ * GyroControl_Start() 定成当前航向）；本函数每拍按灰度重心误差把它往线所在的方向推。
+ * 详细口径见文件头「循迹外环怎么改全局目标航向」（用户 m32880 定案）。
+ */
+static uint8_t trace_slow_active = 0U;   /* ★按偏差减速是否正在生效 */
+
+void motor_tracing_cascade(int base_speed)
+{
+    float err;
+
+    read_tracing_data_pid();
+
+    /* 本拍默认没有转率前馈：只有下面"真的在看线"和"找线"两个分支会给出值。
+     * 前馈是消费式的（gyro_control 每拍读走即清），所以每拍都必须重新给，
+     * 别指望上一拍的值还在。 */
+    GyroControl_SetTraceRate(0.0f);
+
+    err = data - s_setpoint;                 /* >0：线在车的右侧 */
+
+    /* ★2026-10-16(#1) 丢线超时停车后的**自愈**（审计第 1 条）。
+     * 原来 :935-940 会 GyroControl_Stop() + SpeedControl_Stop()，但全工程没有任何
+     * 重新使能的路径 ⇒ 车永久停住、PWM=0，而遥测照旧报 drive=3/enabled=1，
+     * 用户点"前进"没反应也看不出原因（只有断电重启才恢复）。
+     * 这里：只要这一拍重新看到线，就把两个环重新使能，并清掉停车标志。 */
+    if (!all_sensors_lost && s_lost_stop) {
+        s_lost_stop = 0U;
+        if (!GyroControl_IsEnabled()) {
+            GyroControl_Start();
+        }
+        if (!SpeedControl_IsEnabled()) {
+            SpeedControl_SetTarget(0.0f, 0.0f);
+            SpeedControl_Enable(1U);
+        }
+    }
+
+    /* ★2026-10-16 按偏差自动减速（见文件上方 TRACE_SLOW_* 注释）。
+     * base_speed 是外环的基准速度，后面所有"左右轮目标"都由它推出来；
+     * 这里就地把它按偏差缩小 ⇒ 进弯自动慢、出弯自动回到发车速度。 */
+    if (TRACE_SLOW_ERR_GAIN > 0.0f) {
+        float _a = fabsf(err) - TRACE_SLOW_ERR_FREE;
+        if (_a > 0.0f) {
+            float _k  = 1.0f / (1.0f + TRACE_SLOW_ERR_GAIN * _a);
+            int   _nb = (int)((float)base_speed * _k);
+            if (_nb < TRACE_SLOW_MIN_SPEED) _nb = TRACE_SLOW_MIN_SPEED;
+            if (_nb > base_speed)           _nb = base_speed;
+            base_speed = _nb;
+            trace_slow_active = (uint8_t)((_nb < (int)((float)(_nb) / _k + 0.5f)) ? 1U : 0U);
+        }
+    }
+
+    /* ★2026-10-06 偏航角速度：**必须用陀螺直接给的 `Gyro_Z`，不能用 d(Yaw)/dt**。
+     *   审查结论（见 DECISIONS 最新条目）：`Yaw` 名义 **10ms 才更新一次**（`gyro_control.c:309` 的注释
+     *   自己写着"差分出来在相邻两拍之间交替出现 0 和两倍值"），而本函数 **5ms 一拍** ⇒ 用差分算出来的
+     *   `s_yaw_rate` 会在 **0 / 2ω 之间逐拍跳** ⇒ `comp` 里的补偿项**约 50% 的拍子读到 0** ⇒ 方向判据
+     *   退化成**冻死的 `s_pos_rate`**（进弯前的旧趋势）⇒ **偶发反向转弯**（用户 m："明明是左转弯，
+     *   它有时候就是会右转弯"）。Gyro_Z 是模块直接给的角速度，没有这个交替。 */
+    s_yaw_rate = Gyro_Z;
+
+    if (all_sensors_lost) {
+        /* 丢线期间有效帧不再产生（trace_pos_frames 不前进），重新压线那一帧 data 会从冻住的
+         * 旧值跳回来 ⇒ 标一下，让微分项重新起步，别把这个跳变当成"重心在飞"。*/
+        s_rate_resync = 1U;
+        s_err_i = 0.0f;   /* 丢线清积分，防止饱和 */
+        s_ff_lp       = 0.0f;   /* 前馈低通也重新起步：丢线期间它冻在旧值上，压回线时别拿旧值冲一下 */
+    }
+
+    if (!s_base_valid) {
+        /* 发车：全局目标航向 = 当前航向。GyroControl_Start() 进模式时已经做过一次，
+         * 这里再钉一遍，保证不管从哪条路（上位机/任务/台架）进串级，起点都是"现在朝哪"。*/
+        s_base_valid = 1U;
+        GyroControl_SetTargetAngle(NormalizeAngle(Yaw));
+    } else if (!all_sensors_lost) {
+        /* 只在这一拍**真的看到线**时才改目标航向：丢线时 data 是冻住的旧值，
+         * 继续积分就是拿着一个过期误差把目标角一路推到天上（积分饱和）。*/
+        float per_unit = cascade_per_unit();
+        float pos_kd   = cascade_pos_kd();
+        float rate_max = (s_trace_rate_max > 0.0f) ? s_trace_rate_max : TRACE_RATE_MAX_DEFAULT;
+        float rate_cmd;
+        float d;
+        float ff_out;
+        uint8_t new_frame = (trace_pos_frames != s_rate_frame) ? 1U : 0U;
+
+        /* 重心变化率 ė（格/s）：只在新的一帧上更新（50Hz），一阶低通压噪。
+         * 它给外环提供阻尼 —— 没有它外环就是零阻尼振荡（见文件头「为什么必须有微分项」）。*/
+        if (new_frame) {
+            float dp = 0.0f;
+
+            if (s_rate_valid && !s_rate_resync) dp = data - s_prev_data_f;
+            s_rate_valid  = 1U;
+            s_rate_resync = 0U;
+            s_prev_data_f = data;
+            s_rate_frame  = trace_pos_frames;
+            s_pos_rate += (dp * TRACE_FRAME_HZ - s_pos_rate) * TRACE_POS_RATE_LPF;
+        }
+
+        /* 正负号与 P 项一致：ė > 0 = 线在往车的右边跑 = 车偏左 = 要往右转 = rate_cmd < 0 */
+        /* ★2026-10-18 外环积分：P 在摩擦系统里一定留稳态偏移（线贴边不回中），
+         * 加 I 消掉它，这样 per_unit 可以保持小、不摆。默认 0（关）= 逐位回到旧行为。
+         * 单位 °/s per (格·秒)；限幅 ±4 格·秒 防积分饱和（丢线时也清零，见下面 lost 分支）。 */
+        {
+            float line_ki = host_param_get(0x0210u, 0.0f);
+            if (line_ki > 0.0f) {
+                s_err_i += err * (1.0f / TRACE_FRAME_HZ);
+                if (s_err_i >  4.0f) s_err_i =  4.0f;
+                if (s_err_i < -4.0f) s_err_i = -4.0f;
+            }
+            rate_cmd = -(per_unit * err + pos_kd * s_pos_rate + line_ki * s_err_i);   /* °/s，>0 = 向左 */
+        }
+        /* 看见线时**用自己的（小）上限**，别用找线那个 300：见 TRACE_RATE_MAX_VISIBLE 注释。 */
+        {
+            float vlim = TRACE_RATE_MAX_VISIBLE;
+            if (vlim > rate_max) vlim = rate_max;             /* 不越过参数表给的上限 */
+            if (rate_cmd >  vlim) rate_cmd =  vlim;
+            if (rate_cmd < -vlim) rate_cmd = -vlim;
+        }
+
+        /* 两条路一起给（2026-10-05 第 6 轮起）：
+         *   ① 期望转率直接前馈进内环速率环 —— "跟得上线"的主渠道，低滞后；
+         *   ② 同一个量积成目标航向增量 —— 外环的"航向记忆"（丢线期间不再改，见上面的分支）。
+         * 为什么必须前馈：只推目标航向时，外环→内环→车身是一条 τ≈1/ang_kp≈285ms 的一阶
+         * 滞后，正压在外环 ω_n=√(v·per_unit)≈5.9rad/s 上 ⇒ 几乎没有相位裕度，表现为实测
+         * 的 1s 等幅大摆；此时外环微分项也治不好（Routh 门槛 + 极点分析见 out\_poles.py）。
+         *
+         * ★第 8 轮修的是"晃"：前馈这条路把 D 项的帧级噪声**直接**灌进速率环，实测
+         * rate_ref 抖动 30°/s（老结构只有 1~2°/s），乘上 rate_kp=250 就超过 corr_limit
+         * ⇒ 光噪声把修正量打满，轮子每帧被反向猛拽。所以前馈先过低通（见 TRACE_FF_LPF）。*/
+        if (new_frame) {
+            s_ff_lp += (rate_cmd - s_ff_lp) * TRACE_FF_LPF;
+        }
+        ff_out = (s_ff_lp > TRACE_FF_MIN || s_ff_lp < -TRACE_FF_MIN) ? s_ff_lp : 0.0f;
+        GyroControl_SetTraceRate(ff_out);
+        d = rate_cmd * TRACE_CASCADE_DT_S;
+        GyroControl_AimRelative(d);
+
+        /* 记住"线持续偏在哪一侧"（现在只当起扫的兜底用）。 */
+        s_err_dir += (err - s_err_dir) * TRACE_SEARCH_DIR_LPF;
+        if (s_err_dir >  TRACE_SEARCH_DIR_DEAD) s_search_dir =  1;
+        if (s_err_dir < -TRACE_SEARCH_DIR_DEAD) s_search_dir = -1;
+
+        /* ★2026-10-06 记下"上一拍"的转向需求（丢线后的保持阶段要用，见 TRACE_HOLD_MS）；
+         *   并且看到线 ⇒ 保持阶段结束。 */
+        s_hold_rate = rate_cmd;
+        s_hold_on   = 0U;
+
+        /* ★2026-10-06 一个细节：**连续**看见线够久才算真的找回来，才允许清掉扫描方向
+         * （零星看见不算 —— 直角处车会反复瞥见原来那条腿，正是它把方向翻来翻去）。 */
+        if (s_see_since == 0U) {
+            s_see_since = HAL_GetTick();
+        } else if ((uint32_t)(HAL_GetTick() - s_see_since) >= TRACE_REACQ_MS) {
+            s_sweep_dir = 0;
+        }
+    }
+
+    /* ★2026-10-06 路口减速：**不管丢没丢线**。
+     * `s_cross` 成立的那一刻（≥4 路同时压线）线**通常还看得见** —— 那是"车正压在路口上"。
+     * 原来这一行写在下面的丢线分支里 ⇒ 等于要等车已经冲出弯口（丢线了）才减速，形同虚设。
+     * 提到这里之后：一进路口就先把速度让一半，给探头时间看到"拐过去的那条腿"
+     * （0.33m/s 下 120ms 的找线延迟里车已走 40mm，而探头杆总共才 ~60mm）。 */
+    if (s_cross != 0U) base_speed = base_speed / 2;
+
+    /* ★2026-10-06 直角弯（用户 m 规格·第二版）：**左边 4 路**或**右边 4 路**压线 ⇒ 直角。
+     *   ① 检测：`trace_cal_channel(i)` 数左右半边各压了几路（idx 0..3 = 左半边，4..7 = 右半边）；
+     *   ② 动作：线压满哪半边 ⇒ 就**一次把目标航向转 ±TRACE_CORNER_DEG(100°)**，交给角度环转过去；
+     *   ③ 退出：**先转过 TRACE_CORNER_MIN_DEG(60°)**，之后线回到中间（|err| < 0.8）⇒ 立刻停转、
+     *      target = 当前车头、继续普通循迹；另有 TRACE_CORNER_TIMEOUT_MS 兜底。
+     *   ★第一版的两个错（都被真车数据抓住）：检测用"≥4 路压线、不分左右" ⇒ 线在中间但宽也触发
+     *     （实测每趟 8~13 次）；退出条件用了 `|err| < 0.8` **且没要求先转过角度** ⇒ 直角处线正好在
+     *     中间时**下一拍就把那 100° 取消了** ⇒ 用户看到的就是"很普通的直角它转不过来、直着走" ✗。
+     *     也不能拿 `all_sensors_lost` 当退出条件：真直角**本来就会丢线** ✗。 */
+    {
+        uint8_t l = 0U, r = 0U, i;
+        for (i = 0U; i < 4U; i++) if (trace_cal_channel(i) == 1) l++;
+        for (i = 4U; i < 8U; i++) if (trace_cal_channel(i) == 1) r++;
+        if ((host_param_get(HP_TRACE_CORNER, 0.0f) >= 0.5f) && !s_corner_on && !all_sensors_lost &&
+            (l >= TRACE_CORNER_HALF_MIN || r >= TRACE_CORNER_HALF_MIN) &&
+            (uint32_t)(HAL_GetTick() - s_corner_at) > TRACE_CORNER_REFRACT_MS) {
+            s_corner_on  = 1U;
+            s_corner_yaw0 = Yaw;
+            s_corner_yaw = NormalizeAngle(Yaw + ((l >= TRACE_CORNER_HALF_MIN) ? TRACE_CORNER_DEG
+                                                                              : -TRACE_CORNER_DEG));
+            s_corner_at  = HAL_GetTick();
+            GyroControl_SetTargetAngle(s_corner_yaw);
+            base_speed   = 0;   /* ★原地对转（用户 m："这个角度转弯怎么半径这么大" ⇒ 只转目标航向、
+                                 *   基准还是全速/半速的话，半径 = v/ω 是个大弧，压不住直角）。
+                                 *   base=0 ⇒ left=−corr / right=+corr，差速 6000、实测 ~121°/s。*/
+        }
+    }
+    if (s_corner_on) {
+        float turned = fabsf(NormalizeAngle(Yaw - s_corner_yaw0));
+        uint8_t tmo  = ((uint32_t)(HAL_GetTick() - s_corner_at) > TRACE_CORNER_TIMEOUT_MS) ? 1U : 0U;
+        if ((turned >= TRACE_CORNER_MIN_DEG && fabsf(err) < TRACE_CORNER_DONE_BAND) || tmo) {
+            s_corner_on = 0U;                            /* 转够了 + 线回到中间 ⇒ 停转，接普通循迹 */
+            GyroControl_SetTargetAngle(NormalizeAngle(Yaw));
+        } else {
+            GyroControl_SetTargetAngle(s_corner_yaw);    /* 转弯进行中：目标钉住，不给它被改回去的机会 */
+            base_speed = 0;                              /* ★而且**原地对转**（半径≈0）——见触发处注释 */
+        }
+    }
+
+    if (all_sensors_lost && s_lost_since != 0U && !s_corner_on) {
+        /* ★`!s_corner_on`：**直角转弯期间不算"丢了线"** —— 直角本来就要转 90~100° 才能看到新那条腿，
+         *   中途线必然不在视场里。原来这里会走"保持→找线→2.5s 保护停车"，实测就是它在转弯中途开火：
+         *   cx2 那趟 t≈4s 原地对转、t≈6s 直接停住（vl=vr=0），用户看到的是"普通直角转不过来、直着走" ✗。*/
+        uint32_t lost_ms = (uint32_t)(HAL_GetTick() - s_lost_since);
+
+        s_see_since = 0U;   /* 丢线：连续看见的计时作废（要重新连续看见才算出弯） */
+        /* 方向判据：**在丢线那一拍用 `s_err_dir`（见上面 `if (!s_hold_on)` 那段）**。 */
+        if (!s_hold_on) {   /* ★刚丢线：锁方向、消掉存量领先、记下"上一拍"和当时的航向 */
+            s_hold_on   = 1U;
+            s_hold_yaw0 = Yaw;
+            /* ★方向判据**退回 `s_err_dir`**（err 的短 EMA = "线最后偏在哪一侧"）：
+             *   真车日志取证（146 个丢线事件、按版本分组）：用 `s_err_dir` 的 sx 版真反向 **0/13**
+             *   （它 `rate_ref<0` 只占 8%），而用 `comp` 的 dir/comp 版 **20.8% / 18.8%**，
+             *   且最大那次真反向 −163° 就出在 comp 版（丢线那拍 comp=+0.20 几乎是 0，平局被随手
+             *   判成"右"，然后钉死 1.8s）。comp 的物理量没错（直线段标定 −ė/ω 中位 −0.100，与
+             *   TRACE_SENSOR_LEVER=0.12 同量级同号），**错的是拿一个零点附近的噪声量做决定**。 */
+            s_hold_dir  = (s_err_dir >= 0.0f) ? -1.0f : 1.0f;
+            /* ★**把目标航向消零**（= 当前车头）：环里 `rate_ref = ang_kp×err + ff`，若目标里留着
+             *   进弯前最多 aim_max=35° 的**存量领先**，而它与 ff 反号且 |err|>|ff|/ang_kp（ff=120 时
+             *   只要 12°），rate_ref 就会取 err 的符号 = **前馈的反号** ⇒ 外环要左、环却往右推，
+             *   而且**能持续**到 err 收敛 —— 这正是"明明该左转却右转"（多 agent 审查结论）。 */
+            GyroControl_SetTargetAngle(NormalizeAngle(Yaw));
+        }
+
+        if (lost_ms > TRACE_LOST_STOP_MS) {
+            /* 丢线丢到这个份上（传感器死了/车被拿走/真的完全没线）：停车，别再闷头直冲
+             * （用户 m29239/m29852）。重新压线时 read_tracing_data_pid() 会 PID_Reset()，
+             * 下一拍 s_lost_stop 清掉就接着跑。 */
+            if (!s_lost_stop) {
+                s_lost_stop = 1U;
+                GyroControl_Stop();
+                SpeedControl_Stop();
+                Load(0.0f, 0.0f);
+            }
+            return;
+        }
+        /* ★2026-10-06 直角/丢线的速度策略（改过三版，这里是第三版，前两版都被真车否掉）：
+         *   ① 只写 `base/2` → 内侧轮起始只到 0，靠 170°/s 的转率硬拖；
+         *   ② 再把 corr cap 抬到 14000 去"硬顶出反转"→ **直线上被环变成继电器**：
+         *      用户 m 报「拐回来之后一直震荡在直线上」，日志里 corr 两个方向打到 ±14000、
+         *      车速 20~250mm/s 抽、pos 以 ~750ms 周期在 1.9↔6.8 扫。找线也会反复介入。
+         *   ③ ★现在：真正开始找线时**把基准打成 0** ⇒ `left = −corr, right = +corr`
+         *      = **原地对转**，正好是已经调好的 pivot 工况（base=0 ⇒ cap = corr_limit = 3000、
+         *      差速 6000、实测 ~121°/s）。既拿到了"内侧轮变负"，又不用放着大 cap 去污染
+         *      看见线时的环路；`corr_ref` 也就可以退回 3000。 */
+        /* ★2026-10-06 速度时间线（用户 m 定）：丢线后先"照上一拍走" —— 前 TRACE_HOLD_FULL_MS 全速
+         *   （保住动量和转弯半径），之后到 TRACE_HOLD_MS 半速；**超过 TRACE_HOLD_MS 才进找线扫描**，
+         *   那时才把基准打成 0（原地对转，pivot 工况；见下面那段"速度策略"的历史注释）。 */
+        if (lost_ms < TRACE_HOLD_FULL_MS) {
+            /* 全速：保持上一拍的动量 */
+        } else if (lost_ms <= TRACE_LOST_HOLD_MS) {
+            base_speed = base_speed / 2;    /* 半速：还前进着转，但更容易被拉回来 */
+        } else {
+            base_speed = 0;                 /* 进找线扫描 ⇒ 原地对转（pivot 工况） */
+        }
+
+        /* 找线：还在丢就朝"线最后偏在哪一侧"持续转（见 TRACE_SEARCH_DELAY_MS 注释）。
+         * 直角弯就靠这一下拐过去 —— 目标航向冻住的话车会直着冲出赛道。
+         * ★方向不再只靠 s_search_dir：它可能整趟都没被置过（车一直很正）⇒ 退化成按
+         * err 短 EMA 的符号挑一边，总比"不动等着被停车"强。 */
+        {
+            if (lost_ms <= TRACE_LOST_HOLD_MS) {
+                /* ★"照上一拍走"（用户 m 的方案 B）：保持丢线前的转向需求，并**继续推进目标航向**
+                 *   ⇒ 车**前进着持续转**（而不是原地对转）。这样探头会扫过一段**弧线**，比原地画小圈
+                 *   更容易压到新那条线（用户原话：「它还是前进着左转，所以这样就容易找到线」）。
+                 *   ★累计转角**最多 TRACE_HOLD_MAX_DEG**：用户 m 的例子——"0° 一直往前走、突然一个
+                 *   180° 的大弯，最多只能拐到 150°" ⇒ 到了就只保持转率、不再推进目标航向。*/
+                /* ★方向与幅度**拆开取**（用户 m 问"转弯方向是不是搞反了"引出的）：
+                 *   丢线那一拍的 `rate_cmd = −(30×err + 36×ė)` 里 **D 项主宰**（ė 常 ±25 格/s ⇒ 36×25=900，
+                 *   而 P 项 30×3.5 只有 105）⇒ 直接拿它的符号当方向，等于"按最后一拍的抖动决定转向"
+                 *   ⇒ 看起来就是方向反了。所以：
+                 *     · **方向**取抗噪的那个 —— `s_err_dir`（err 的短 EMA，不含 D 项）；
+                 *     · **幅度**取保持下来的 |rate_cmd|。 */
+                float hold = s_hold_dir * fabsf(s_hold_rate);
+                if (fabsf(NormalizeAngle(Yaw - s_hold_yaw0)) < TRACE_HOLD_MAX_DEG) {
+                    GyroControl_AimRelative(hold * TRACE_CASCADE_DT_S);
+                }
+                GyroControl_SetTraceRate(hold);
+            } else {
+                float rate  = TRACE_SEARCH_RATE;
+                float rate_max = ((s_trace_rate_max > 0.0f) ? s_trace_rate_max : TRACE_RATE_MAX_DEFAULT);
+                float rate_cmd;
+
+                /* ★确定性来回扫（见 TRACE_SWEEP_DEG 注释）：第一猜 = "线最后偏在哪一侧"（= 那个方向的
+                 * 短 EMA，抗噪）；**转够 TRACE_SWEEP_DEG 才掉头**（用陀螺实际转角判，不按时间）。 */
+                if (s_sweep_dir == 0) {
+                    s_sweep_dir = (s_hold_dir < 0.0f) ? 1 : -1;   /* 沿用丢线那一刻锁死的方向 */
+                    s_sweep_yaw0 = Yaw;
+                } else if (fabsf(NormalizeAngle(Yaw - s_sweep_yaw0)) >= TRACE_SWEEP_DEG) {
+                    s_sweep_dir = (int8_t)(-s_sweep_dir);                        /* 转够了还找不到 ⇒ 掉头 */
+                    s_sweep_yaw0 = Yaw;
+                }
+
+                rate_cmd = -(float)s_sweep_dir * rate;  /* >0 = 向左 */
+
+                if (rate_cmd >  rate_max) rate_cmd =  rate_max;
+                if (rate_cmd < -rate_max) rate_cmd = -rate_max;
+                /* 找线也走"前馈 + 目标航向"两条路：前馈让车当下就按这个转率转起来
+                 * （丢线时航向误差可能还很小，光推目标的话要等误差长出来才动）。 */
+                GyroControl_SetTraceRate(rate_cmd);
+                GyroControl_AimRelative(rate_cmd * TRACE_CASCADE_DT_S);
+            }
+        }
+    }
+    s_lost_stop = 0U;
+
+    /* 防积分饱和：目标航向不许离开**当前实际航向**超过 aim_max。弯道上当前航向跟着
+     * 目标一起走，所以这条夹子不会限制"一共能转多少度"，只限制"目标领先车头多少度"。*/
+    {
+        float aim_max = cascade_aim_max();
+        float lead    = GyroControl_HeadingError();      /* 目标 - 当前，±180 */
+
+        /* ★直角转弯进行中**不许夹**：否则这一脚 100° 会被砍成 35°（"一次转过去"以前没生效的原因）*/
+        if (!s_corner_on) {
+            if (lead >  aim_max) GyroControl_SetTargetAngle(NormalizeAngle(Yaw + aim_max));
+            if (lead < -aim_max) GyroControl_SetTargetAngle(NormalizeAngle(Yaw - aim_max));
+        }
+    }
+
+    /* 外两层：目标航向 -> 角度环 -> 左右轮目标速度。
+     * ★基准先过一道一阶斜坡（见 TRACE_BASE_TAU_S）：三个工况之间不再硬切，避免给车一个
+     *   加速度阶跃；**修正量那条路（corr）不过这道斜坡**，角度环该立刻反向还是立刻反向。 */
+    if (s_base_f < 0.0f) {
+        s_base_f = (float)base_speed;   /* 本趟第一拍：直接吸附（**不做软启动**，保持既有起步行为） */
+    } else {
+        s_base_f += ((float)base_speed - s_base_f) * (TRACE_CASCADE_DT_S / (TRACE_BASE_TAU_S + TRACE_CASCADE_DT_S));
+        if (fabsf((float)base_speed - s_base_f) < 20.0f) s_base_f = (float)base_speed;  /* 贴住就吸附，别留指数长尾 */
+    }
+    if (s_base_f < 0.0f) s_base_f = 0.0f;
+    if (s_base_f > (float)MOTOR_PWM_MAX) s_base_f = (float)MOTOR_PWM_MAX;
+    base_speed = (int)(s_base_f + 0.5f);
+    GyroControl_SetBaseSpeed(base_speed, base_speed);
+    GyroControl_Task();
+}
+
+void motor_tracing_reset_cascade(void)
+{
+    s_base_valid    = 0U;
+    s_search_dir    = 0;
+    s_err_dir       = 0.0f;
+    s_base_f        = -1.0f;  /* 哨兵：本趟第一拍直接吸附到目标基准（不做软启动） */
+    s_sweep_dir     = 0;      /* 找线扫描方向：新一趟重新猜 */
+    s_sweep_yaw0    = 0.0f;
+    s_hold_on       = 0U;     /* 保持阶段：下一趟重新开始 */
+    s_hold_rate     = 0.0f;
+    s_hold_yaw0     = 0.0f;
+    s_hold_dir      = 0.0f;
+    s_corner_on     = 0U;
+    s_corner_yaw    = 0.0f;
+    s_corner_yaw0   = 0.0f;
+    s_corner_at     = 0U;
+    s_yaw_rate      = 0.0f;
+    last_pid_output = 0.0f;
+    s_lost_since    = 0U;
+    s_lost_stop     = 0U;
+    data            = TRACE_SETPOINT;
+    last_data       = TRACE_SETPOINT;
+    all_sensors_lost = 0U;
+    /* 微分项状态：发车这一刻没有历史帧，第一帧只用来"对表"，不产生 D 冲击 */
+    s_pos_rate    = 0.0f;
+    s_ff_lp       = 0.0f;
+    s_prev_data_f = TRACE_SETPOINT;
+    s_rate_frame  = trace_pos_frames;
+    s_rate_valid  = 0U;
+    s_rate_resync = 1U;
+}
+
+/* ============= 后台循迹环的基准速度（2026-09-30 m02112 同步） =============
+ * 旧板 PWM 满量程只有 1000，所以旧代码里写死的是 1000（满油门）和 200（20%）；
+ * 本板满量程 7200。照抄的 1000 在本板只有 13.9% 占空比（低于静摩擦死区 ~2500）⇒ 推不动。
+ * 现在跟随“当前循迹”的两个参数：正常档 = 菜单里的“循迹速度”（HP_BASE_SPEED，默认 6480 = 旧 900），
+ * 慢速档 = HP_BASE_SPEED_SLOW（默认 2500，不是旧 200×7.2=1440，因为 1440 仍在死区以下）。 */
+static int trace_base_pwm(void)
+{
+    int base = (int)host_param_get(HP_BASE_SPEED, 6480.0f);
+    if (base < 0)             base = 0;
+    if (base > MOTOR_PWM_MAX) base = MOTOR_PWM_MAX;
+    return base;
+}
+
+static int trace_base_pwm_slow(void)
+{
+    int base = (int)host_param_get(HP_BASE_SPEED_SLOW, 2500.0f);
+    if (base < 0)             base = 0;
+    if (base > MOTOR_PWM_MAX) base = MOTOR_PWM_MAX;
+    return base;
+}
+
+void motor_tracing_pid(float target)
+{
+    s_setpoint = target;
+    motor_tracing_pid_speed(trace_base_pwm());
+}
+
+/**
+ * @brief 遥测只读快照（给上位机的 trace 组）
+ *        `data` = 本拍重心（1..8，车在正中 4.5），`last_pid_output` = 循迹环本拍
+ *        给左右轮的转向偏置。都不参与控制，只是让上位机看见环里在算什么。
+ */
+float PID_Tracing_TracePos(void)
+{
+    return data;
+}
+
+float PID_Tracing_PidOutput(void)
+{
+    return last_pid_output;
+}
+
+void motor_tracing_pid_0(float target)
+{
+    s_setpoint = target;
+    motor_tracing_pid_speed(trace_base_pwm_slow());
+}
+
+void motor_tracing_pid_0_task(void)
+{
+    s_setpoint = TRACE_SETPOINT;
+    motor_tracing_pid_speed(trace_base_pwm_slow());
+}
+
+/* ---------------------------------------------------------------------------
+ * 后台循迹环的开关与时基（2026-09-30 m02112 同步）
+ *
+ * 旧板：任务流程（`renwu.c`，已删除）里写 `PID_Tracing_Timer_Start(); HAL_Delay(1000); PID_Tracing_Timer_Stop();`
+ * ——那 1 秒里主循环阻塞在 HAL_Delay，真正循迹的是 TIM2 中断里的 motor_tracing_pid_0_task()
+ * （TIM2：PSC=7199 / ARR=999 @72MHz = 10Hz）。
+ *
+ * 新板没有多余的周期定时器：TIM6(5ms)=Motion_Task、TIM7(5ms)=Servo_Task，而且都由
+ * bsp_periodic_start() 在初始化时统一启动。这里原来写的是 HAL_TIM_Base_Start_IT(&htim2)——
+ * 而 htim2 只是 TIM6 的别名，于是 Start 没事（TIM6 本来就在跑）、**Stop 会把整个 5ms 运动节拍
+ * 停掉**（角度环/速度环一起停），语义完全不对。
+ *
+ * 现在 Start/Stop 只翻一个软件开关，真正的执行交给 Motion_Task()（TIM6 5ms 中断）：
+ * 每 PID_TRACE_BG_DIV(20) 拍跑一次 = 100ms = 旧板 10Hz。必须分频——同一个 PID
+ * （pid.c 的 PID_Compute，含 Kd·Δe 和 Ki·Σe）采样率快了 20 倍，D 项会强 20 倍、I 项弱 20 倍。
+ * ------------------------------------------------------------------------- */
+static uint8_t s_bg_on  = 0U;
+static uint8_t s_bg_div = 0U;
+
+void PID_Tracing_Timer_Start(void)
+{
+    s_bg_on  = 1U;
+    s_bg_div = 0U;
+}
+
+void PID_Tracing_Timer_Stop(void)
+{
+    s_bg_on  = 0U;
+    s_bg_div = 0U;
+}
+
+uint8_t PID_Tracing_BackgroundOn(void)
+{
+    return s_bg_on;
+}
+
+uint8_t PID_Tracing_BackgroundTask(void)
+{
+    if (!s_bg_on) return 0U;
+
+    if (++s_bg_div < PID_TRACE_BG_DIV) return 0U;
+    s_bg_div = 0U;
+
+    motor_tracing_pid_0_task();
+    return 1U;
+}
+

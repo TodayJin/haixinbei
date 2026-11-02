@@ -1,0 +1,480 @@
+$PACKAGES
+,
+        BUZ-TH_BD9.0-P5.00-D0.6-FD ! SUN-09055-5BUZ1SUN-09055-5SUN-09055-59*5.5 有源 5V 电磁蜂鸣器C2861BUZ-TH_BD9.0-P5.00-D0.6-FD ! '{Current Rating}{Voltage Rating}频率2800+300Hz,4-7V电压驱动{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; BUZ1 
+,
+        C0402 ! CC0402JRNPO9BN150C5CC0402JRNPO9BN15015pF15pF ±5% 50VC106997C0402 ! '{Current Rating}{Voltage Rating}容值:15pF;精度:±5%;额定电压:50V;材质(温度系数):NP0;{Power Dissipation (Pd)}15pF±5%{Type}{Voltage-Supply(Max)}' ,
+        ; C5 
+,
+        C0402 ! CC0402JRNPO9BN150C6CC0402JRNPO9BN15015pF15pF ±5% 50VC106997C0402 ! '{Current Rating}{Voltage Rating}容值:15pF;精度:±5%;额定电压:50V;材质(温度系数):NP0;{Power Dissipation (Pd)}15pF±5%{Type}{Voltage-Supply(Max)}' ,
+        ; C6 
+,
+        C0402 ! CGA0402X5R475M250GTC42CGA0402X5R475M250GT4.7uF4.7uF ±20% 25VC6119795C0402 ! '{Current Rating}25V容值:4.7uF;精度:±20%;额定电压:25V;温度系数:X5R;{Power Dissipation (Pd)}4.7uF±20%{Type}{Voltage-Supply(Max)}' ,
+        ; C42 
+,
+        C0402 ! CGA0402X5R475M250GTC44CGA0402X5R475M250GT4.7uF4.7uF ±20% 25VC6119795C0402 ! '{Current Rating}25V容值:4.7uF;精度:±20%;额定电压:25V;温度系数:X5R;{Power Dissipation (Pd)}4.7uF±20%{Type}{Voltage-Supply(Max)}' ,
+        ; C44 
+,
+        C0402 ! CL05B104KB54PNCC15CL05B104KB54PNC100nF100nF ±10% 50VC307331C0402 ! '{Current Rating}50V容值:100nF;精度:±10%;额定电压:50V;温度系数:X7R;{Power Dissipation (Pd)}100nF±10%{Type}{Voltage-Supply(Max)}' ,
+        ; C15 
+,
+        C0402 ! CL05B104KB54PNCC23CL05B104KB54PNC100nF100nF ±10% 50VC307331C0402 ! '{Current Rating}50V容值:100nF;精度:±10%;额定电压:50V;温度系数:X7R;{Power Dissipation (Pd)}100nF±10%{Type}{Voltage-Supply(Max)}' ,
+        ; C23 
+,
+        C0402 ! CL05B104KB54PNCC24CL05B104KB54PNC100nF100nF ±10% 50VC307331C0402 ! '{Current Rating}50V容值:100nF;精度:±10%;额定电压:50V;温度系数:X7R;{Power Dissipation (Pd)}100nF±10%{Type}{Voltage-Supply(Max)}' ,
+        ; C24 
+,
+        C0402 ! CL05B104KB54PNCC25CL05B104KB54PNC100nF100nF ±10% 50VC307331C0402 ! '{Current Rating}50V容值:100nF;精度:±10%;额定电压:50V;温度系数:X7R;{Power Dissipation (Pd)}100nF±10%{Type}{Voltage-Supply(Max)}' ,
+        ; C25 
+,
+        C0402 ! CL05B104KB54PNCC26CL05B104KB54PNC100nF100nF ±10% 50VC307331C0402 ! '{Current Rating}50V容值:100nF;精度:±10%;额定电压:50V;温度系数:X7R;{Power Dissipation (Pd)}100nF±10%{Type}{Voltage-Supply(Max)}' ,
+        ; C26 
+,
+        C0402 ! CL05B104KB54PNCC31CL05B104KB54PNC100nF100nF ±10% 50VC307331C0402 ! '{Current Rating}50V容值:100nF;精度:±10%;额定电压:50V;温度系数:X7R;{Power Dissipation (Pd)}100nF±10%{Type}{Voltage-Supply(Max)}' ,
+        ; C31 
+,
+        C0402 ! CL05B104KB54PNCC41CL05B104KB54PNC100nF100nF ±10% 50VC307331C0402 ! '{Current Rating}50V容值:100nF;精度:±10%;额定电压:50V;温度系数:X7R;{Power Dissipation (Pd)}100nF±10%{Type}{Voltage-Supply(Max)}' ,
+        ; C41 
+,
+        C0402 ! HGC0402R5105K500NTEJC39HGC0402R5105K500NTEJ1uF1uF ±10% 50VC7472948C0402 ! '{Current Rating}50V容值:1uF;精度:±10%;额定电压:50V;温度系数:X5R;{Power Dissipation (Pd)}1uF±10%{Type}{Voltage-Supply(Max)}' ,
+        ; C39 
+,
+        C0402 ! HGC0402R5105K500NTEJC40HGC0402R5105K500NTEJ1uF1uF ±10% 50VC7472948C0402 ! '{Current Rating}50V容值:1uF;精度:±10%;额定电压:50V;温度系数:X5R;{Power Dissipation (Pd)}1uF±10%{Type}{Voltage-Supply(Max)}' ,
+        ; C40 
+,
+        C0603 ! CapacitanceC16CAP_0603100nF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}100nF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C16 
+,
+        C0603 ! CapacitanceC18CAP_0603100nF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}100nF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C18 
+,
+        C0603 ! CapacitanceC19CAP_0603100nF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}100nF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C19 
+,
+        C0603 ! CapacitanceC20CAP_06034.7uF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}4.7uF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C20 
+,
+        C0603 ! CapacitanceC21CAP_0603100nF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}100nF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C21 
+,
+        C0603 ! CapacitanceC22CAP_06034.7nF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}4.7nF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C22 
+,
+        C0603 ! CapacitanceC27CAP_0603100nF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}100nF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C27 
+,
+        C0603 ! CapacitanceC28CAP_06034.7uF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}4.7uF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C28 
+,
+        C0603 ! CapacitanceC29CAP_0603100nF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}100nF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C29 
+,
+        C0603 ! CapacitanceC30CAP_06034.7nF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}4.7nF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C30 
+,
+        C0603 ! CapacitanceC32CAP_0603100nF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}100nF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C32 
+,
+        C0603 ! CapacitanceC33CAP_0603100nF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}100nF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C33 
+,
+        C0603 ! CapacitanceC34CAP_0603100nF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}100nF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C34 
+,
+        C0603 ! CapacitanceC36CAP_0603100nF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}100nF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C36 
+,
+        C0603 ! CapacitanceC37CAP_0603100nF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}100nF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C37 
+,
+        C0603 ! CapacitanceC38CAP_0603100nF{LCSC Part Name}{Supplier Part}C0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}100nF{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; C38 
+,
+        C0805 ! CGA0805X5R226M350MTC2CGA0805X5R226M350MT22uF22uF ±20% 35VC6119901C0805 ! '{Current Rating}35V容值:22uF;精度:±20%;额定电压:35V;温度系数:X5R;{Power Dissipation (Pd)}22uF±20%{Type}{Voltage-Supply(Max)}' ,
+        ; C2 
+,
+        C0805 ! CGA0805X5R226M350MTC4CGA0805X5R226M350MT22uF22uF ±20% 35VC6119901C0805 ! '{Current Rating}35V容值:22uF;精度:±20%;额定电压:35V;温度系数:X5R;{Power Dissipation (Pd)}22uF±20%{Type}{Voltage-Supply(Max)}' ,
+        ; C4 
+,
+        C0805 ! HGC0805R5106K250NSLJC12HGC0805R5106K250NSLJ10uF10uF ±10% 25VC19103847C0805 ! '{Current Rating}25V容值:10uF;精度:±10%;额定电压:25V;温度系数:X5R;{Power Dissipation (Pd)}10uF±10%{Type}{Voltage-Supply(Max)}' ,
+        ; C12 
+,
+        C0805 ! HGC0805R5106K250NSLJC1HGC0805R5106K250NSLJ10uF10uF ±10% 25VC19103847C0805 ! '{Current Rating}25V容值:10uF;精度:±10%;额定电压:25V;温度系数:X5R;{Power Dissipation (Pd)}10uF±10%{Type}{Voltage-Supply(Max)}' ,
+        ; C1 
+,
+        C0805 ! HGC0805R5106K250NSLJC3HGC0805R5106K250NSLJ10uF10uF ±10% 25VC19103847C0805 ! '{Current Rating}25V容值:10uF;精度:±10%;额定电压:25V;温度系数:X5R;{Power Dissipation (Pd)}10uF±10%{Type}{Voltage-Supply(Max)}' ,
+        ; C3 
+,
+        C0805 ! HGC0805R5106K250NSLJC8HGC0805R5106K250NSLJ10uF10uF ±10% 25VC19103847C0805 ! '{Current Rating}25V容值:10uF;精度:±10%;额定电压:25V;温度系数:X5R;{Power Dissipation (Pd)}10uF±10%{Type}{Voltage-Supply(Max)}' ,
+        ; C8 
+,
+        C1206 ! HGC1206R5476M250NSPJC14HGC1206R5476M250NSPJ47uF47uF ±20% 25VC22367835C1206 ! '{Current Rating}25V容值:47uF;精度:±20%;额定电压:25V;温度系数:X5R;{Power Dissipation (Pd)}47uF±20%{Type}{Voltage-Supply(Max)}' ,
+        ; C14 
+,
+        C1206 ! HGC1206R5476M250NSPJC17HGC1206R5476M250NSPJ47uF47uF ±20% 25VC22367835C1206 ! '{Current Rating}25V容值:47uF;精度:±20%;额定电压:25V;温度系数:X5R;{Power Dissipation (Pd)}47uF±20%{Type}{Voltage-Supply(Max)}' ,
+        ; C17 
+,
+        C1206 ! HGC1206R5476M250NSPJC35HGC1206R5476M250NSPJ47uF47uF ±20% 25VC22367835C1206 ! '{Current Rating}25V容值:47uF;精度:±20%;额定电压:25V;温度系数:X5R;{Power Dissipation (Pd)}47uF±20%{Type}{Voltage-Supply(Max)}' ,
+        ; C35 
+,
+        CAP-TH_BD10.0-P5.00-D0.6-FD_2 ! PA100V100M10X12C10PA100V100M10x12100uF100uF ±20% 100VC46550452CAP-TH_BD10.0-P5.00-D0.6-FD_2 ! '{Current Rating}100V容值:100uF;精度:±20%;额定电压:100V;纹波电流:2.6A@100kHz;等效串联电阻(ESR):40mΩ@100kHz;类型:聚合物;{Power Dissipation (Pd)}100uF±20%聚合物{Voltage-Supply(Max)}' ,
+        ; C10 
+,
+        CAP-TH_BD10.0-P5.00-D0.6-FD_2 ! PA100V100M10X12C9PA100V100M10x12100uF100uF ±20% 100VC46550452CAP-TH_BD10.0-P5.00-D0.6-FD_2 ! '{Current Rating}100V容值:100uF;精度:±20%;额定电压:100V;纹波电流:2.6A@100kHz;等效串联电阻(ESR):40mΩ@100kHz;类型:聚合物;{Power Dissipation (Pd)}100uF±20%聚合物{Voltage-Supply(Max)}' ,
+        ; C9 
+,
+        CAP-TH_BD10.0-P5.00-D0.6-FD-H20.0-1 ! ERG50V470M10X20C13ERG50V470M10X20470uF470uF ±20% 50VC51904474CAP-TH_BD10.0-P5.00-D0.6-FD-H20.0-1 ! '{Current Rating}50V容值:470uF;精度:±20%;额定电压:50V;纹波电流:1.56A@100kHz;等效串联电阻(ESR):43mΩ@100kHz;{Power Dissipation (Pd)}470uF±20%{Type}{Voltage-Supply(Max)}' ,
+        ; C13 
+,
+        CAP-TH_BD6.3-P2.50-D0.6-FD-H12.0 ! PA35V220M6X12C11PA35V220M6x12220uF220uF ±20% 35VC46550432CAP-TH_BD6.3-P2.50-D0.6-FD-H12.0 ! '{Current Rating}35V容值:220uF;精度:±20%;额定电压:35V;纹波电流:2.98A@100kHz;等效串联电阻(ESR):16mΩ@100kHz;类型:聚合物;{Power Dissipation (Pd)}220uF±20%聚合物{Voltage-Supply(Max)}' ,
+        ; C11 
+,
+        CAP-TH_BD6.3-P2.50-D0.6-FD-H12.0 ! PA35V220M6X12C7PA35V220M6x12220uF220uF ±20% 35VC46550432CAP-TH_BD6.3-P2.50-D0.6-FD-H12.0 ! '{Current Rating}35V容值:220uF;精度:±20%;额定电压:35V;纹波电流:2.98A@100kHz;等效串联电阻(ESR):16mΩ@100kHz;类型:聚合物;{Power Dissipation (Pd)}220uF±20%聚合物{Voltage-Supply(Max)}' ,
+        ; C7 
+,
+        CONN-SMD_10P-P1.00_ZX-SH1.0-10PWT ! ZX-SH1.0-10PWTU13ZX-SH1.0-10PWTZX-SH1.0-10PWT1x10P 间距:1mm 卧贴 系列:SHC19272377CONN-SMD_10P-P1.00_ZX-SH1.0-10PWT ! '1A50V插针结构:1x10P;间距:1mm;安装方式:卧贴;参考系列:SH;总PIN数:10P;排数:1;每排PIN数:10;行距:-;额定电流:1A;触头材质:黄铜;触头镀层:锡;工作温度:-25℃~+85℃;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U13 
+,
+        CONN-SMD_4P-P1.00_MEGASTAR_ZX-SH1.0-4PWT ! ZX-SH1.0-4PWTU14ZX-SH1.0-4PWTZX-SH1.0-4PWT1x4P 间距:1mm 卧贴 系列:SHC7430446CONN-SMD_4P-P1.00_MEGASTAR_ZX-SH1.0-4PWT ! '1A50V插针结构:1x4P;间距:1mm;安装方式:卧贴;参考系列:SH;总PIN数:4P;排数:1;每排PIN数:4;行距:-;额定电流:1A;触头材质:黄铜;触头镀层:锡;工作温度:-40℃~+85℃;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U14 
+,
+        CONN-SMD_4P-P1.00_MEGASTAR_ZX-SH1.0-4PWT ! ZX-SH1.0-4PWTU15ZX-SH1.0-4PWTZX-SH1.0-4PWT1x4P 间距:1mm 卧贴 系列:SHC7430446CONN-SMD_4P-P1.00_MEGASTAR_ZX-SH1.0-4PWT ! '1A50V插针结构:1x4P;间距:1mm;安装方式:卧贴;参考系列:SH;总PIN数:4P;排数:1;每排PIN数:4;行距:-;额定电流:1A;触头材质:黄铜;触头镀层:锡;工作温度:-40℃~+85℃;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U15 
+,
+        CONN-SMD_6P-P1.00_MEGASTAR_ZX-SH1.0-6PWT ! ZX-SH1.0-6PWTU12ZX-SH1.0-6PWTZX-SH1.0-6PWT1x6P 间距:1mm 卧贴 系列:SHC7430448CONN-SMD_6P-P1.00_MEGASTAR_ZX-SH1.0-6PWT ! '1A50V插针结构:1x6P;间距:1mm;安装方式:卧贴;参考系列:SH;总PIN数:6P;排数:1;每排PIN数:6;行距:-;额定电流:1A;触头材质:黄铜;触头镀层:锡;工作温度:-40℃~+85℃;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U12 
+,
+        CONN-TH_6P-P2.00_BX-PH2.0-6PWZ ! BX-PH2.0-6PWZU33BX-PH2.0-6PWZBX-PH2.0-6PWZ1x6P 间距:2mm 弯插 系列:PHC18077757CONN-TH_6P-P2.00_BX-PH2.0-6PWZ ! '2A250V插针结构:1x6P;间距:2mm;安装方式:弯插;参考系列:PH;总PIN数:6P;排数:1;每排PIN数:6;行距:-;额定电流:2A;触头材质:黄铜;触头镀层:锡;工作温度:-25℃~+85℃;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U33 
+,
+        CONN-TH_6P-P2.00_BX-PH2.0-6PWZ ! BX-PH2.0-6PWZU34BX-PH2.0-6PWZBX-PH2.0-6PWZ1x6P 间距:2mm 弯插 系列:PHC18077757CONN-TH_6P-P2.00_BX-PH2.0-6PWZ ! '2A250V插针结构:1x6P;间距:2mm;安装方式:弯插;参考系列:PH;总PIN数:6P;排数:1;每排PIN数:6;行距:-;额定电流:2A;触头材质:黄铜;触头镀层:锡;工作温度:-25℃~+85℃;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U34 
+,
+        CONN-TH_XT30PW-M ! XT30PW-MCN1XT30PW-M30.G.YXT30PW-M30.G.YAMASS(艾迈斯)航模插头电调机插座锂电池连接器 PCB板卧式 公头XT30PW-M30.G.YC431092CONN-TH_XT30PW-M ! '{Current Rating}{Voltage Rating}Socket,DCsupply,XT30,male,PIN:2{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; CN1 
+,
+        CRYSTAL-SMD_4P-L3.2-W2.5-BL ! X322525MOB4SIX1X322525MOB4SI25MHzYSX321SL 25MHZ 4P 3225 12PF ±10PPM -40~85℃ (±20PPM)C9006CRYSTAL-SMD_4P-L3.2-W2.5-BL ! '{Current Rating}{Voltage Rating}晶振类型:贴片晶振;频率:25MHz;常温频差:±10ppm;负载电容:12pF;频率稳定度:±20ppm;{Power Dissipation (Pd)}25MHz{Tolerance}贴片晶振{Voltage-Supply(Max)}' ,
+        ; X1 
+,
+        ESOP-8_L4.9-W3.9-P1.27-LS6.0-BL-EP ! AT8236U3AT8236AT8236单通道直流有刷电机驱动芯片C2827823ESOP-8_L4.9-W3.9-P1.27-LS6.0-BL-EP ! '{Current Rating}{Voltage Rating}AT8236是一款直流有刷电机驱动器，能够以高达6A的峰值电流双向控制电机。利用电流衰减模式，可通过对输入信号进行脉宽调制(PWM) 来控制电机转速，同时具备低功耗休眠模式。 AT8236集成同步整流功能，可显著降低系统功耗要求。{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U3 
+,
+        ESOP-8_L4.9-W3.9-P1.27-LS6.0-BL-EP ! AT8236U4AT8236AT8236单通道直流有刷电机驱动芯片C2827823ESOP-8_L4.9-W3.9-P1.27-LS6.0-BL-EP ! '{Current Rating}{Voltage Rating}AT8236是一款直流有刷电机驱动器，能够以高达6A的峰值电流双向控制电机。利用电流衰减模式，可通过对输入信号进行脉宽调制(PWM) 来控制电机转速，同时具备低功耗休眠模式。 AT8236集成同步整流功能，可显著降低系统功耗要求。{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U4 
+,
+        F2920 ! SMD2920-500-24F1SMD2920-500-24SMD2920-500-24SMD2920-500-24C47753903F2920 ! '{Current Rating}{Voltage Rating}耐压(Vmax):24V;最大电流(Imax):40A;保持电流(Ihold):5A;跳闸电流(Itrip):10A;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; F1 
+,
+        HDR-TH_10P-P2.54-V-F ! X5511FV-10-C70D30-1000H1HDR-F_2.54_1x10P{LCSC Part Name}C2684744HDR-TH_10P-P2.54-V-F ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; H1 
+,
+        HDR-TH_12P-P2.54-V-M-R3-C4-S2.54 ! HX PZ2.54-3X4P ZZU11HX PZ2.54-3x4P ZZHX PZ2.54-3x4P ZZ3x4P 间距:2.54mm 方针 直插C32713291HDR-TH_12P-P2.54-V-M-R3-C4-S2.54 ! '{Current Rating}{Voltage Rating}插针结构:3x4P;间距:2.54mm;行距:2.54mm;圆针/方针:方针;安装类型:直插;排数:三排;总PIN位数:12P;额定电流:3A;额定电压:-;配合针长度:6mm;塑高:2.5mm;端接针长度:3mm;触头材质:黄铜;触头镀层:金;工作温度范围:-40℃~+105℃;颜色:黑色;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U11 
+,
+        HDR-TH_4P-P2.54-V-F ! 2.54-1*4P母H2HDR-F_2.54_1x4P{LCSC Part Name}C2718488HDR-TH_4P-P2.54-V-F ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; H2 
+,
+        HDR-TH_4P-P2.54-V-F ! 2.54-1*4P母H3HDR-F_2.54_1x4P{LCSC Part Name}C2718488HDR-TH_4P-P2.54-V-F ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; H3 
+,
+        IND-SMD_L5.4-W5.2_FXL0530 ! FXL0530-4R7-ML1FXL0530-4R7-M4.7uH4.7uH ±20% 5AC177246IND-SMD_L5.4-W5.2_FXL0530 ! '4.5A{Voltage Rating}电感值:4.7uH;精度:±20%;额定电流:4.5A;饱和电流(Isat):5A;类型:一体成型电感;{Power Dissipation (Pd)}4.7uH±20%一体成型电感{Voltage-Supply(Max)}' ,
+        ; L1 
+,
+        IND-SMD_L5.4-W5.2_FXL0530 ! FXL0530-4R7-ML2FXL0530-4R7-M4.7uH4.7uH ±20% 5AC177246IND-SMD_L5.4-W5.2_FXL0530 ! '4.5A{Voltage Rating}电感值:4.7uH;精度:±20%;额定电流:4.5A;饱和电流(Isat):5A;类型:一体成型电感;{Power Dissipation (Pd)}4.7uH±20%一体成型电感{Voltage-Supply(Max)}' ,
+        ; L2 
+,
+        JY61P ! JY61PU1JY61P{LCSC Part Name}{Supplier Part}JY61P ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U1 
+,
+        LED_0603 ! LED_BLED1LED_0603-B{LCSC Part Name}LED_0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; LED1 
+,
+        LED_0603 ! LED_BLED5LED_0603-B{LCSC Part Name}LED_0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; LED5 
+,
+        LED_0603 ! LED_BLED6LED_0603-B{LCSC Part Name}LED_0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; LED6 
+,
+        LED_0603 ! LED_BLED7LED_0603-B{LCSC Part Name}LED_0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; LED7 
+,
+        LQFP-64_L10.0-W10.0-P0.50-LS12.0-BL ! STM32G474RBT6U2STM32G474RBT6STM32G474RBT6带DSP和FPU的170MHz主流ARM Cortex-M4 MCU，具有128 KB Flash存储器、数学加速器、高分辨率定时器和高模拟电平集成C529413LQFP-64_L10.0-W10.0-P0.50-LS12.0-BL ! '{Current Rating}{Voltage Rating}CPU内核:ARM Cortex-M4F;CPU最大主频:170MHz;CPU位数:32 Bit;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U2 
+,
+        M3螺丝 ! 螺丝孔SCREW1M3螺丝{LCSC Part Name}{Supplier Part}M3螺丝 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; SCREW1 
+,
+        M3螺丝 ! 螺丝孔SCREW2M3螺丝{LCSC Part Name}{Supplier Part}M3螺丝 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; SCREW2 
+,
+        M3螺丝 ! 螺丝孔SCREW3M3螺丝{LCSC Part Name}{Supplier Part}M3螺丝 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; SCREW3 
+,
+        M3螺丝 ! 螺丝孔SCREW4M3螺丝{LCSC Part Name}{Supplier Part}M3螺丝 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; SCREW4 
+,
+        MSOP-10_L3.0-W3.0-P0.50-LS5.0-BL ! INA226AIDGSRU5INA226AIDGSRINA226AIDGSR高侧/低侧测量双向电流/功率监视器，具有I²C兼容接口C49851MSOP-10_L3.0-W3.0-P0.50-LS5.0-BL ! '{Current Rating}{Voltage Rating}放大器数:-;共模电压:0V~36V;增益:-;带宽(-3db):-;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U5 
+,
+        OLED-SMD_X096-2864KSWPG01-H30 ! X096-2864KSWPG01-H30U16X096-2864KSWPG01-H30X096-2864KSWPG01-H30OEL显示模块C18723026OLED-SMD_X096-2864KSWPG01-H30 ! '{Current Rating}{Voltage Rating}核心芯片:SSD1315芯片;尺寸(inch):0.96;像素分辨率:128x64;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U16 
+,
+        POWERPAK-1212-8_L3.1-W3.1-P0.65-LS3.3-BL ! PJQ4465AP-AU_R2_000A1Q3PJQ4465AP-AU_R2_000A1PJQ4465AP-AU_R2_000A11个P沟道 耐压:60V 电流:15AC6147631POWERPAK-1212-8_L3.1-W3.1-P0.65-LS3.3-BL ! '{Current Rating}{Voltage Rating}数量:1个P沟道;漏源电压(Vdss):60V;连续漏极电流(Id):15A;导通电阻(RDS(on)):40mΩ@10V；55mΩ@4.5V;耗散功率(Pd):20W;阈值电压(Vgs(th)):1.7V;{Power Dissipation (Pd)}{Value}{Tolerance}P沟道{Voltage-Supply(Max)}' ,
+        ; Q3 
+,
+        R0402 ! FRC0402F1002TSR1FRC0402F1002TS10kΩ10kΩ ±1% 62.5mW 厚膜电阻C2906861R0402 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:10kΩ;精度:±1%;功率:62.5mW;工作电压:50V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}10kΩ±1%厚膜电阻50V' ,
+        ; R1 
+,
+        R0402 ! FRC0402F1002TSR3FRC0402F1002TS10kΩ10kΩ ±1% 62.5mW 厚膜电阻C2906861R0402 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:10kΩ;精度:±1%;功率:62.5mW;工作电压:50V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}10kΩ±1%厚膜电阻50V' ,
+        ; R3 
+,
+        R0402 ! FRC0402F1003TSR8FRC0402F1003TS100kΩ100kΩ ±1% 62.5mW 厚膜电阻C2906859R0402 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:100kΩ;精度:±1%;功率:62.5mW;工作电压:50V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}100kΩ±1%厚膜电阻50V' ,
+        ; R8 
+,
+        R0402 ! RC0402FR-074K7LR4RC0402FR-074K7L4.7kΩ厚膜电阻 4.7kΩ ±1% 62.5mWC105871R0402 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:4.7kΩ;精度:±1%;功率:62.5mW;工作电压:50V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}4.7kΩ±1%厚膜电阻50V' ,
+        ; R4 
+,
+        R0402 ! RC0402FR-074K7LR5RC0402FR-074K7L4.7kΩ厚膜电阻 4.7kΩ ±1% 62.5mWC105871R0402 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:4.7kΩ;精度:±1%;功率:62.5mW;工作电压:50V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}4.7kΩ±1%厚膜电阻50V' ,
+        ; R5 
+,
+        R0603 ! 电阻R15Res_060310K{LCSC Part Name}{Supplier Part}R0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}10K{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; R15 
+,
+        R0603 ! 电阻R16Res_060327K{LCSC Part Name}{Supplier Part}R0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}27K{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; R16 
+,
+        R0603 ! 电阻R17Res_06038.2K{LCSC Part Name}{Supplier Part}R0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}8.2K{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; R17 
+,
+        R0603 ! 电阻R18Res_060310K{LCSC Part Name}{Supplier Part}R0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}10K{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; R18 
+,
+        R0603 ! 电阻R20Res_0603200K{LCSC Part Name}{Supplier Part}R0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}200K{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; R20 
+,
+        R0603 ! 电阻R21Res_060320K{LCSC Part Name}{Supplier Part}R0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}20K{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; R21 
+,
+        R0603 ! 电阻R22Res_060351K{LCSC Part Name}{Supplier Part}R0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}51K{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; R22 
+,
+        R0603 ! 电阻R23Res_060310K{LCSC Part Name}{Supplier Part}R0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}10K{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; R23 
+,
+        R0603 ! 电阻R24Res_06034.7K{LCSC Part Name}{Supplier Part}R0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}4.7K{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; R24 
+,
+        R0603 ! 电阻R25Res_06031.5K{LCSC Part Name}{Supplier Part}R0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}1.5K{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; R25 
+,
+        R0603 ! 电阻R26Res_06032.7K{LCSC Part Name}{Supplier Part}R0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}2.7K{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; R26 
+,
+        R0603 ! 电阻R27Res_0603200K{LCSC Part Name}{Supplier Part}R0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}200K{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; R27 
+,
+        R0603 ! 电阻R28Res_060320K{LCSC Part Name}{Supplier Part}R0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}20K{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; R28 
+,
+        R0603 ! 电阻R7Res_06031K{LCSC Part Name}{Supplier Part}R0603 ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}1K{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; R7 
+,
+        R0603 ! FRC0603F1000TSR10FRC0603F1000TS100Ω100Ω ±1% 100mW 厚膜电阻C2906981R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:100Ω;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}100Ω±1%厚膜电阻75V' ,
+        ; R10 
+,
+        R0603 ! FRC0603F1000TSR11FRC0603F1000TS100Ω100Ω ±1% 100mW 厚膜电阻C2906981R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:100Ω;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}100Ω±1%厚膜电阻75V' ,
+        ; R11 
+,
+        R0603 ! FRC0603F1000TSR29FRC0603F1000TS100Ω100Ω ±1% 100mW 厚膜电阻C2906981R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:100Ω;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}100Ω±1%厚膜电阻75V' ,
+        ; R29 
+,
+        R0603 ! FRC0603F1000TSR31FRC0603F1000TS100Ω100Ω ±1% 100mW 厚膜电阻C2906981R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:100Ω;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}100Ω±1%厚膜电阻75V' ,
+        ; R31 
+,
+        R0603 ! FRC0603F1000TSR32FRC0603F1000TS100Ω100Ω ±1% 100mW 厚膜电阻C2906981R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:100Ω;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}100Ω±1%厚膜电阻75V' ,
+        ; R32 
+,
+        R0603 ! FRC0603F1000TSR33FRC0603F1000TS100Ω100Ω ±1% 100mW 厚膜电阻C2906981R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:100Ω;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}100Ω±1%厚膜电阻75V' ,
+        ; R33 
+,
+        R0603 ! FRC0603F1000TSR6FRC0603F1000TS100Ω100Ω ±1% 100mW 厚膜电阻C2906981R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:100Ω;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}100Ω±1%厚膜电阻75V' ,
+        ; R6 
+,
+        R0603 ! FRC0603F1000TSR9FRC0603F1000TS100Ω100Ω ±1% 100mW 厚膜电阻C2906981R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:100Ω;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}100Ω±1%厚膜电阻75V' ,
+        ; R9 
+,
+        R0603 ! FRC0603J103TSR34FRC0603J103 TS10kΩ10kΩ ±5% 100mW 厚膜电阻C2930027R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:10kΩ;精度:±5%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}10kΩ±5%厚膜电阻75V' ,
+        ; R34 
+,
+        R0603 ! FRC0603J103TSR35FRC0603J103 TS10kΩ10kΩ ±5% 100mW 厚膜电阻C2930027R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:10kΩ;精度:±5%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}10kΩ±5%厚膜电阻75V' ,
+        ; R35 
+,
+        R0603 ! FRC0603J103TSR36FRC0603J103 TS10kΩ10kΩ ±5% 100mW 厚膜电阻C2930027R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:10kΩ;精度:±5%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}10kΩ±5%厚膜电阻75V' ,
+        ; R36 
+,
+        R0603 ! FRC0603J103TSR37FRC0603J103 TS10kΩ10kΩ ±5% 100mW 厚膜电阻C2930027R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:10kΩ;精度:±5%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}10kΩ±5%厚膜电阻75V' ,
+        ; R37 
+,
+        R0603 ! FRC0603J103TSR38FRC0603J103 TS10kΩ10kΩ ±5% 100mW 厚膜电阻C2930027R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:10kΩ;精度:±5%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}10kΩ±5%厚膜电阻75V' ,
+        ; R38 
+,
+        R0603 ! FRC0603J103TSR39FRC0603J103 TS10kΩ10kΩ ±5% 100mW 厚膜电阻C2930027R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:10kΩ;精度:±5%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}10kΩ±5%厚膜电阻75V' ,
+        ; R39 
+,
+        R0603 ! RC0603FR-07100KLR12RC0603FR-07100KL100kΩ厚膜电阻 100kΩ ±1%C14675R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:100kΩ;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}100kΩ±1%厚膜电阻75V' ,
+        ; R12 
+,
+        R0603 ! RC0603FR-07100KLR13RC0603FR-07100KL100kΩ厚膜电阻 100kΩ ±1%C14675R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:100kΩ;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}100kΩ±1%厚膜电阻75V' ,
+        ; R13 
+,
+        R0603 ! RC0603FR-07100KLR14RC0603FR-07100KL100kΩ厚膜电阻 100kΩ ±1%C14675R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:100kΩ;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}100kΩ±1%厚膜电阻75V' ,
+        ; R14 
+,
+        R0603 ! RC0603FR-07100KLR19RC0603FR-07100KL100kΩ厚膜电阻 100kΩ ±1%C14675R0603 ! '{Current Rating}{Voltage Rating}电阻类型:厚膜电阻;阻值:100kΩ;精度:±1%;功率:100mW;工作电压:75V;温度系数:±100ppm/℃;{Power Dissipation (Pd)}100kΩ±1%厚膜电阻75V' ,
+        ; R19 
+,
+        R1206 ! RE1206F1R005R2RE1206F1R0055mΩ5mΩ 1W 1206 ±1%C46961735R1206 ! '{Current Rating}{Voltage Rating}电阻类型:采样电阻；合金电阻;阻值:5mΩ;精度:±1%;功率:1W;温度系数:±100ppm/℃;安装方式:贴片;{Power Dissipation (Pd)}5mΩ±1%采样电阻；合金电阻{Voltage-Supply(Max)}' ,
+        ; R2 
+,
+        RES-ADJ-TH_3P-L9.5-W4.85-P2.50-BL-BS ! 3296W-1-503_C48997928R303296W-1-503_C4899792850kΩ3296W-1-503C48997928RES-ADJ-TH_3P-L9.5-W4.85-P2.50-BL-BS ! '{Current Rating}{Voltage Rating}阻值:50kΩ;精度:±10%;功率:500mW;温度系数:±250ppm/℃;{Power Dissipation (Pd)}50kΩ±10%{Type}{Voltage-Supply(Max)}' ,
+        ; R30 
+,
+        SMA_L4.3-W2.6-LS5.0-FD ! SS54_C7420369D5SS54_C7420369SS54电压:40V 电流:5AC7420369SMA_L4.3-W2.6-LS5.0-FD ! '{Current Rating}{Voltage Rating}二极管配置:独立式;正向压降(Vf):550mV@5.0A;直流反向耐压(Vr):40V;整流电流:5A;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; D5 
+,
+        SOD-123_L2.7-W1.6-LS3.7-FD ! 1N4148W_C7420318D31N4148W_C74203181N4148W100V 150mAC7420318SOD-123_L2.7-W1.6-LS3.7-FD ! '{Current Rating}{Voltage Rating}二极管配置:独立式;整流电流:150mA;直流反向耐压(Vr):100V;正向压降(Vf):1.25V@150mA;反向恢复时间(Trr):4ns;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; D3 
+,
+        SOD-123_L2.7-W1.6-LS3.7-RD ! BZT52C15_C19077412D1BZT52C15_C19077412BZT52C15表面贴装齐纳二极管C19077412SOD-123_L2.7-W1.6-LS3.7-RD ! '{Current Rating}{Voltage Rating}二极管配置:1个独立式;稳压值(标称值):15V;稳压值(范围):14.25V~15.75V;耗散功率(Pd):350mW;{Power Dissipation (Pd)}{Value}-{Type}{Voltage-Supply(Max)}' ,
+        ; D1 
+,
+        SOD-123FL_L2.8-W1.8-LS3.7-BI ! SMF15CA_C1851361D2SMF15CA_C1851361SMF15CA双向TVS 15V 16V截止 峰值浪涌电流：7.7A@10/1000usC1851361SOD-123FL_L2.8-W1.8-LS3.7-BI ! '{Current Rating}{Voltage Rating}极性:双向;反向截止电压(Vrwm):15V；16V;钳位电压:24.4V;峰值脉冲电流(Ipp):7.7A@10/1000us;峰值脉冲功率(Ppp):200W@10/1000us;击穿电压(VBR):18.5V;{Power Dissipation (Pd)}{Value}{Tolerance}TVS{Voltage-Supply(Max)}' ,
+        ; D2 
+,
+        SOP-8E ! SP1N28STERU7SP1N28STERSP1N28STER{LCSC Part Name}{Supplier Part}SOP-8E ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}SP1N28STER{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U7 
+,
+        SOP-8E ! SP1N28STERU8SP1N28STERSP1N28STER{LCSC Part Name}{Supplier Part}SOP-8E ! '{Current Rating}{Voltage Rating}{Power Dissipation (Pd)}SP1N28STER{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U8 
+,
+        SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR ! S8050_C2688231Q1S8050_C2688231S8050S8050C2688231SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR ! '{Current Rating}{Voltage Rating}晶体管类型:NPN;集射极击穿电压(Vceo):25V;集电极电流(Ic):800mA;功率(Pd):350mW;集电极-发射极饱和电压(VCE(sat)@Ic,Ib):600mV@500mA,50mA;直流电流增益(hFE@Ic,Vce):200@50mA,1V;特征频率(fT):150MHz;工作温度:+150℃@(Tj);350mW{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; Q1 
+,
+        SOT-23-5_L3.0-W1.7-P0.95-LS2.8-BL ! RT9013-33GBU9RT9013-33GBRT9013-33GB输入5.5V 输出3.3V 500mAC47773SOT-23-5_L3.0-W1.7-P0.95-LS2.8-BL ! '{Current Rating}{Voltage Rating}输出类型:固定;工作电压:5.5V;输出电压:3.3V;输出电流:500mA;电源纹波抑制比(PSRR):50dB@(10kHz);输出极性:正极;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U9 
+,
+        SW-SMD_L6.0-W6.0-LS6.6 ! TS665WSSW1TS665WS_C398058TS665WS6*6*5mm 立贴 轻触开关C398058SW-SMD_L6.0-W6.0-LS6.6 ! '{Current Rating}12V电路结构:单刀单掷;按钮形状:圆形按钮;作用力:2N;安装方式:立贴;开关长度:6mm;开关宽度:6mm;开关高度:5mm;带支架:不带支架;触点电流:50mA;额定电压:12V;带灯:无;工作寿命:10万次;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; SW1 
+,
+        SW-SMD-8_L7.5-W7.5-P1.40_GT-TC006D-H060-L1 ! GT-TC006D-H060-L1U10GT-TC006D-H060-L1GT-TC006D-H060-L1斜五向轻触开关 H6.0mm 350gfC3019724SW-SMD-8_L7.5-W7.5-P1.40_GT-TC006D-H060-L1 ! '{Current Rating}{Voltage Rating}7.50x7.50x6.0mm 斜五向轻触开关 H6.0mm 350gf{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U10 
+,
+        SW-TH_MT-0-103-A101-M200-RS ! MT-0-102-A101-M200-RS+PJU6MT-0-102-A101-M200-RSMT-0-102-A101-M200-RS五件套 小型钮子三脚二档C1788492SW-TH_MT-0-103-A101-M200-RS ! '5A{Voltage Rating}电路结构:单刀双掷;工作寿命:-;额定电流:5A;额定电压(AC):125V;安装方式:直插;{Power Dissipation (Pd)}{Value}{Tolerance}{Type}{Voltage-Supply(Max)}' ,
+        ; U6 
+$A_PROPERTIES
+$NETS
+'$BUZ1_2' ; BUZ1.2 D3.1 Q1.3 
+'$C1_2' ; C1.2 C7.1 D5.1 L2.2 
+'$C15_1' ; C15.1 R1.2 SW1.2 U2.7 
+'$C19_1' ; C19.1 U7.1 
+'$C19_2' ; C19.2 L1.1 U7.8 
+'$C22_1' ; C22.1 R28.2 
+'$C27_1' ; C27.1 U8.1 
+'$C27_2' ; C27.2 L2.1 U8.8 
+'$C30_1' ; C30.1 R21.2 
+'$C39_1' ; C39.1 U16.2 
+'$C39_2' ; C39.2 U16.3 
+'$C40_1' ; C40.1 U16.4 
+'$C40_2' ; C40.2 U16.5 
+'$C42_2' ; C42.2 U16.28 
+'$C44_2' ; C44.2 U16.27 
+'$D1_2' ; D1.2 Q3.4 R8.2 
+'$F1_2' ; F1.2 Q3.5 Q3.6 Q3.7 Q3.8 
+'$LED1_2' ; LED1.2 R38.2 
+'$LED5_2' ; LED5.2 R18.2 
+'$LED6_2' ; LED6.2 R24.2 
+'$LED7_2' ; LED7.2 R26.2 
+'$Q1_1' ; Q1.1 R7.2 R15.2 
+'$R10_2' ; R10.2 U4.2 
+'$R11_2' ; R11.2 U4.3 
+'$R16_2' ; R16.2 R30.2 R30.3 
+'$R17_1' ; R17.1 R30.1 U7.5 
+'$R20_2' ; R20.2 U8.4 
+'$R21_1' ; R21.1 U8.6 
+'$R22_2' ; R22.2 R25.1 
+'$R23_1' ; R23.1 R25.2 U8.5 
+'$R27_2' ; R27.2 U7.4 
+'$R28_1' ; R28.1 U7.6 
+'$R29_2' ; R29.2 U33.3 
+'$R3_1' ; R3.1 U2.61 
+'$R31_2' ; R31.2 U33.4 
+'$R32_2' ; R32.2 U34.3 
+'$R33_2' ; R33.2 U34.4 
+'$R39_2' ; R39.2 U16.14 
+'$R6_2' ; R6.2 U3.2 
+'$R9_2' ; R9.2 U3.3 
+'12V_IN' ; CN1.2 U6.2 
+'12V_PROT_IN' ; C2.2 C4.2 C13.1 C35.2 D1.1 D2.2 Q3.1 Q3.2 Q3.3 R2.2 U5.10 
+'12V_PROT_OUT' ; C9.1 C10.1 C14.2 C17.2 C20.2 C21.2 C28.2 C29.2 R2.1 R38.1 ,
+        U3.5 U4.5 U5.8 U5.9 U7.2 U7.3 U8.2 U8.3 
+'I2C2_SCL' ; H3.2 R5.1 U2.51 U5.5 U14.2 U16.18 
+'I2C2_SDA' ; H3.3 R4.1 U2.62 U5.4 U14.3 U16.19 U16.20 
+'KEY_CENTER' ; U2.11 U10.5 
+'KEY_DOWN' ; U2.3 U10.6 
+'KEY_LEFT' ; U2.4 U10.3 
+'KEY_RIGHT' ; U2.10 U10.4 
+'KEY_UP' ; U2.2 U10.1 
+'LPUART1_RX' ; U2.9 U12.5 
+'LPUART1_TX' ; U2.8 U12.6 
+'MOTA_IN1' ; R11.1 R13.2 U2.38 
+'MOTA_IN2' ; R10.1 R12.1 U2.39 
+'MOTB_IN1' ; R9.1 R19.2 U2.40 
+'MOTB_IN2' ; R6.1 R14.1 U2.41 
+'OSC_IN' ; C6.1 U2.5 X1.1 
+'OSC_OUT' ; C5.2 U2.6 X1.3 
+'TIM1_CH1_SERVO1' ; U2.42 U11.1 
+'TIM1_CH2_SERVO2' ; U2.43 U11.4 
+'TIM1_CH3_SERVO3' ; U2.44 U11.7 
+'TIM1_CH4_SERVO4' ; U2.45 U11.10 
+'TIM3_CH1_ENC1_A' ; C25.1 R29.1 R37.2 U2.57 
+'TIM3_CH2_ENC1_B' ; C24.2 R31.1 R36.1 U2.58 
+'TIM4_CH1_ENC2_A' ; C26.1 R32.1 R35.2 U2.59 
+'TIM4_CH2_ENC2_B' ; C31.2 R33.1 R34.1 U2.60 
+'UART4_RX' ; H2.2 U2.53 U15.2 
+'UART4_TX' ; H2.3 U2.52 U15.3 
+'USART3_RX_JY61P' ; U1.3 U2.33 
+'USART3_TX_JY61P' ; U1.2 U2.30 
+12V ; F1.1 U6.1 
+BUZZER ; R7.1 U2.55 
+GND ; C1.1 C2.1 C3.1 C4.1 C5.1 C6.2 C7.2 C8.1 C9.2 C10.2 C11.2 C12.1 C13.2 ,
+        C14.1 C15.2 C16.1 C17.1 C18.1 C20.1 C21.1 C22.2 C23.2 C24.1 C25.2 ,
+        C26.2 C28.1 C29.1 C30.2 C31.1 C32.2 C33.2 C34.1 C35.1 C36.2 C37.1 ,
+        C38.2 C41.1 C42.1 C44.1 CN1.1 CN1.3 CN1.4 D2.1 H1.10 H2.4 H3.4 LED1.1 ,
+        LED5.1 LED6.1 LED7.1 Q1.2 R3.2 R8.1 R12.2 R13.1 R14.2 R15.1 R17.2 ,
+        R19.1 R20.1 R23.2 R27.1 SW1.1 U1.4 U1.5 U2.15 U2.27 U2.31 U2.47 U2.63 ,
+        U3.1 U3.7 U3.9 U4.1 U4.7 U4.9 U5.1 U5.2 U5.7 U7.0 U7.7 U8.0 U8.7 U9.2 ,
+        U10.0 U10.2 U11.3 U11.6 U11.9 U11.12 U12.4 U12.7 U12.8 U13.10 U13.11 ,
+        U13.12 U14.4 U14.5 U14.6 U15.4 U15.5 U15.6 U16.8 U16.12 U16.13 U16.15 ,
+        U16.16 U16.17 U33.2 U34.2 X1.2 X1.4 
+huidu1 ; H1.2 U2.12 U13.2 
+huidu2 ; H1.3 U2.13 U13.3 
+huidu3 ; H1.4 U2.14 U13.4 
+huidu4 ; H1.5 U2.17 U13.5 
+huidu5 ; H1.6 U2.18 U13.6 
+huidu6 ; H1.7 U2.19 U13.7 
+huidu7 ; H1.8 U2.20 U13.8 
+huidu8 ; H1.9 U2.21 U13.9 
+motorA1 ; U4.8 U33.6 
+motorA2 ; U4.6 U33.1 
+motorB1 ; U3.8 U34.6 
+motorB2 ; U3.6 U34.1 
+SWCLK ; U2.50 U12.3 
+SWDIO ; U2.49 U12.2 
+VCC3V3 ; C8.2 C18.2 C23.1 C32.1 C33.1 C34.2 C36.1 C37.2 C38.1 C41.2 R1.1 R4.2 ,
+        R5.2 R26.1 R39.1 U1.1 U1.8 U2.1 U2.16 U2.28 U2.29 U2.32 U2.48 U2.64 ,
+        U3.4 U4.4 U5.6 U9.5 U12.1 U16.6 U16.9 U16.11 
+VCC5V ; BUZ1.1 C3.2 C16.2 D3.2 D5.2 H1.1 H2.1 H3.1 R22.1 R24.1 R34.2 R35.1 ,
+        R36.2 R37.1 U9.1 U9.3 U13.1 U14.1 U15.1 U33.5 U34.5 
+VCCSTEER ; C11.1 C12.2 L1.2 R16.1 R18.1 U11.2 U11.5 U11.8 U11.11 
+$SCHEDULE
+$END

@@ -1,0 +1,375 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-ink-800 text-slate-200 font-sans antialiased;
+    background-image:
+      radial-gradient(1200px 600px at 12% -10%, rgba(34, 211, 238, 0.13), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, rgba(167, 139, 250, 0.12), transparent 55%),
+      radial-gradient(700px 500px at 50% 120%, rgba(52, 211, 153, 0.08), transparent 60%);
+    background-attachment: fixed;
+  }
+
+  /* 等宽数字：仪表读数不跳动 */
+  .num {
+    @apply font-mono tabular-nums;
+    font-variant-numeric: tabular-nums;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgba(148, 163, 184, 0.25);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 0.45);
+    background-clip: content-box;
+  }
+}
+
+@layer components {
+  /* 玻璃拟态卡片（契约 §5 指定的视觉语言） */
+  .glass {
+    @apply rounded-card bg-white/5 backdrop-blur-md ring-1 ring-white/10 shadow-card;
+  }
+
+  .glass-hover {
+    @apply transition hover:bg-white/[0.07] hover:ring-white/20;
+  }
+
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ring-1 ring-inset;
+  }
+
+  .btn {
+    @apply inline-flex select-none items-center justify-center gap-1.5 rounded-xl px-3 py-1.5 text-sm
+      ring-1 ring-white/10 transition active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-40;
+  }
+  .btn-ghost {
+    @apply btn bg-white/5 hover:bg-white/10;
+  }
+  .btn-primary {
+    @apply btn bg-neon-cyan/15 text-neon-cyan ring-neon-cyan/30 hover:bg-neon-cyan/25;
+  }
+  .btn-danger {
+    @apply btn bg-neon-rose/15 text-neon-rose ring-neon-rose/30 hover:bg-neon-rose/25;
+  }
+  .btn-warn {
+    @apply btn bg-neon-amber/15 text-neon-amber ring-neon-amber/30 hover:bg-neon-amber/25;
+  }
+
+  .field {
+    @apply w-full rounded-lg bg-ink-900/70 px-2 py-1 text-sm ring-1 ring-white/10 outline-none
+      focus:ring-neon-cyan/50 num;
+  }
+
+  /* 分段选择器：`.seg` 是容器，`.seg-item` 是其中一格（驾驶方式 / 波形窗口 / 设置页窗口都用它）。
+     注意：`seg-item` 一度只写在 JSX 里、CSS 漏了定义 ⇒ 三个按钮被 Tailwind 的 preflight
+     清成裸 <button>（无边框无底色），看上去就是一行黏在一起的字。 */
+  .seg {
+    @apply inline-flex items-center gap-1 rounded-xl bg-ink-900/60 p-1 ring-1 ring-white/10;
+  }
+  .seg-item {
+    @apply select-none rounded-lg px-2.5 py-1 text-xs text-slate-400 transition
+      hover:bg-white/10 hover:text-slate-200 active:scale-[0.98];
+  }
+  .seg-on {
+    @apply bg-neon-cyan/20 text-neon-cyan ring-1 ring-neon-cyan/40 hover:bg-neon-cyan/25 hover:text-neon-cyan;
+  }
+
+  /* ---- IMU 页的 3D 车模型（components/Car3D.tsx）：纯 CSS 3D，零依赖 ----
+     `.car3d-scene` 出 perspective，`.car3d-stage` 是"相机"（拖鼠标转的就是它）；
+     从 stage 往下的每一层都必须 preserve-3d，中间只要有一层被拍平，车就成了一张贴纸。
+     另外别在这条链上加 filter / opacity<1 / backdrop-filter —— 那些是"分组属性"，
+     会把 3D 上下文压平（卡片本身的 backdrop-blur 在场景之外，不影响）。 */
+  .car3d-scene {
+    position: relative;
+    overflow: hidden;
+    border-radius: 12px;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    perspective: 900px;
+    perspective-origin: 50% 46%;
+    background:
+      radial-gradient(120% 70% at 50% 4%, rgba(34, 211, 238, 0.14), transparent 62%),
+      radial-gradient(90% 60% at 50% 118%, rgba(167, 139, 250, 0.12), transparent 62%),
+      linear-gradient(180deg, #070a16 0%, #0b1020 58%, #121a38 100%);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+  }
+  .car3d-dragging {
+    cursor: grabbing;
+  }
+  .car3d-stage {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0;
+    height: 0;
+    transform-style: preserve-3d;
+    transition: transform 90ms linear;
+  }
+  .car3d-car,
+  .car3d-box {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 0;
+    height: 0;
+    transform-style: preserve-3d;
+  }
+  .car3d-car {
+    transition: transform 80ms linear;
+  }
+  .car3d-face {
+    position: absolute;
+    left: 0;
+    top: 0;
+    border: 1px solid rgba(148, 163, 184, 0.22);
+    border-radius: 3px;
+    /* 背面不画：闭合的盒子不画背面既省事又少一层穿插错误 */
+    backface-visibility: hidden;
+  }
+  .car3d-body {
+    background: linear-gradient(180deg, #24314b, #16203a);
+  }
+  /* 履带：比车体深、比车体长（长条），纹路单独铺在顶面/外侧面，见 .car3d-tread-* */
+  .car3d-track {
+    background: linear-gradient(180deg, #1b2438, #0b1120);
+    border-color: rgba(148, 163, 184, 0.34);
+  }
+  /* 履带纹（横压条）：顶面的局部高度方向 = 车体 z（行进方向）⇒ 180deg 的竖纹；
+     侧面的局部宽度方向 = 车体 z ⇒ 90deg 的竖纹。两边都是"沿履带长度重复"。 */
+  .car3d-tread-y {
+    background: repeating-linear-gradient(
+      180deg,
+      #2b3852 0 4px,
+      #131c2e 4px 11px,
+      #0a0f1c 11px 14px
+    );
+  }
+  .car3d-tread-x {
+    background: repeating-linear-gradient(
+      90deg,
+      #2b3852 0 4px,
+      #131c2e 4px 11px,
+      #0a0f1c 11px 14px
+    );
+  }
+  /* 履带齿：比履带略宽（28 > 24）的亮边压条，压在履带顶上 */
+  .car3d-cleat {
+    background: linear-gradient(180deg, #465a7d, #26314a);
+    border-color: rgba(148, 163, 184, 0.45);
+  }
+  .car3d-deck {
+    background: linear-gradient(180deg, #33415e, #1d2740);
+    border-color: rgba(148, 163, 184, 0.32);
+  }
+  /* OLED 小屏：黑框 + 顶面发光（顶面在 Car3D 里换成 .car3d-screen-glow） */
+  .car3d-screen {
+    background: #0a1020;
+    border-color: rgba(34, 211, 238, 0.5);
+  }
+  .car3d-screen-glow {
+    background: linear-gradient(180deg, rgba(34, 211, 238, 0.85), rgba(14, 116, 144, 0.75));
+    border-color: rgba(34, 211, 238, 0.7);
+    box-shadow: 0 0 10px rgba(34, 211, 238, 0.55);
+  }
+  /* 车头灰度探头排：正面 8 格亮暗（8 路灰度），正面在 Car3D 里换成 .car3d-sensor-face */
+  .car3d-sensor {
+    background: linear-gradient(180deg, #2f3d59, #1b2436);
+    border-color: rgba(148, 163, 184, 0.35);
+  }
+  .car3d-sensor-face {
+    background: repeating-linear-gradient(
+      90deg,
+      #0b1120 0 3px,
+      #93c5fd 3px 6px
+    );
+  }
+  /* 摄像头：深色镜头 + 一点青色反光 */
+  .car3d-lens {
+    background: radial-gradient(closest-side, #22d3ee 0 22%, #060b16 30%, #0b1120 100%);
+    border-color: rgba(34, 211, 238, 0.55);
+  }
+  .car3d-lamp {
+    background: #e0f2fe;
+    border-color: rgba(34, 211, 238, 0.65);
+    box-shadow: 0 0 9px rgba(34, 211, 238, 0.75);
+  }
+  .car3d-tail {
+    background: #fb7185;
+    border-color: rgba(251, 113, 133, 0.6);
+  }
+  /* 天线：细杆 + 顶上一个小圆头 */
+  .car3d-antenna {
+    background: linear-gradient(180deg, #94a3b8, #475569);
+    border-color: transparent;
+  }
+  .car3d-antenna-tip {
+    background: #fbbf24;
+    border-color: rgba(251, 191, 36, 0.6);
+    box-shadow: 0 0 8px rgba(251, 191, 36, 0.6);
+  }
+  .car3d-road,
+  .car3d-shadow,
+  .car3d-ring,
+  .car3d-tick,
+  .car3d-tick-label {
+    position: absolute;
+    left: 0;
+    top: 0;
+  }
+  /* 地面：绕 X 转 90° 铺平（局部 +y 变成朝观察者的 +z，于是宽=x、高=z） */
+  .car3d-road {
+    width: 320px;
+    height: 420px;
+    margin: -210px 0 0 -160px;
+    transform: rotateX(90deg);
+    border-radius: 16px;
+    background: linear-gradient(180deg, rgba(30, 41, 59, 0.55), rgba(15, 23, 42, 0.78));
+    box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.18);
+  }
+  /* 路中央的虚线：沿局部高度方向 = 世界 z = 车的行进方向 */
+  .car3d-road::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 5%;
+    width: 6px;
+    height: 90%;
+    margin-left: -3px;
+    border-radius: 3px;
+    background: repeating-linear-gradient(
+      180deg,
+      rgba(148, 163, 184, 0.5) 0 24px,
+      rgba(148, 163, 184, 0) 24px 52px
+    );
+  }
+  .car3d-shadow {
+    width: 130px;
+    height: 210px;
+    margin: -105px 0 0 -65px;
+    /* 抬高 0.6px（y 向下，所以是负）免得和地面 z-fighting */
+    transform: translate3d(0px, -0.6px, 0px) rotateX(90deg);
+    border-radius: 50%;
+    background: radial-gradient(closest-side, rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0));
+  }
+  .car3d-ring {
+    width: 236px;
+    height: 236px;
+    margin: -118px 0 0 -118px;
+    transform: rotateX(90deg);
+    border-radius: 50%;
+    border: 1px dashed rgba(148, 163, 184, 0.3);
+  }
+  .car3d-tick {
+    width: 3px;
+    height: 26px;
+    margin: -13px 0 0 -1.5px;
+    border-radius: 2px;
+    background: rgba(148, 163, 184, 0.55);
+  }
+  .car3d-tick-label {
+    width: 40px;
+    margin: -6px 0 0 -20px;
+    text-align: center;
+    font-size: 11px;
+    line-height: 12px;
+    color: rgba(148, 163, 184, 0.85);
+  }
+  .car3d-hint {
+    position: absolute;
+    left: 10px;
+    bottom: 8px;
+    font-size: 11px;
+    color: rgba(148, 163, 184, 0.72);
+    pointer-events: none;
+  }
+}
+
+/*
+ * 滚起来别掉帧：`html.is-scrolling`（正在滚，松手 140ms 后摘掉，见 lib/fx.ts）
+ * 和 `html.perf-lite`（设置页的「低特效模式」，**默认开**）两条路，都要把"每帧都要重算"
+ * 的东西关掉：
+ *   - backdrop-filter 在滚动中每帧重糊：tasks 页合成器 DrawFrame 332ms→55.7ms / 2.5s；
+ *   - animate-pulseDot（连接正常时 header 那个圆点一直亮着）在不做合成器动画的机器上
+ *     每帧一次全文档样式重算（styleN = 帧数）。
+ *
+ * ⚠️ 关掉模糊之后**不要**给面板再刷一层底色。2026-10-04 一度刷成"三层不透明面"
+ * （侧栏 #0d1428 < 顶栏 #121a33 < 卡片 #141d3d），用户 m25581 直接否了：
+ *   「他的背景之前是黑的，你现在改成了这个稍微有点蓝这个颜色，但是跟背景还是融合不到一起啊。
+ *     你为什么非要有这个文字背景呢？你就单纯一个文字不行吗？」
+ * 原因是页面背景不是纯色，而是 ink-800(#0b1020) + 三团固定辉光（见 body 的 background-image），
+ * 任何纯色面贴上去都是一块补丁。现在的口径：
+ *   - **侧栏与卡片完全没有底色**（background-color: transparent），文字直接落在页面渐变上，
+ *     只留 .glass 自带的 1px ring 用来分组；
+ *   - 顶栏因为 sticky 压在滚动内容上**必须不透明**，但它画的是同一份
+ *     background-image + background-attachment: fixed ⇒ 与 body 的辉光逐像素对齐，
+ *     看上去就是页面本身（没有"顶栏那条带"）。
+ * 别改成纯黑（#000 / ink-900 #070a16）：黑底贴霓虹字没层次、显脏。
+ */
+html.is-scrolling header,
+html.is-scrolling aside,
+html.is-scrolling .glass,
+html.perf-lite header,
+html.perf-lite aside,
+html.perf-lite .glass {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* 侧栏：没有底色，跟页面背景连成一片（只剩 border-r 那道 1px 线） */
+html.is-scrolling aside,
+html.perf-lite aside {
+  background-color: transparent;
+}
+
+/* 卡片：连背景高光与投影都去掉（投影会在地板上"画"出一个方框的影子）。
+   `--tw-shadow: 0 0 #0000` 只清掉 shadow-card 那层投影；.glass 自带的 ring-1 走的是
+   `--tw-ring-shadow`，不受影响。 */
+html.is-scrolling .glass,
+html.perf-lite .glass {
+  background-color: transparent;
+  background-image: none;
+  --tw-shadow: 0 0 #0000;
+}
+
+/* 顶栏：sticky 压在滚动内容上 ⇒ 必须**完全不透明**（0.94 都还能看见底下的参数行，截图确认过），
+   但它用的是页面背景自己那三张图 + fixed，所以跟 body 的辉光逐像素对齐。
+   ⚠️ 这三行必须与 body 的 background-image 逐字一致，改一处就得改两处（perf.test.ts 盯着）。 */
+html.is-scrolling header,
+html.perf-lite header {
+  background-color: #0b1020;
+  background-image:
+    radial-gradient(1200px 600px at 12% -10%, rgba(34, 211, 238, 0.13), transparent 60%),
+    radial-gradient(900px 500px at 100% 0%, rgba(167, 139, 250, 0.12), transparent 55%),
+    radial-gradient(700px 500px at 50% 120%, rgba(52, 211, 153, 0.08), transparent 60%);
+  background-attachment: fixed;
+}
+
+/* 只关这一个无限动画（一帧不落的那个）；riseIn 是一次性入场，留着更好看 */
+html.is-scrolling .animate-pulseDot,
+html.perf-lite .animate-pulseDot {
+  animation: none !important;
+}

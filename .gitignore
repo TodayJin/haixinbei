@@ -1,19 +1,23 @@
 # ============================================================
 #  构建产物 / 临时文件（不进版本库）
+#
+#  ★2026-11-02 目录重构后：仓库根只剩「总体文档 + project/ + portable/」，
+#    所有原来以根目录为基准的忽略规则都要加 project/ 前缀。
 # ============================================================
 
 # 固件构建目录（每份 ~60MB，可随时 make 重建）
-firmware/build-*/
+project/firmware/build-*/
 .work/
 
 # 固件主机测试的可执行文件（run_tests.ps1 本地重建）
-firmware/test/build/
+project/firmware/test/build/
 
-# 台架/上位机临时输出（日志、CSV、图片、抓屏）
+# 台架/上位机临时输出（日志、CSV、图片、抓屏；根目录与 project/ 下都可能有）
 out/
 
 # 上位机运行期数据（桥的日志/录制/预设，本地生成、每跑一次就变）
-tools/console/data/
+project/tools/console/data/
+portable/host/data/
 
 # Python
 **/__pycache__/
@@ -21,10 +25,10 @@ tools/console/data/
 .pytest_cache/
 
 # 旧 Haixin（FreeRTOS 参考工程）的 Keil 构建输出
-Haixin/MDK-ARM/Objects/
-Haixin/MDK-ARM/Listings/
-Haixin/MDK-ARM/DebugConfig/
-Haixin/MDK-ARM/RTE/
+project/Haixin/MDK-ARM/Objects/
+project/Haixin/MDK-ARM/Listings/
+project/Haixin/MDK-ARM/DebugConfig/
+project/Haixin/MDK-ARM/RTE/
 
 # 常见构建产物
 *.o
@@ -38,7 +42,7 @@ Haixin/MDK-ARM/RTE/
 *.build_log.htm
 *.bak
 
-# 前端依赖（dist/ 要进版本库，见 tools/console/web/dist）
+# 前端依赖（dist/ 要进版本库，见 project/tools/console/web/dist）
 node_modules/
 
 # 会话导出包（20MB+ 二进制，不是源码）
@@ -58,5 +62,6 @@ memory/
 AGENTS.md
 .tmp/
 
-# pytest 的临时目录（跑 python -m pytest 会在 cwd 下生成，每跑一次变一次）
-tools/console/pytest-of-*/
+# pytest 的临时目录（跑 python -m pytest 会在 cwd 下生成，每跑一次就变一次）
+project/tools/console/pytest-of-*/
+portable/host/pytest-of-*/

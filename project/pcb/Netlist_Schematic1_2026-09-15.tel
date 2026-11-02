@@ -1,0 +1,455 @@
+$PACKAGES
+,
+        0.96OLED_4P ! 0.96OLED模块_4POLED10.96OLED_4P{LCSC Part Name}{Supplier Part}{Manufacturer}插件{Datasheet}{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; OLED1 
+,
+        BUZ-TH_BD9.0-P5.00-D0.6-FD ! SUN-09055-5BUZ1BUZ-TH_BD9.0-P5.00-D0.6-FDSUN-09055-59*5.5 有源 5V 电磁蜂鸣器C2861Through Holehttps://atta.szlcsc.com/upload/public/pdf/source/20160514/1463194847258.pdf{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; BUZ1 
+,
+        C0402 ! CC0402JRNPO9BN150C5C040215pF15pF ±5% 50VC106997YAGEO(国巨)0402https://atta.szlcsc.com/upload/public/pdf/source/20170914/C128857_1505359892143968080.pdf15pF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C5 
+,
+        C0402 ! CC0402JRNPO9BN150C6C040215pF15pF ±5% 50VC106997YAGEO(国巨)0402https://atta.szlcsc.com/upload/public/pdf/source/20170914/C128857_1505359892143968080.pdf15pF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C6 
+,
+        C0402 ! CL05B104KB54PNCC15C0402100nF100nF ±10% 50VC307331SAMSUNG(三星)0402https://item.szlcsc.com/datasheet/CL05B104KB54PNC/291005.html100nF ! '50V{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C15 
+,
+        C0402 ! CL05B104KB54PNCC23C0402100nF100nF ±10% 50VC307331SAMSUNG(三星)0402https://item.szlcsc.com/datasheet/CL05B104KB54PNC/291005.html100nF ! '50V{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C23 
+,
+        C0402 ! CL05B104KB54PNCC24C0402100nF100nF ±10% 50VC307331SAMSUNG(三星)0402https://item.szlcsc.com/datasheet/CL05B104KB54PNC/291005.html100nF ! '50V{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C24 
+,
+        C0402 ! CL05B104KB54PNCC25C0402100nF100nF ±10% 50VC307331SAMSUNG(三星)0402https://item.szlcsc.com/datasheet/CL05B104KB54PNC/291005.html100nF ! '50V{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C25 
+,
+        C0402 ! CL05B104KB54PNCC26C0402100nF100nF ±10% 50VC307331SAMSUNG(三星)0402https://item.szlcsc.com/datasheet/CL05B104KB54PNC/291005.html100nF ! '50V{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C26 
+,
+        C0402 ! CL05B104KB54PNCC31C0402100nF100nF ±10% 50VC307331SAMSUNG(三星)0402https://item.szlcsc.com/datasheet/CL05B104KB54PNC/291005.html100nF ! '50V{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C31 
+,
+        C0603 ! CAP_0603C16C0603100nF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}100nF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C16 
+,
+        C0603 ! CAP_0603C18C0603100nF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}100nF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C18 
+,
+        C0603 ! CAP_0603C19C0603100nF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}100nF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C19 
+,
+        C0603 ! CAP_0603C20C06034.7uF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}4.7uF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C20 
+,
+        C0603 ! CAP_0603C21C0603100nF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}100nF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C21 
+,
+        C0603 ! CAP_0603C22C06034.7nF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}4.7nF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C22 
+,
+        C0603 ! CAP_0603C27C0603100nF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}100nF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C27 
+,
+        C0603 ! CAP_0603C28C06034.7uF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}4.7uF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C28 
+,
+        C0603 ! CAP_0603C29C0603100nF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}100nF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C29 
+,
+        C0603 ! CAP_0603C30C06034.7nF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}4.7nF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C30 
+,
+        C0603 ! CAP_0603C32C0603100nF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}100nF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C32 
+,
+        C0603 ! CAP_0603C33C0603100nF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}100nF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C33 
+,
+        C0603 ! CAP_0603C34C0603100nF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}100nF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C34 
+,
+        C0603 ! CAP_0603C36C0603100nF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}100nF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C36 
+,
+        C0603 ! CAP_0603C37C0603100nF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}100nF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C37 
+,
+        C0603 ! CAP_0603C38C0603100nF{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}100nF ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C38 
+,
+        C0805 ! CGA0805X5R226M350MTC2C080522uF22uF ±20% 35VC6119901HRE(芯声)0805https://item.szlcsc.com/datasheet/CGA0805X5R226M350MT/7062607.html22uF ! '35V{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C2 
+,
+        C0805 ! CGA0805X5R226M350MTC4C080522uF22uF ±20% 35VC6119901HRE(芯声)0805https://item.szlcsc.com/datasheet/CGA0805X5R226M350MT/7062607.html22uF ! '35V{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C4 
+,
+        C0805 ! HGC0805R5106K250NSLJC12C080510uF10uF ±10% 25VC19103847Chinocera(华瓷)0805https://item.szlcsc.com/datasheet/HGC0805R5106K250NSLJ/20314359.html10uF ! '25V{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C12 
+,
+        C0805 ! HGC0805R5106K250NSLJC1C080510uF10uF ±10% 25VC19103847Chinocera(华瓷)0805https://item.szlcsc.com/datasheet/HGC0805R5106K250NSLJ/20314359.html10uF ! '25V{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C1 
+,
+        C0805 ! HGC0805R5106K250NSLJC3C080510uF10uF ±10% 25VC19103847Chinocera(华瓷)0805https://item.szlcsc.com/datasheet/HGC0805R5106K250NSLJ/20314359.html10uF ! '25V{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C3 
+,
+        C0805 ! HGC0805R5106K250NSLJC8C080510uF10uF ±10% 25VC19103847Chinocera(华瓷)0805https://item.szlcsc.com/datasheet/HGC0805R5106K250NSLJ/20314359.html10uF ! '25V{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C8 
+,
+        C1206 ! HGC1206R5476M250NSPJC14C120647uF47uF ±20% 25VC22367835Chinocera(华瓷)1206https://item.szlcsc.com/datasheet/HGC1206R5476M250NSPJ/23841140.html47uF ! '25V{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C14 
+,
+        C1206 ! HGC1206R5476M250NSPJC17C120647uF47uF ±20% 25VC22367835Chinocera(华瓷)1206https://item.szlcsc.com/datasheet/HGC1206R5476M250NSPJ/23841140.html47uF ! '25V{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C17 
+,
+        C1206 ! HGC1206R5476M250NSPJC35C120647uF47uF ±20% 25VC22367835Chinocera(华瓷)1206https://item.szlcsc.com/datasheet/HGC1206R5476M250NSPJ/23841140.html47uF ! '25V{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; C35 
+,
+        CAP-TH_BD10.0-P5.00-D0.6-FD_2 ! PA100V100M10x12C10CAP-TH_BD10.0-P5.00-D0.6-FD_2100uF100uF ±20% 100VC46550452JIERR(捷而瑞)插件,D10xL12.5mmhttps://item.szlcsc.com/datasheet/PA100V100M10x12/48680146.html100uF ! '100V聚合物{Voltage-Supply(Max)}-55℃~+105℃{Current - Max}{Hold Current}' ,
+        ; C10 
+,
+        CAP-TH_BD10.0-P5.00-D0.6-FD_2 ! PA100V100M10x12C9CAP-TH_BD10.0-P5.00-D0.6-FD_2100uF100uF ±20% 100VC46550452JIERR(捷而瑞)插件,D10xL12.5mmhttps://item.szlcsc.com/datasheet/PA100V100M10x12/48680146.html100uF ! '100V聚合物{Voltage-Supply(Max)}-55℃~+105℃{Current - Max}{Hold Current}' ,
+        ; C9 
+,
+        CAP-TH_BD10.0-P5.00-D0.6-FD-H20.0-1 ! ERG50V470M10X20C13CAP-TH_BD10.0-P5.00-D0.6-FD-H20.0-1470uF470uF ±20% 50VC51904474JIERR(捷而瑞)插件,D10xL20mmhttps://item.szlcsc.com/datasheet/ERG50V470M10X20/54596843.html470uF ! '50V{Type}{Voltage-Supply(Max)}-40℃~+105℃{Current - Max}{Hold Current}' ,
+        ; C13 
+,
+        CAP-TH_BD6.3-P2.50-D0.6-FD-H12.0 ! PA35V220M6x12C11CAP-TH_BD6.3-P2.50-D0.6-FD-H12.0220uF220uF ±20% 35VC46550432JIERR(捷而瑞)插件,D6.3xL12mmhttps://item.szlcsc.com/datasheet/PA35V220M6x12/48680126.html220uF ! '35V聚合物{Voltage-Supply(Max)}-55℃~+105℃{Current - Max}{Hold Current}' ,
+        ; C11 
+,
+        CAP-TH_BD6.3-P2.50-D0.6-FD-H12.0 ! PA35V220M6x12C7CAP-TH_BD6.3-P2.50-D0.6-FD-H12.0220uF220uF ±20% 35VC46550432JIERR(捷而瑞)插件,D6.3xL12mmhttps://item.szlcsc.com/datasheet/PA35V220M6x12/48680126.html220uF ! '35V聚合物{Voltage-Supply(Max)}-55℃~+105℃{Current - Max}{Hold Current}' ,
+        ; C7 
+,
+        CONN-SMD_10P-P1.00_ZX-SH1.0-10PWT ! ZX-SH1.0-10PWTU13CONN-SMD_10P-P1.00_ZX-SH1.0-10PWTZX-SH1.0-10PWT1x10P 间距:1mm 卧贴 系列:SHC19272377Megastar(兆星)SMD,P=1mm,卧贴https://item.szlcsc.com/datasheet/ZX-SH1.0-10PWT/20550388.html{Value} ! '50V{Type}{Voltage-Supply(Max)}-25℃~+85℃{Current - Max}{Hold Current}' ,
+        ; U13 
+,
+        CONN-SMD_4P-P1.00_MEGASTAR_ZX-SH1.0-4PWT ! ZX-SH1.0-4PWTU14CONN-SMD_4P-P1.00_MEGASTAR_ZX-SH1.0-4PWTZX-SH1.0-4PWT1x4P 间距:1mm 卧贴 系列:SHC7430446Megastar(兆星)SMD,P=1mm,卧贴https://item.szlcsc.com/datasheet/ZX-SH1.0-4PWT/8430315.html{Value} ! '50V{Type}{Voltage-Supply(Max)}-40℃~+85℃{Current - Max}{Hold Current}' ,
+        ; U14 
+,
+        CONN-SMD_4P-P1.00_MEGASTAR_ZX-SH1.0-4PWT ! ZX-SH1.0-4PWTU15CONN-SMD_4P-P1.00_MEGASTAR_ZX-SH1.0-4PWTZX-SH1.0-4PWT1x4P 间距:1mm 卧贴 系列:SHC7430446Megastar(兆星)SMD,P=1mm,卧贴https://item.szlcsc.com/datasheet/ZX-SH1.0-4PWT/8430315.html{Value} ! '50V{Type}{Voltage-Supply(Max)}-40℃~+85℃{Current - Max}{Hold Current}' ,
+        ; U15 
+,
+        CONN-SMD_6P-P1.00_MEGASTAR_ZX-SH1.0-6PWT ! ZX-SH1.0-6PWTU12CONN-SMD_6P-P1.00_MEGASTAR_ZX-SH1.0-6PWTZX-SH1.0-6PWT1x6P 间距:1mm 卧贴 系列:SHC7430448Megastar(兆星)SMD,P=1mm,卧贴https://item.szlcsc.com/datasheet/ZX-SH1.0-6PWT/8430317.html{Value} ! '50V{Type}{Voltage-Supply(Max)}-40℃~+85℃{Current - Max}{Hold Current}' ,
+        ; U12 
+,
+        CONN-TH_6P-P2.00_BX-PH2.0-6PWZ ! BX-PH2.0-6PWZU33CONN-TH_6P-P2.00_BX-PH2.0-6PWZBX-PH2.0-6PWZ1x6P 间距:2mm 弯插 系列:PHC18077757Bossie(博锡)弯插,P=2mmhttps://item.szlcsc.com/datasheet/BX-PH2.0-6PWZ/19218158.html{Value} ! '250V{Type}{Voltage-Supply(Max)}-25℃~+85℃{Current - Max}{Hold Current}' ,
+        ; U33 
+,
+        CONN-TH_6P-P2.00_BX-PH2.0-6PWZ ! BX-PH2.0-6PWZU34CONN-TH_6P-P2.00_BX-PH2.0-6PWZBX-PH2.0-6PWZ1x6P 间距:2mm 弯插 系列:PHC18077757Bossie(博锡)弯插,P=2mmhttps://item.szlcsc.com/datasheet/BX-PH2.0-6PWZ/19218158.html{Value} ! '250V{Type}{Voltage-Supply(Max)}-25℃~+85℃{Current - Max}{Hold Current}' ,
+        ; U34 
+,
+        CONN-TH_XT30PW-M ! XT30PW-M30.G.YCN1CONN-TH_XT30PW-MXT30PW-M30.G.YAMASS(艾迈斯)航模插头电调机插座锂电池连接器 PCB板卧式 公头XT30PW-M30.G.YC431092AMASS(艾迈斯)-https://item.szlcsc.com/datasheet/XT30PW-M30.G.Y/426930.html{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; CN1 
+,
+        CRYSTAL-SMD_4P-L3.2-W2.5-BL ! X322525MOB4SIX1CRYSTAL-SMD_4P-L3.2-W2.5-BL25MHzYSX321SL 25MHZ 4P 3225 12PF ±10PPM -40~85℃ (±20PPM)C9006YXC(扬兴晶振)SMD3225-4Phttps://item.szlcsc.com/datasheet/X322525MOB4SI/9526.html25MHz ! '{Voltage Rating}贴片晶振{Voltage-Supply(Max)}-40℃~+85℃{Current - Max}{Hold Current}' ,
+        ; X1 
+,
+        ESOP-8_L4.9-W3.9-P1.27-LS6.0-BL-EP ! AT8236U3ESOP-8_L4.9-W3.9-P1.27-LS6.0-BL-EPAT8236单通道直流有刷电机驱动芯片C2827823杭州中科微ESOP-8https://item.szlcsc.com/datasheet/AT8236/2974744.html{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}-40℃~+85℃{Current - Max}{Hold Current}' ,
+        ; U3 
+,
+        ESOP-8_L4.9-W3.9-P1.27-LS6.0-BL-EP ! AT8236U4ESOP-8_L4.9-W3.9-P1.27-LS6.0-BL-EPAT8236单通道直流有刷电机驱动芯片C2827823杭州中科微ESOP-8https://item.szlcsc.com/datasheet/AT8236/2974744.html{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}-40℃~+85℃{Current - Max}{Hold Current}' ,
+        ; U4 
+,
+        F2920 ! SMD2920-500-24F1F2920SMD2920-500-24SMD2920-500-24C47753903R+O(宏嘉诚)2920https://item.szlcsc.com/datasheet/SMD2920-500-24/49986114.html{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}-40℃~+85℃40A5A' ,
+        ; F1 
+,
+        HDR-TH_10P-P2.54-V-F ! HDR-F_2.54_1x10PH1HDR-TH_10P-P2.54-V-F{LCSC Part Name}C2684744{Manufacturer}插件{Datasheet}{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; H1 
+,
+        HDR-TH_12P-P2.54-V-M-R3-C4-S2.54 ! HX PZ2.54-3x4P ZZU11HDR-TH_12P-P2.54-V-M-R3-C4-S2.54HX PZ2.54-3x4P ZZ3x4P 间距:2.54mm 方针 直插C32713291hanxia(韩下)插件,P=2.54mmhttps://atta.szlcsc.com/upload/public/pdf/source/20240723/03D5BD78F4265407C742BB8D20821E6B.pdf{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; U11 
+,
+        HDR-TH_4P-P2.54-V-F ! HDR-F_2.54_1x4PH2HDR-TH_4P-P2.54-V-F{LCSC Part Name}C2718488{Manufacturer}插件{Datasheet}{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; H2 
+,
+        HDR-TH_4P-P2.54-V-F ! HDR-F_2.54_1x4PH3HDR-TH_4P-P2.54-V-F{LCSC Part Name}C2718488{Manufacturer}插件{Datasheet}{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; H3 
+,
+        IND-SMD_L5.4-W5.2_FXL0530 ! FXL0530-4R7-ML1IND-SMD_L5.4-W5.2_FXL05304.7uH4.7uH ±20% 5AC177246cjiang(长江微电)SMD,5.4x5.2mmhttps://item.szlcsc.com/datasheet/FXL0530-4R7-M/188638.html4.7uH ! '{Voltage Rating}一体成型电感{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; L1 
+,
+        IND-SMD_L5.4-W5.2_FXL0530 ! FXL0530-4R7-ML2IND-SMD_L5.4-W5.2_FXL05304.7uH4.7uH ±20% 5AC177246cjiang(长江微电)SMD,5.4x5.2mmhttps://item.szlcsc.com/datasheet/FXL0530-4R7-M/188638.html4.7uH ! '{Voltage Rating}一体成型电感{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; L2 
+,
+        JY61P ! JY61PU1JY61P{LCSC Part Name}{Supplier Part}{Manufacturer}{Supplier Footprint}{Datasheet}{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; U1 
+,
+        LED_0603 ! LED_0603-BLED1LED_0603{LCSC Part Name}{Manufacturer}0603{Datasheet}{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; LED1 
+,
+        LED_0603 ! LED_0603-BLED5LED_0603{LCSC Part Name}{Manufacturer}0603{Datasheet}{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; LED5 
+,
+        LED_0603 ! LED_0603-BLED6LED_0603{LCSC Part Name}{Manufacturer}0603{Datasheet}{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; LED6 
+,
+        LED_0603 ! LED_0603-BLED7LED_0603{LCSC Part Name}{Manufacturer}0603{Datasheet}{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; LED7 
+,
+        LQFP-64_L10.0-W10.0-P0.50-LS12.0-BL ! STM32G474RBT6U2LQFP-64_L10.0-W10.0-P0.50-LS12.0-BLSTM32G474RBT6带DSP和FPU的170MHz主流ARM Cortex-M4 MCU，具有128 KB Flash存储器、数学加速器、高分辨率定时器和高模拟电平集成C529413ST(意法半导体)LQFP-64(10x10)https://item.szlcsc.com/datasheet/STM32G474RBT6/549641.html{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}-40℃~+85℃{Current - Max}{Hold Current}' ,
+        ; U2 
+,
+        M3螺丝 ! M3螺丝SCREW1M3螺丝{LCSC Part Name}{Supplier Part}{Manufacturer}插件{Datasheet}{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; SCREW1 
+,
+        M3螺丝 ! M3螺丝SCREW2M3螺丝{LCSC Part Name}{Supplier Part}{Manufacturer}插件{Datasheet}{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; SCREW2 
+,
+        M3螺丝 ! M3螺丝SCREW3M3螺丝{LCSC Part Name}{Supplier Part}{Manufacturer}插件{Datasheet}{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; SCREW3 
+,
+        M3螺丝 ! M3螺丝SCREW4M3螺丝{LCSC Part Name}{Supplier Part}{Manufacturer}插件{Datasheet}{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; SCREW4 
+,
+        MSOP-10_L3.0-W3.0-P0.50-LS5.0-BL ! INA226AIDGSRU5MSOP-10_L3.0-W3.0-P0.50-LS5.0-BLINA226AIDGSR高侧/低侧测量双向电流/功率监视器，具有I²C兼容接口C49851TI(德州仪器)VSSOP-10https://www.ti.com/cn/lit/ds/symlink/ina226.pdf{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}-40℃~+125℃{Current - Max}{Hold Current}' ,
+        ; U5 
+,
+        POWERPAK-1212-8_L3.1-W3.1-P0.65-LS3.3-BL ! PJQ4465AP-AU_R2_000A1Q3POWERPAK-1212-8_L3.1-W3.1-P0.65-LS3.3-BLPJQ4465AP-AU_R2_000A11个P沟道 耐压:60V 电流:15AC6147631PANJIT(强茂)DFN3333-8https://item.szlcsc.com/datasheet/PJQ4465AP-AU_R2_000A1/7091252.html{Value} ! '{Voltage Rating}P沟道{Voltage-Supply(Max)}-55℃~+150℃{Current - Max}{Hold Current}' ,
+        ; Q3 
+,
+        R0402 ! FRC0402F1002TSR1R040210kΩ10kΩ ±1% 62.5mW 厚膜电阻C2906861FOJAN(富捷)0402https://item.szlcsc.com/datasheet/FRC0402F1002TS/3180374.html10kΩ ! '{Voltage Rating}厚膜电阻50V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R1 
+,
+        R0402 ! FRC0402F1002TSR3R040210kΩ10kΩ ±1% 62.5mW 厚膜电阻C2906861FOJAN(富捷)0402https://item.szlcsc.com/datasheet/FRC0402F1002TS/3180374.html10kΩ ! '{Voltage Rating}厚膜电阻50V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R3 
+,
+        R0402 ! FRC0402F1003TSR8R0402100kΩ100kΩ ±1% 62.5mW 厚膜电阻C2906859FOJAN(富捷)0402https://item.szlcsc.com/datasheet/FRC0402F1003TS/3180372.html100kΩ ! '{Voltage Rating}厚膜电阻50V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R8 
+,
+        R0603 ! FRC0603F1000TSR10R0603100Ω100Ω ±1% 100mW 厚膜电阻C2906981FOJAN(富捷)0603https://item.szlcsc.com/datasheet/FRC0603F1000TS/3180494.html100Ω ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R10 
+,
+        R0603 ! FRC0603F1000TSR11R0603100Ω100Ω ±1% 100mW 厚膜电阻C2906981FOJAN(富捷)0603https://item.szlcsc.com/datasheet/FRC0603F1000TS/3180494.html100Ω ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R11 
+,
+        R0603 ! FRC0603F1000TSR29R0603100Ω100Ω ±1% 100mW 厚膜电阻C2906981FOJAN(富捷)0603https://item.szlcsc.com/datasheet/FRC0603F1000TS/3180494.html100Ω ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R29 
+,
+        R0603 ! FRC0603F1000TSR31R0603100Ω100Ω ±1% 100mW 厚膜电阻C2906981FOJAN(富捷)0603https://item.szlcsc.com/datasheet/FRC0603F1000TS/3180494.html100Ω ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R31 
+,
+        R0603 ! FRC0603F1000TSR32R0603100Ω100Ω ±1% 100mW 厚膜电阻C2906981FOJAN(富捷)0603https://item.szlcsc.com/datasheet/FRC0603F1000TS/3180494.html100Ω ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R32 
+,
+        R0603 ! FRC0603F1000TSR33R0603100Ω100Ω ±1% 100mW 厚膜电阻C2906981FOJAN(富捷)0603https://item.szlcsc.com/datasheet/FRC0603F1000TS/3180494.html100Ω ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R33 
+,
+        R0603 ! FRC0603F1000TSR6R0603100Ω100Ω ±1% 100mW 厚膜电阻C2906981FOJAN(富捷)0603https://item.szlcsc.com/datasheet/FRC0603F1000TS/3180494.html100Ω ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R6 
+,
+        R0603 ! FRC0603F1000TSR9R0603100Ω100Ω ±1% 100mW 厚膜电阻C2906981FOJAN(富捷)0603https://item.szlcsc.com/datasheet/FRC0603F1000TS/3180494.html100Ω ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R9 
+,
+        R0603 ! FRC0603F4701TSR4R06034.7kΩ4.7kΩ ±1% 100mW 厚膜电阻C2907034FOJAN(富捷)0603https://item.szlcsc.com/datasheet/FRC0603F4701TS/3180547.html4.7kΩ ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R4 
+,
+        R0603 ! FRC0603F4701TSR5R06034.7kΩ4.7kΩ ±1% 100mW 厚膜电阻C2907034FOJAN(富捷)0603https://item.szlcsc.com/datasheet/FRC0603F4701TS/3180547.html4.7kΩ ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R5 
+,
+        R0603 ! FRC0603J103 TSR34R060310kΩ10kΩ ±5% 100mW 厚膜电阻C2930027FOJAN(富捷)0603https://item.szlcsc.com/datasheet/FRC0603J103%2520TS/3266960.html10kΩ ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R34 
+,
+        R0603 ! FRC0603J103 TSR35R060310kΩ10kΩ ±5% 100mW 厚膜电阻C2930027FOJAN(富捷)0603https://item.szlcsc.com/datasheet/FRC0603J103%2520TS/3266960.html10kΩ ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R35 
+,
+        R0603 ! FRC0603J103 TSR36R060310kΩ10kΩ ±5% 100mW 厚膜电阻C2930027FOJAN(富捷)0603https://item.szlcsc.com/datasheet/FRC0603J103%2520TS/3266960.html10kΩ ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R36 
+,
+        R0603 ! FRC0603J103 TSR37R060310kΩ10kΩ ±5% 100mW 厚膜电阻C2930027FOJAN(富捷)0603https://item.szlcsc.com/datasheet/FRC0603J103%2520TS/3266960.html10kΩ ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R37 
+,
+        R0603 ! FRC0603J103 TSR38R060310kΩ10kΩ ±5% 100mW 厚膜电阻C2930027FOJAN(富捷)0603https://item.szlcsc.com/datasheet/FRC0603J103%2520TS/3266960.html10kΩ ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R38 
+,
+        R0603 ! RC0603FR-07100KLR12R0603100kΩ厚膜电阻 100kΩ ±1%C14675YAGEO(国巨)0603https://item.szlcsc.com/datasheet/RC0603FR-07100KL/15343.html100kΩ ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R12 
+,
+        R0603 ! RC0603FR-07100KLR13R0603100kΩ厚膜电阻 100kΩ ±1%C14675YAGEO(国巨)0603https://item.szlcsc.com/datasheet/RC0603FR-07100KL/15343.html100kΩ ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R13 
+,
+        R0603 ! RC0603FR-07100KLR14R0603100kΩ厚膜电阻 100kΩ ±1%C14675YAGEO(国巨)0603https://item.szlcsc.com/datasheet/RC0603FR-07100KL/15343.html100kΩ ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R14 
+,
+        R0603 ! RC0603FR-07100KLR19R0603100kΩ厚膜电阻 100kΩ ±1%C14675YAGEO(国巨)0603https://item.szlcsc.com/datasheet/RC0603FR-07100KL/15343.html100kΩ ! '{Voltage Rating}厚膜电阻75V-55℃~+155℃{Current - Max}{Hold Current}' ,
+        ; R19 
+,
+        R0603 ! Res_0603R15R060310K{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}10K ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R15 
+,
+        R0603 ! Res_0603R16R060327K{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}27K ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R16 
+,
+        R0603 ! Res_0603R17R06038.2K{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}8.2K ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R17 
+,
+        R0603 ! Res_0603R18R060310K{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}10K ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R18 
+,
+        R0603 ! Res_0603R20R0603200K{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}200K ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R20 
+,
+        R0603 ! Res_0603R21R060320K{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}20K ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R21 
+,
+        R0603 ! Res_0603R22R060351K{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}51K ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R22 
+,
+        R0603 ! Res_0603R23R060310K{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}10K ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R23 
+,
+        R0603 ! Res_0603R24R06034.7K{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}4.7K ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R24 
+,
+        R0603 ! Res_0603R25R06031.5K{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}1.5K ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R25 
+,
+        R0603 ! Res_0603R26R06032.7K{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}2.7K ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R26 
+,
+        R0603 ! Res_0603R27R0603200K{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}200K ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R27 
+,
+        R0603 ! Res_0603R28R060320K{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}20K ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R28 
+,
+        R0603 ! Res_0603R7R06031K{LCSC Part Name}{Supplier Part}{Manufacturer}0603{Datasheet}1K ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R7 
+,
+        R1206 ! RE1206F1R005R2R12065mΩ5mΩ 1W 1206 ±1%C46961735JIERR(捷而瑞)1206https://item.szlcsc.com/datasheet/RE1206F1R005/49133274.html5mΩ ! '{Voltage Rating}采样电阻；合金电阻{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R2 
+,
+        RES-ADJ-TH_3P-L9.5-W4.85-P2.50-BL-BS ! 3296W-1-503_C48997928R30RES-ADJ-TH_3P-L9.5-W4.85-P2.50-BL-BS50kΩ3296W-1-503C48997928JIERR(捷而瑞)插件-3P,9.5x4.9mmhttps://item.szlcsc.com/datasheet/3296W-1-503/51342064.html50kΩ ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; R30 
+,
+        SMA_L4.3-W2.6-LS5.0-FD ! SS54_C7420369D5SMA_L4.3-W2.6-LS5.0-FDSS54电压:40V 电流:5AC7420369R+O(宏嘉诚)SMA(DO-214AC)https://item.szlcsc.com/datasheet/SS54/8397191.html{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; D5 
+,
+        SOD-123_L2.7-W1.6-LS3.7-FD ! 1N4148W_C7420318D3SOD-123_L2.7-W1.6-LS3.7-FD1N4148W100V 150mAC7420318R+O(宏嘉诚)SOD-123https://item.szlcsc.com/datasheet/1N4148W/8397140.html{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; D3 
+,
+        SOD-123_L2.7-W1.6-LS3.7-RD ! BZT52C15_C19077412D1SOD-123_L2.7-W1.6-LS3.7-RDBZT52C15表面贴装齐纳二极管C19077412R+O(宏嘉诚)SOD-123https://item.szlcsc.com/datasheet/BZT52C15/20275497.html{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; D1 
+,
+        SOD-123FL_L2.8-W1.8-LS3.7-BI ! SMF15CA_C1851361D2SOD-123FL_L2.8-W1.8-LS3.7-BISMF15CA双向TVS 15V 16V截止 峰值浪涌电流：7.7A@10/1000usC1851361Littelfuse(美国力特)SOD-123FLhttps://item.szlcsc.com/datasheet/SMF15CA/1942174.html{Value} ! '{Voltage Rating}TVS{Voltage-Supply(Max)}-65℃~+150℃{Current - Max}{Hold Current}' ,
+        ; D2 
+,
+        SOP-8E ! SP1N28STERU7SOP-8ESP1N28STER{LCSC Part Name}{Supplier Part}{Manufacturer}{Supplier Footprint}{Datasheet}SP1N28STER ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; U7 
+,
+        SOP-8E ! SP1N28STERU8SOP-8ESP1N28STER{LCSC Part Name}{Supplier Part}{Manufacturer}{Supplier Footprint}{Datasheet}SP1N28STER ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; U8 
+,
+        SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BR ! S8050_C2688231Q1SOT-23-3_L2.9-W1.3-P1.90-LS2.4-BRS8050S8050C2688231WPMtek(维攀微)SOT-23https://atta.szlcsc.com/upload/public/pdf/source/20210222/C2688231_A300D69B63960DEEA81943DA6762DFE1.pdf{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}+150℃@(Tj){Current - Max}{Hold Current}' ,
+        ; Q1 
+,
+        SOT-23-5_L3.0-W1.7-P0.95-LS2.8-BL ! RT9013-33GBU9SOT-23-5_L3.0-W1.7-P0.95-LS2.8-BLRT9013-33GB输入5.5V 输出3.3V 500mAC47773RICHTEK(立锜)SOT-23-5https://item.szlcsc.com/datasheet/RT9013-33GB/48778.html{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}-40℃~+125℃@(Tj){Current - Max}{Hold Current}' ,
+        ; U9 
+,
+        SW-SMD_L6.0-W6.0-LS6.6 ! TS665WS_C398058SW1SW-SMD_L6.0-W6.0-LS6.6TS665WS6*6*5mm 立贴 轻触开关C398058SHOU HAN(首韩)SMD,6x6mmhttps://item.szlcsc.com/datasheet/TS665WS/379804.html{Value} ! '12V{Type}{Voltage-Supply(Max)}-25℃~+70℃{Current - Max}{Hold Current}' ,
+        ; SW1 
+,
+        SW-SMD-8_L7.5-W7.5-P1.40_GT-TC006D-H060-L1 ! GT-TC006D-H060-L1U10SW-SMD-8_L7.5-W7.5-P1.40_GT-TC006D-H060-L1GT-TC006D-H060-L1斜五向轻触开关 H6.0mm 350gfC3019724G-Switch(品赞)SMD-8P,7.5x7.5mmhttps://atta.szlcsc.com/upload/public/pdf/source/20220627/CFDCD580B44050AF42BC250A0EDDA233.pdf{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}{Operating Temperature}{Current - Max}{Hold Current}' ,
+        ; U10 
+,
+        SW-TH_MT-0-103-A101-M200-RS ! MT-0-102-A101-M200-RSU6SW-TH_MT-0-103-A101-M200-RSMT-0-102-A101-M200-RS五件套 小型钮子三脚二档C1788492YUEN FUNG(源丰)插件,13x8mmhttps://item.szlcsc.com/datasheet/MT-0-102-A101-M200-RS/1879283.html{Value} ! '{Voltage Rating}{Type}{Voltage-Supply(Max)}-25℃~+85℃{Current - Max}{Hold Current}' ,
+        ; U6 
+$A_PROPERTIES
+$NETS
+'+5V' ; R34.2 R35.1 R36.2 R37.1 
+'$BUZ1_2' ; BUZ1.2 D3.1 Q1.3 
+'$C1_2' ; C1.2 C7.1 D5.1 L2.2 
+'$C15_1' ; C15.1 R1.2 SW1.2 U2.7 
+'$C19_1' ; C19.1 U7.1 
+'$C19_2' ; C19.2 L1.1 U7.8 
+'$C22_1' ; C22.1 R28.2 
+'$C27_1' ; C27.1 U8.1 
+'$C27_2' ; C27.2 L2.1 U8.8 
+'$C30_1' ; C30.1 R21.2 
+'$D1_2' ; D1.2 Q3.4 R8.2 
+'$F1_2' ; F1.2 Q3.5 Q3.6 Q3.7 Q3.8 
+'$LED1_2' ; LED1.2 R38.2 
+'$LED5_2' ; LED5.2 R18.2 
+'$LED6_2' ; LED6.2 R24.2 
+'$LED7_2' ; LED7.2 R26.2 
+'$Q1_1' ; Q1.1 R7.2 R15.2 
+'$R10_2' ; R10.2 U4.2 
+'$R11_2' ; R11.2 U4.3 
+'$R16_2' ; R16.2 R30.2 R30.3 
+'$R17_1' ; R17.1 R30.1 U7.5 
+'$R20_2' ; R20.2 U8.4 
+'$R21_1' ; R21.1 U8.6 
+'$R22_2' ; R22.2 R25.1 
+'$R23_1' ; R23.1 R25.2 U8.5 
+'$R27_2' ; R27.2 U7.4 
+'$R28_1' ; R28.1 U7.6 
+'$R29_2' ; R29.2 U33.3 
+'$R3_1' ; R3.1 U2.61 
+'$R31_2' ; R31.2 U33.4 
+'$R32_2' ; R32.2 U34.3 
+'$R33_2' ; R33.2 U34.4 
+'$R6_2' ; R6.2 U3.2 
+'$R9_2' ; R9.2 U3.3 
+'12V_IN' ; CN1.2 U6.2 
+'12V_PROT_IN' ; C2.2 C4.2 C13.1 C35.2 D1.1 D2.2 Q3.1 Q3.2 Q3.3 R2.2 U5.10 
+'12V_PROT_OUT' ; C9.1 C10.1 C14.2 C17.2 C20.2 C21.2 C28.2 C29.2 R2.1 R38.1 ,
+        U3.5 U4.5 U5.8 U5.9 U7.2 U7.3 U8.2 U8.3 
+'I2C2_SCL' ; H3.2 OLED1.3 R5.1 U2.51 U5.5 U14.2 
+'I2C2_SDA' ; H3.3 OLED1.4 R4.1 U2.62 U5.4 U14.3 
+'KEY_CENTER' ; U2.11 U10.5 
+'KEY_DOWN' ; U2.3 U10.6 
+'KEY_LEFT' ; U2.4 U10.3 
+'KEY_RIGHT' ; U2.10 U10.4 
+'KEY_UP' ; U2.2 U10.1 
+'LPUART1_RX' ; U2.9 U12.5 
+'LPUART1_TX' ; U2.8 U12.6 
+'MOTA_IN1' ; R11.1 R13.2 U2.38 
+'MOTA_IN2' ; R10.1 R12.1 U2.39 
+'MOTB_IN1' ; R9.1 R19.2 U2.40 
+'MOTB_IN2' ; R6.1 R14.1 U2.41 
+'OSC_IN' ; C6.1 U2.5 X1.1 
+'OSC_OUT' ; C5.2 U2.6 X1.3 
+'TIM1_CH1_SERVO1' ; U2.42 U11.1 
+'TIM1_CH2_SERVO2' ; U2.43 U11.4 
+'TIM1_CH3_SERVO3' ; U2.44 U11.7 
+'TIM1_CH4_SERVO4' ; U2.45 U11.10 
+'TIM3_CH1_ENC1_A' ; C25.1 R29.1 R37.2 U2.57 
+'TIM3_CH2_ENC1_B' ; C24.2 R31.1 R36.1 U2.58 
+'TIM4_CH1_ENC2_A' ; C26.1 R32.1 R35.2 U2.59 
+'TIM4_CH2_ENC2_B' ; C31.2 R33.1 R34.1 U2.60 
+'UART4_RX' ; H2.2 U2.53 U15.2 
+'UART4_TX' ; H2.3 U2.52 U15.3 
+'USART3_RX_JY61P' ; U1.3 U2.33 
+'USART3_TX_JY61P' ; U1.2 U2.30 
+12V ; F1.1 U6.1 
+BUZZER ; R7.1 U2.55 
+GND ; C1.1 C2.1 C3.1 C4.1 C5.1 C6.2 C7.2 C8.1 C9.2 C10.2 C11.2 C12.1 C13.2 ,
+        C14.1 C15.2 C16.1 C17.1 C18.1 C20.1 C21.1 C22.2 C23.2 C24.1 C25.2 ,
+        C26.2 C28.1 C29.1 C30.2 C31.1 C32.2 C33.2 C34.1 C35.1 C36.2 C37.1 ,
+        C38.2 CN1.1 CN1.3 CN1.4 D2.1 H1.10 H2.4 H3.4 LED1.1 LED5.1 LED6.1 ,
+        LED7.1 OLED1.1 Q1.2 R3.2 R8.1 R12.2 R13.1 R14.2 R15.1 R17.2 R19.1 ,
+        R20.1 R23.2 R27.1 SW1.1 U1.4 U1.5 U2.15 U2.27 U2.31 U2.47 U2.63 U3.1 ,
+        U3.7 U3.9 U4.1 U4.7 U4.9 U5.1 U5.2 U5.7 U7.0 U7.7 U8.0 U8.7 U9.2 U10.0 ,
+        U10.2 U11.3 U11.6 U11.9 U11.12 U12.4 U12.7 U12.8 U13.10 U13.11 U13.12 ,
+        U14.4 U14.5 U14.6 U15.4 U15.5 U15.6 U33.2 U34.2 X1.2 X1.4 
+huidu1 ; H1.2 U2.12 U13.2 
+huidu2 ; H1.3 U2.13 U13.3 
+huidu3 ; H1.4 U2.14 U13.4 
+huidu4 ; H1.5 U2.17 U13.5 
+huidu5 ; H1.6 U2.18 U13.6 
+huidu6 ; H1.7 U2.19 U13.7 
+huidu7 ; H1.8 U2.20 U13.8 
+huidu8 ; H1.9 U2.21 U13.9 
+motorA1 ; U4.8 U33.1 
+motorA2 ; U4.6 U33.6 
+motorB1 ; U3.8 U34.1 
+motorB2 ; U3.6 U34.6 
+SWCLK ; U2.50 U12.3 
+SWDIO ; U2.49 U12.2 
+VCC3V3 ; C8.2 C18.2 C23.1 C32.1 C33.1 C34.2 C36.1 C37.2 C38.1 OLED1.2 R1.1 ,
+        R4.2 R5.2 R26.1 U1.1 U1.8 U2.1 U2.16 U2.28 U2.29 U2.32 U2.48 U2.64 ,
+        U3.4 U4.4 U5.6 U9.5 U12.1 
+VCC5V ; BUZ1.1 C3.2 C16.2 D3.2 D5.2 H1.1 H2.1 H3.1 R22.1 R24.1 U9.1 U9.3 U13.1 ,
+        U14.1 U15.1 U33.5 U34.5 
+VCCSTEER ; C11.1 C12.2 L1.2 R16.1 R18.1 U11.2 U11.5 U11.8 U11.11 
+$SCHEDULE
+$END
